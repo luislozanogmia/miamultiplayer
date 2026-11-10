@@ -98,7 +98,7 @@ function loadRoomContext({ state, api }) {
     Promise, Date, Number, activeWorkspaceKey: 'solo', AGENT_SETUP_ROOM_ID: '__setup__',
     chatRoster: {},
     chatWs: { native: false, nativeSocketConversationId: null, activeRoomId: null, configured: true, byRoom: { 'room-a': state } },
-    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {}, syncChatThreadPanel() {},
+    setLocalChatTypingActivity() {}, closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, swapChatDraft() {}, syncChatThreadPanel() {}, placeChatComposer() {},
     chatModelPicker: null, saveActiveChatLocation() {}, rememberAgentChat() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     chatRoomState(roomId) { return context.chatWs.byRoom[roomId]; }, api,
     nativeEventsUrl() { return '/events'; },

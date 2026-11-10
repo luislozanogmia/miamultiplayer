@@ -46,11 +46,11 @@ test('the rest send one message each through the same upload, and a failure stay
   const run = async (failAt) => {
     const sent = [], env = { chatAttachment: {} };
     let call = 0;
-    const send = new Function('env', 'prepareChatAttachment', 'sendActiveRoomMessage', 'renderChatAttachment', 'syncDraftState', 'URL',
+    const send = new Function('env', 'prepareChatAttachment', 'sendActiveRoomMessage', 'renderChatAttachment', 'syncDraftState', 'URL', 'threadRoot',
       'var chatAttachment = env.chatAttachment;' + fn.replace(/chatAttachment\b(?!\w)/g, 'env.chatAttachment') + 'return sendMoreChatAttachments;')(
       env, (f) => Promise.resolve({ upload: f.name }),
       (text, _a, prepared) => { call += 1; if (call === failAt) return Promise.resolve({ status: 500, data: { error: 'Hub is down' } }); sent.push([text, prepared.upload]); return Promise.resolve({ status: 201 }); },
-      () => {}, () => {}, { revokeObjectURL() {} });
+      () => {}, () => {}, { revokeObjectURL() {} }, null);
     await send([{ file: { name: 'b.png' } }, { file: { name: 'c.md' } }, { file: { name: 'd.csv' } }], 'room', 2, 4);
     return { sent, state: env.chatAttachment };
   };
@@ -88,4 +88,43 @@ test('a dropped link goes into the prompt at the cursor', () => {
 
 test('switching rooms closes the last room\'s thread right away', () => {
   assert.match(source, /chatWs\.activeRoomId = roomId;\n\s+chatWs\.activeRoomWorkspace = activeWorkspaceKey;\n\s+chatWs\.activeKind = kind;\n(\s+\/\/.*\n)+\s+syncChatThreadPanel\(\);/);
+});
+
+// One composer for a chat and its threads: in a thread panel it's the same
+// prompt box (attachments, Drive, emoji, model, dictation) and replies there.
+test('a thread replies with the chat\'s full composer, moved into the thread panel', () => {
+  assert.match(html, /<div class="ctp-composer-slot" id="ctpComposerSlot"><\/div>/);
+  assert.doesNotMatch(html, /ctpComposerInput/);
+  const submit = slice('    function submit(){\n      if(!chatWs.activeRoomId) return;', '    function syncDraftState(){');
+  assert.match(submit, /var threadRoot = composerThreadRoot\(\);/);
+  assert.equal((submit.match(/sendActiveRoomMessage\((text|''), threadRoot,/g) || []).length, 3);
+  assert.doesNotMatch(submit, /sendActiveRoomMessage\((text|''), null,/);
+  assert.match(source, /placeChatComposer\(null, null\);\n\s+swapChatDraft\(chatWs\.activeRoomId, roomId\);/);
+  assert.match(source, /var show = !composerThreadRoot\(\) && /);
+});
+
+test('moving the composer keeps the chat\'s draft and each thread\'s apart', () => {
+  const code = slice('  var composerThread = null, composerHome = null', '  function syncChatThreadPanel(){');
+  const node = () => ({ children: [], classList: { toggle() {} }, appendChild(c) { this.children.push(c); }, insertBefore() {}, after() {}, hidden: false, parentNode: null,
+    querySelector: () => ({ addEventListener() {} }), set innerHTML(_) {} });
+  const input = { value: 'chat draft', placeholder: 'Message Ana', dispatchEvent() {}, focus() {} };
+  const wrap = node(), slot = node(); wrap.parentNode = node();
+  const drafts = {};
+  const swapChatDraft = (from, to) => { if (input.value) drafts[from] = input.value; else delete drafts[from]; input.value = drafts[to] || ''; };
+  const chatWs = { activeRoomId: 'r1' };
+  const env = new Function('el', 'document', 'swapChatDraft', 'chatWs', 'closeChatThread', 'syncInlineChatSuggestion',
+    code + '\nreturn { placeChatComposer, composerThreadRoot };')(
+    (sel) => ({ '.chat-composer-wrap': wrap, '#ctpComposerSlot': slot, '#ccInput': input })[sel] || null,
+    { createElement: node }, swapChatDraft, chatWs, () => {}, () => {});
+  env.placeChatComposer('r1', 'hub-sequence-5');
+  assert.equal(input.value, '', 'the thread starts empty');
+  assert.equal(input.placeholder, 'Reply in thread…');
+  assert.equal(env.composerThreadRoot(), 'hub-sequence-5');
+  input.value = 'thread draft';
+  env.placeChatComposer(null, null);
+  assert.equal(input.value, 'chat draft', 'the chat\'s draft comes back');
+  assert.equal(input.placeholder, 'Message Ana');
+  assert.equal(env.composerThreadRoot(), null);
+  env.placeChatComposer('r1', 'hub-sequence-5');
+  assert.equal(input.value, 'thread draft', 'and the thread keeps its own');
 });

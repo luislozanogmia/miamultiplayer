@@ -1631,9 +1631,13 @@
   .ctp-divider{font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-secondary);border-bottom:1px solid var(--sand-border-subtle);padding:10px 0 8px;margin-bottom:4px;}
   .ctp-replies{display:flex;flex-direction:column;}
   .ctp-replies .chat-msg-row{padding-left:0;padding-right:0;}
-  .ctp-composer-row{flex:0 0 auto;padding:10px 16px 14px;border-top:1px solid var(--sand-border-subtle);}
-  .ctp-composer-input{width:100%;box-sizing:border-box;height:34px;padding:0 11px;border:1px solid var(--sand-border-default);border-radius:9px;background:var(--sand-bg-base);font-family:var(--styled-sans);font-size:13px;color:var(--sand-text-primary);}
-  .ctp-composer-input:focus{outline:none;border-color:var(--sand-border-focus);}
+  /* The chat's own composer sits here while a thread is open (placeChatComposer). */
+  .ctp-composer-slot{flex:0 0 auto;position:relative;}
+  .ctp-composer-slot .chat-composer-wrap{padding:8px 12px 12px;}
+  .chat-composer-away{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:10px;margin:0 16px 16px;padding:12px;border:1px dashed var(--sand-border-default);border-radius:12px;font-size:13px;color:var(--sand-text-secondary);}
+  .chat-composer-away[hidden]{display:none;}
+  .chat-composer-away button{appearance:none;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);color:var(--sand-text-primary);border-radius:8px;padding:5px 10px;font:inherit;cursor:pointer;}
+  .chat-composer-away button:hover{background:var(--sand-fill-ghost-hover);}
   /* Docked tasks panel (#chatTasksPanel) reuses .chat-thread-panel/.ctp-*
      wholesale for its header/body chrome — only the row list below is new. */
   .ctsk-list{display:flex;flex-direction:column;gap:1px;background:var(--sand-border-subtle);border:1px solid var(--sand-border-subtle);border-radius:10px;overflow:hidden;}
@@ -2588,7 +2592,7 @@
   body.styled-skin .chat-thread-panel .ctp-header-room{font-size:12px;}
   body.styled-skin .chat-thread-panel .ctp-close{margin-left:0;width:28px;height:28px;border-radius:8px;font-size:inherit;}
   body.styled-skin .chat-thread-panel .ctp-body{padding:14px 16px 8px;}
-  body.styled-skin .chat-thread-panel .ctp-composer-row{border-top:1px solid var(--sand-border-subtle);padding:10px 14px 14px;}
+  body.styled-skin .chat-thread-panel .ctp-composer-slot .chat-composer-wrap{padding:8px 12px 12px;}
   /* Thread-level sizing: the center timeline's room-specific padding can
      compound with the thread pane's own width and strand any reply in a
      narrow column. Every thread uses the full panel width; user bubbles still
@@ -3585,7 +3589,7 @@
     }
     body.styled-skin .chat-thread-panel:not([hidden]) .ctp-close svg{transform:rotate(180deg);}
     body.styled-skin .chat-thread-panel:not([hidden]) .ctp-body{-webkit-overflow-scrolling:touch;}
-    body.styled-skin .chat-thread-panel:not([hidden]) .ctp-composer-row{padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));}
+    body.styled-skin .chat-thread-panel:not([hidden]) .ctp-composer-slot .chat-composer-wrap{padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));}
     /* Bubbles get the phone's width: the desktop 28% row inset that keeps
        1:1 bubbles off the far edge is too greedy at 390px -- shrink it, and
        raise the 72% body cap. */

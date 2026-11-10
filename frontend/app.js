@@ -13818,10 +13818,9 @@
 
   // Keeps the docked #chatThreadPanel in sync with the active room's
   // openThreadRoot: shows/hides it and (re)renders just the root+replies
-  // region. Deliberately never touches #ctpComposerInput or its DOM
-  // subtree — that input is a persistent, static element (see index.html),
-  // so a poll-driven re-render here can't steal its focus or clobber
-  // whatever the user is mid-typing, unlike an innerHTML rebuild would.
+  // region. The composer it hosts is moved in, never rebuilt (see
+  // placeChatComposer), so a poll-driven re-render here can't steal its
+  // focus or clobber whatever the user is mid-typing.
   // One right-hand slot: while the thread or tasks panel is showing, the
   // automations/plugins pane is hidden by CSS (body.ctp-open) rather than
   // closed, so it reappears untouched when the docked panel goes away.
@@ -13857,6 +13856,50 @@
     chatInfo.open = true;
   }
 
+  // One composer for a chat and its threads. While a thread is open the
+  // chat's composer (attachments, Drive, emoji, model, dictation, @mentions)
+  // moves into the thread panel and replies there, so a thread read in the
+  // right panel beside the browser has the full prompt box. Closing the
+  // thread brings it back. The chat and each thread keep their own draft.
+  var composerThread = null, composerHome = null, composerRoomPlaceholder = '';
+  function threadDraftKey(roomId, rootId){ return roomId + '\u0000thread:' + rootId; }
+  function composerThreadRoot(){
+    return composerThread && composerThread.roomId === chatWs.activeRoomId ? composerThread.rootId : null;
+  }
+  function placeChatComposer(roomId, rootId){
+    var wrap = el('.chat-composer-wrap'), slot = el('#ctpComposerSlot'), input = el('#ccInput');
+    if(!wrap || !slot || !input) return;
+    if(!composerHome){
+      composerHome = document.createElement('div');
+      composerHome.className = 'chat-composer-away';
+      composerHome.hidden = true;
+      composerHome.innerHTML = '<span>You\u2019re writing in the thread.</span><button type="button" data-composer-back>Back to the chat</button>';
+      composerHome.querySelector('[data-composer-back]').addEventListener('click', function(){ closeChatThread(); input.focus(); });
+      wrap.parentNode.insertBefore(composerHome, wrap);
+    }
+    var mentions = el('#chatMentionPopover');
+    var wanted = roomId && rootId ? {roomId: roomId, rootId: rootId} : null;
+    var same = composerThread && wanted && composerThread.roomId === wanted.roomId && composerThread.rootId === wanted.rootId;
+    if(!same && (composerThread || wanted)){
+      var fromKey = composerThread ? threadDraftKey(composerThread.roomId, composerThread.rootId) : wanted.roomId;
+      var toKey = wanted ? threadDraftKey(wanted.roomId, wanted.rootId) : composerThread.roomId;
+      if(!composerThread) composerRoomPlaceholder = input.placeholder;
+      swapChatDraft(fromKey, toKey);
+      composerThread = wanted;
+      if(wanted){
+        if(mentions) slot.appendChild(mentions);
+        slot.appendChild(wrap);
+      } else {
+        if(mentions) composerHome.parentNode.insertBefore(mentions, composerHome);
+        composerHome.after(wrap);
+        input.placeholder = composerRoomPlaceholder;
+      }
+      composerHome.hidden = !wanted;
+      wrap.classList.toggle('is-thread-reply', !!wanted);
+      syncInlineChatSuggestion();
+    }
+    if(wanted) input.placeholder = 'Reply in thread\u2026';
+  }
   function syncChatThreadPanel(){
     var panel = el('#chatThreadPanel');
     if(!panel) return;
@@ -13866,10 +13909,12 @@
     var root = rootId && state.messages.find(function(m){ return m.id === rootId; });
     if(!roomId || !rootId || !root){
       panel.hidden = true;
+      placeChatComposer(null, null);
       syncRightPanelSlot();
       return;
     }
     panel.hidden = false;
+    placeChatComposer(roomId, rootId);
     syncRightPanelSlot();
     el('#ctpRoomName').textContent = chatWs.activeLabel || '';
     el('#ctpRoot').innerHTML = chatMsgHtml(root, false, {inThread: true});
@@ -13903,7 +13948,7 @@
     closeChatUtilityPane();
     chatRoomState(roomId).openThreadRoot = rootId;
     syncChatThreadPanel();
-    var input = el('#ctpComposerInput');
+    var input = el('#ccInput');
     if(input) input.focus();
   }
   // Returns true when it actually closed something, so an Escape handler
@@ -16114,7 +16159,7 @@
     var input = el('#ccInput');
     if(!suggestion || !input) return;
     var mentionOpen = typeof chatMention !== 'undefined' && chatMention.open;
-    var show = chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
+    var show = !composerThreadRoot() && chatWs.activeKind !== 'agent-setup' && agentSuggestionsEnabled() && !!chatWs.activeRoomId && chatWs.configured !== false && !mentionOpen && !input.value.trim();
     var text = suggestion.querySelector('span');
     var suggested = chatInlineSuggestionText();
     if(text) text.textContent = suggested;
@@ -16362,6 +16407,8 @@
     chatRoster.open = null;
     clearChatAttention(roomId);
     if((chatWs.native || chatWs.nativeSocket) && chatWs.nativeSocketConversationId !== roomId) closeNativeChatSocket();
+    // The composer comes back from a thread first, so the room's own draft swaps.
+    placeChatComposer(null, null);
     swapChatDraft(chatWs.activeRoomId, roomId);
     chatWs.activeRoomId = roomId;
     chatWs.activeRoomWorkspace = activeWorkspaceKey;
@@ -19933,6 +19980,8 @@
       var draftText = text;
       var driveFiles = stagedGoogleDriveFiles().slice();
       var driveRoomId = chatWs.activeRoomId;
+      // In a thread panel the composer replies to that thread.
+      var threadRoot = composerThreadRoot();
       text += googleDriveMessageContext(driveFiles);
       var file = chatAttachment.file;
       // A shared live app travels as its address in the message text.
@@ -19945,7 +19994,7 @@
           clearChatAttachmentError();
           input.value = '';
           syncDraftState();
-          Promise.resolve(sendActiveRoomMessage(text, null, null, driveRoomId)).then(function(result){
+          Promise.resolve(sendActiveRoomMessage(text, threadRoot, null, driveRoomId)).then(function(result){
             if(result && (result.status===200 || result.status===201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               if(app && chatAttachment.app === app) clearChatAttachment();
@@ -19969,7 +20018,7 @@
         renderChatAttachment();
         prepareChatAttachment(file, roomId, null).then(function(prepared){
           if(input.value.trim() === draftText) input.value = '';
-          return sendActiveRoomMessage(text, null, prepared, roomId).then(function(result){
+          return sendActiveRoomMessage(text, threadRoot, prepared, roomId).then(function(result){
             if(result && (result.status === 200 || result.status === 201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               clearChatAttachment();
@@ -20000,7 +20049,7 @@
         chatAttachment.progress = 'Uploading ' + number + ' of ' + total + '\u2026';
         renderChatAttachment(); syncDraftState();
         return prepareChatAttachment(item.file, roomId, null).then(function(prepared){
-          return sendActiveRoomMessage('', null, prepared, roomId);
+          return sendActiveRoomMessage('', threadRoot, prepared, roomId);
         }).then(function(result){
           if(!(result && (result.status === 200 || result.status === 201 || result.undelivered))) throw new Error(result && result.data && result.data.error || 'Message send failed.');
           var rest = items.slice(1);
@@ -20356,18 +20405,6 @@
   (function(){
     var closeBtn = el('#ctpCloseBtn');
     if(closeBtn) closeBtn.addEventListener('click', closeChatThread);
-    var input = el('#ctpComposerInput');
-    if(input) input.addEventListener('keydown', function(e){
-      if(e.key !== 'Enter') return;
-      e.preventDefault();
-      var text = input.value.trim();
-      var roomId = chatWs.activeRoomId;
-      var state = roomId && chatRoomState(roomId);
-      var rootId = state && state.openThreadRoot;
-      if(!text || !rootId) return;
-      input.value = '';
-      sendActiveRoomMessage(text, rootId);
-    });
   })();
 
   (function(){
