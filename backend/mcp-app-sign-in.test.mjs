@@ -120,7 +120,7 @@ test('the routes start a sign-in only for an oauth app, and the desktop opens on
   const vm = await import('node:vm');
   let handler;
   const opened = [];
-  vm.runInNewContext(main.slice(start, main.indexOf('\nipcMain.handle("miaos-artifact-open"', start)), {
+  vm.runInNewContext(main.slice(start, main.indexOf('\nipcMain.handle("miaos-google-workspace-auth-open"', start)), {
     URL, Buffer, crypto, googleAuthOpenSecret: 'fixture-process-secret', ipcMain: { handle: (_name, fn) => { handler = fn; } },
     isMainWindowSender: (event) => event.trusted, shell: { openExternal: async (url) => opened.push(url) },
   });
