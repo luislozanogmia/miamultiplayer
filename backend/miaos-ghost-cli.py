@@ -38,6 +38,7 @@ SUPPORTED_METHODS = {
     "ghost_scroll": "scroll",
     "ghost_wait": "wait",
     "ghost_file_open": "file_open",
+    "ghost_folder_open": "folder_open",
     "ghost_group_list": "group_list",
     "ghost_group_create": "group_create",
     "ghost_group_rename": "group_rename",

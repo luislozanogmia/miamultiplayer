@@ -2400,7 +2400,12 @@ async function resolveBrowserActor(window, sessionId) {
     if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia", workspace };
     else if (found && found.kind === "bot" && typeof found.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
-      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace };
+      // The folders this bot's run works in: the only ones it may show in
+      // the file manager (folder-open.cjs).
+      const folders = Array.isArray(found.folders)
+        ? found.folders.filter(folder => typeof folder === "string" && folder.length <= 4096 && path.isAbsolute(folder)).slice(0, 4)
+        : [];
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace, folders };
     } else throw unavailable();
   } catch (_) {
     throw unavailable();

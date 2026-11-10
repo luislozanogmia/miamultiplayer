@@ -28,6 +28,9 @@ For subsequent actions, call the same CLI and always include
 - `ghost_file_open` for opening a regular file from the Mia workspace in the
   embedded browser. It accepts an absolute `path` under the workspace and
   brings the browser surface forward.
+- `ghost_folder_open` for showing a folder in the system file manager
+  (Finder, File Explorer, Files). It accepts an absolute `path` (or `~/...`);
+  a file path only selects that file in its folder, never opens it.
 - `ghost_downloads` for the files you downloaded and where they landed.
   Pass `"wait_ms"` (up to 60000) to wait for running downloads to finish.
 

@@ -10,7 +10,7 @@ function resolver() {
   const source = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
   const start = source.indexOf("// Asks the backend which bot a Ghost request's Hermes session belongs to,");
   const end = source.indexOf("async function startGhostBridge()", start);
-  const context = { backendUrl: "http://127.0.0.1:4870", URL, AbortSignal, Date, Map };
+  const context = { backendUrl: "http://127.0.0.1:4870", URL, AbortSignal, Date, Map, path };
   vm.runInNewContext(source.slice(start, end), context);
   return context.resolveBrowserActor;
 }
@@ -32,7 +32,7 @@ test("failed, unknown and malformed actor lookups reject and recover without a c
 });
 
 test("verified Mia and bot identities are rechecked for each command and the app-session fetch is bounded", async () => {
-  for (const actor of [{ kind: "mia", workspace: "solo" }, { kind: "bot", botId: "bot-a", name: "A", workspace: "hub_" + "a".repeat(32) }]) {
+  for (const actor of [{ kind: "mia", workspace: "solo" }, { kind: "bot", botId: "bot-a", name: "A", workspace: "hub_" + "a".repeat(32), folders: ["/data/mia/bots/A"] }]) {
     const lookup = resolver(); let calls = 0;
     const window = windowWith(async (_url, options) => {
       calls++; assert.equal(options.credentials, "include"); assert.equal(options.redirect, "error");
@@ -44,6 +44,15 @@ test("verified Mia and bot identities are rechecked for each command and the app
     assert.equal(calls, 2);
   }
   const lookup = resolver(); await assert.rejects(lookup(null, "session"), /verify|unavailable/i);
+});
+
+test("a bot identity keeps only absolute folders, at most four; Mia gets none", async () => {
+  const lookup = resolver();
+  const folders = ["/a", "relative", 7, "/b", "/c", "/d", "/e", "/" + "x".repeat(5000)];
+  const bot = await lookup(windowWith(async () => ({ ok: true, json: async () => ({ actor: { kind: "bot", botId: "bot-a", workspace: "solo", folders } }) })), "s");
+  assert.deepEqual(JSON.parse(JSON.stringify(bot.folders)), ["/a", "/b", "/c", "/d"]);
+  const mia = await lookup(windowWith(async () => ({ ok: true, json: async () => ({ actor: { kind: "mia", workspace: "solo", folders } }) })), "s");
+  assert.equal(mia.folders, undefined);
 });
 
 test("a previously verified session is refused as soon as the backend expires it", async () => {

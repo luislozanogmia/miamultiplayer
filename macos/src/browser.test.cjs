@@ -795,6 +795,46 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
   }
 });
 
+test("Mia and bots show folders in the file manager, a bot only inside its own folders", async () => {
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "miaos-folder-open-")));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "miaos-folder-outside-")));
+  try {
+    const botFolder = path.join(workspace, "bots", "Scout");
+    fs.mkdirSync(botFolder, { recursive: true });
+    const file = path.join(botFolder, "report.html");
+    fs.writeFileSync(file, "<h1>Report</h1>");
+    const h = harness({ workspaceRoot: workspace, resolveActor: knownActor({
+      "s-a": { botId: "bot-a", name: "Scout", folders: [botFolder] },
+      "s-b": { botId: "bot-b", name: "Empty" },
+    }) });
+
+    // Mia: any folder; a file is selected in its folder, never opened.
+    assert.deepEqual(await h.controller.protocol("folder_open", { actor_session: "s-mia", path: outside }),
+      { shown: true, opened: "folder", path: outside });
+    assert.equal((await h.controller.protocol("folder_open", { actor_session: "s-mia", path: file })).opened, "revealed");
+    // A bot: its own folder opens; anywhere else is refused.
+    assert.equal((await h.controller.protocol("folder_open", { actor_session: "s-a", path: botFolder })).opened, "folder");
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-a", path: outside }), /only show folders inside its own/);
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-a", path: workspace }), /only show folders inside its own/);
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-b", path: botFolder }), /no folder of its own/);
+    // Never a web address, an app or a launcher flag; never an unverified session.
+    for (const value of ["https://example.com", "-a", "Safari", "mailto:someone@example.com"]) {
+      await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-mia", path: value }), { code: "FOLDER_OPEN_REFUSED" });
+    }
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-unknown", path: outside }), { code: "BROWSER_ACTOR_UNAVAILABLE" });
+    await assert.rejects(h.controller.protocol("folder_open", { path: outside }), { code: "BROWSER_ACTOR_UNAVAILABLE" });
+
+    assert.deepEqual(h.opened, [outside, botFolder]);
+    assert.deepEqual(h.shown, [file]);
+    // Showing a folder is not browser work: no tab opened.
+    assert.equal(h.command("state").tabs.length, 0);
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("navigating to a Mia folder file opens it as a local file, not a web address", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-nav-file-"));
   try {

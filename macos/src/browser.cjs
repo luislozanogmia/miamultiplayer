@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
@@ -16,6 +17,7 @@ const { createActorRuntime } = require("./browser-actors.cjs");
 const { createClosedTabs } = require("./closed-tabs.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
+const { resolveFolderOpenTarget, showInFileManager } = require("./folder-open.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 // Longer fill values are inserted in one go rather than key by key.
@@ -1368,6 +1370,33 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(actor.botId)) return actor;
     throw unavailable();
   }
+  // Shows a folder in the system file manager for Mia or a bot (see
+  // folder-open.cjs). Not a browser action, so it needs no tab and works
+  // whichever workspace is on screen; a bot only in its own run's folders.
+  async function protocolFolderOpen(params) {
+    const unavailable = () => protocolError("BROWSER_ACTOR_UNAVAILABLE",
+      "Mia could not verify this session, so the folder was not shown. Only a live chat with Mia or a bot can show folders.");
+    if (params[actorCapability] === true) throw protocolError("FORBIDDEN_FOR_ACTOR", "Browser workers cannot show folders.");
+    const sessionId = params.actor_session;
+    if (typeof sessionId !== "string" || !sessionId.trim() || sessionId.trim().length > 200
+        || typeof options.resolveActor !== "function") throw unavailable();
+    let actor;
+    try { actor = await options.resolveActor(sessionId.trim()); }
+    catch (_) { throw unavailable(); }
+    let roots;
+    if (actor && actor.kind === "mia" && actor.botId == null) roots = null;
+    else if (actor && actor.kind === "bot" && typeof actor.botId === "string") {
+      roots = Array.isArray(actor.folders) ? actor.folders.filter(folder => typeof folder === "string" && path.isAbsolute(folder)) : [];
+      if (!roots.length) throw protocolError("FOLDER_OPEN_REFUSED", "This bot run has no folder of its own to show.");
+    } else throw unavailable();
+    const requested = params.path === undefined ? params.folder : params.path;
+    let target;
+    try { target = resolveFolderOpenTarget(requested, { roots, home: os.homedir() }); }
+    catch (error) { throw protocolError(error.code || "FOLDER_OPEN_REFUSED", error.message); }
+    const result = await showInFileManager(shell, target);
+    log(`folder shown for ${actor.kind === "bot" ? `bot ${actor.botId}` : "Mia"}: ${result.opened}`);
+    return result;
+  }
   // Every tab has exactly one controller. Tabs outside a bot-owned group are
   // Mia's; a bot-owned group assigns all of its tabs to that one bot.
   function tabController(tab) {
@@ -2245,6 +2274,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (!params || typeof params !== "object" || Array.isArray(params)) {
       throw protocolError("INVALID_PARAMS", "params must be an object.");
     }
+    if (method === "folder_open") return protocolFolderOpen(params);
     // Coordinator-dispatched browser work arrives already verified and bound
     // to one tab (actorRuntime); Ghost calls prove their bot session here.
     const actor = params[actorCapability] === true ? null : await protocolActor(params.actor_session);

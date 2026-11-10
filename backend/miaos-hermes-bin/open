@@ -1,4 +1,5 @@
 #!/bin/sh
 
 echo "Mia browser policy: the macOS open command is disabled. Use the Mia Ghost CLI and the embedded Mia browser instead." >&2
+echo "To show a folder in Finder, use: ghost-cli call ghost_folder_open --arguments '{\"instance_id\":\"miaos\",\"path\":\"/full/path\"}'" >&2
 exit 126

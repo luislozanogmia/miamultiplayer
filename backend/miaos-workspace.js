@@ -19,6 +19,7 @@ Before a file task, read this file and follow the project-specific instructions 
 
 - For web pages, use only the browser embedded in Mia through the bundled Ghost CLI. Never run \`open\`, \`open -a\`, \`osascript\`, Chrome, Chromium, Playwright, or another default-browser launcher.
 - To preview a local HTML, PDF, or other workspace file, resolve it from the terminal's current workspace directory, call \`ghost-cli call ghost_file_open\`, and verify that the command succeeds before saying the file was opened.
+- To show a folder in Finder or the system file manager, call \`ghost-cli call ghost_folder_open\` with its full path. Never use \`open\`, \`open -R\`, \`explorer\`, or \`xdg-open\` for it.
 - If the native browser bridge is unavailable, report that the file was saved but not opened; do not fall back to an external browser.
 - Do not save credentials, tokens, or other secrets in this workspace.
 `;

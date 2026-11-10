@@ -1417,7 +1417,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       const id = String(session && session.sessionId || '');
       if (!id) return;
       runSessions.push(id);
-      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}` });
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
+        // The folders this run works in, the only ones it may show in the file manager.
+        folders: [teamFolder, teamWorkFolder].filter(Boolean) });
     };
     // A bot asked in a team channel saves its finished files in that team's
     // folder on this computer (<Mia folder>/companies/<company>/<bot>), not in
@@ -7378,6 +7380,15 @@ function browserWorkspaceForConversation(conversation, companyId, email) {
   return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
 }
 
+// A bot may show only the folders its own run works in (its Mia folder and
+// working folder) in the system file manager; the desktop host checks the
+// path against these. Mia's own agent gets none: she may show any folder.
+function browserActorFolders(folders) {
+  return (Array.isArray(folders) ? folders : [])
+    .filter((folder) => typeof folder === 'string' && path.isAbsolute(folder))
+    .map((folder) => path.resolve(folder));
+}
+
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
 // identity; unknown sessions and inaccessible conversations never become Mia.
@@ -7387,7 +7398,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   if (shared) {
     // Only the person running it here: the bot uses their browser, as in Solo.
     if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
-    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace } });
+    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace, folders: browserActorFolders(shared.folders) } });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
   if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
@@ -7403,7 +7414,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   }
   const workspace = browserWorkspaceForConversation(conversation, target.companyId, req.userEmail);
   return res.status(200).json({ actor: target.botId
-    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace }
+    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace, folders: browserActorFolders(target.folders) }
     : { kind: 'mia', workspace } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
@@ -8607,6 +8618,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           agentName: agent.name,
           // Goal continuations validate their files against this bot's workspace.
           agent,
+          // The folders this bot works in, the only ones it may show in the file manager.
+          folders: [artifactWorkspace, botWorkFolder].filter(Boolean),
         };
         activateBrowserRun(browserTarget, 'dispatch');
         nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);

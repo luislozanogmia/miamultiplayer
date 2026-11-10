@@ -148,6 +148,16 @@ const MIAOS_BROWSER_TURN_POLICY = `
 Mia browser boundary (non-negotiable): when the user asks you to browse, navigate, open, search, click, or act on a website, use only the native browser embedded in the Mia desktop host through the Mia Ghost CLI session. The Mia frontend may be served from localhost during development, but the native desktop host and its WebContentsView remain the only browser runtime. For a local HTML, PDF, or other file, save it in the Mia workspace and call ghost_file_open with its path; report it as opened only after that command succeeds. Never use an iframe, the top-level localhost preview, the macOS open command, open -a, osascript, Chrome, Chromium, Playwright, a default-browser launcher, or any other browser. A browser action is successful only when the Mia Ghost command reports the page in the embedded Mia browser. If that bridge is unavailable, stop and tell the user that the Mia browser is not reachable; do not fall back.
 `.trim();
 
+// Until Mia has its own file view, Mia and bots show a folder in the system
+// file manager (Finder, File Explorer, Files) through the app, never through
+// the shell: open, explorer and xdg-open stay blocked because they
+// also launch apps, web pages and files. Same text for Mia and every bot.
+const MIAOS_FOLDER_OPEN_POLICY = `
+To show the user a folder in Finder (File Explorer on Windows, the file manager on Linux), run
+ghost-cli call ghost_folder_open --arguments '{"instance_id":"miaos","path":"/full/path/to/folder"}'
+A file path selects that file in its folder; it is never opened or run. Say the folder is open only after the command succeeds; if it refuses, give the user the full path instead. Never use open, open -R, explorer, xdg-open or osascript for this.
+`.trim();
+
 // Mia's browser instructions are app-owned. Do not rely on Hermes' global
 // skill directories here: they may contain browser integrations for another
 // runtime. Keeping the path relative to this repository also makes the
@@ -238,7 +248,7 @@ function appOwnedToolPolicy(options = {}) {
     // Bot turns start from a compact operating prompt. The runtime still
     // exposes the restricted bot tool profile; this text supplies only the
     // app-owned browser boundary instead of injecting the full Mia harness.
-    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE]
+    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE, MIAOS_FOLDER_OPEN_POLICY]
       .filter(Boolean).join('\n\n');
   }
   return [loadMiaGhostSkill(), loadMiaBotCreationSkill()].filter(Boolean).join('\n\n');
@@ -291,6 +301,7 @@ function loadMiaGhostSkill() {
       return [
         MIAOS_BROWSER_TURN_POLICY,
         MIAOS_GHOST_FALLBACK,
+        MIAOS_FOLDER_OPEN_POLICY,
         'The browser module is bundled and app-owned.',
         body,
         loadMiaAppSkill(),
@@ -303,6 +314,7 @@ function loadMiaGhostSkill() {
   return [
     MIAOS_BROWSER_TURN_POLICY,
     MIAOS_GHOST_FALLBACK,
+    MIAOS_FOLDER_OPEN_POLICY,
     'The browser module is bundled and app-owned.',
   ].join('\n\n');
 }
@@ -1185,6 +1197,7 @@ module.exports = {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_WEB_POLICY,
   MIAOS_BOT_COMPACT_TOOL_POLICY,
+  MIAOS_FOLDER_OPEN_POLICY,
   appOwnedToolPolicy,
   MIAOS_AGENT_MAX_TURNS,
   MIAOS_BOT_MAX_TURNS,

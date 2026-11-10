@@ -87,7 +87,7 @@ const isManagedProfileConfig = text => typeof text === 'string' && (
 const SHELL_GUARD = `#!/bin/bash
 # Managed by Mia. Keep browser launches inside the app-owned browser.
 miaos_block_external_browser() {
-  echo "Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead." >&2
+  echo "Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead. To show a folder in Finder or the file manager, use: ghost-cli call ghost_folder_open --arguments '{\\"instance_id\\":\\"miaos\\",\\"path\\":\\"/full/path\\"}'" >&2
   return 126
 }
 
