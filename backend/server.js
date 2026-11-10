@@ -2836,52 +2836,49 @@ function reconcileNativeMiaConversations() {
     for (const workspaceId of workspaceIds) {
       const companyId = nativeCompanyId(workspaceId, owner);
       try {
-        const candidates = nativeConversationRepository.listGatewayConversations({ companyId, createdBy: owner });
-        if (!candidates.length) continue;
-        let canonical = candidates[0];
-        for (const duplicate of candidates.slice(1)) {
-          const merged = nativeConversationRepository.mergeConversations({
-            companyId,
-            targetId: canonical.id,
-            sourceId: duplicate.id,
-            mergedAt: new Date().toISOString(),
-          });
-          canonical = merged.conversation;
-          console.log(`native Mia reconciliation: merged ${duplicate.id} into ${canonical.id} (${merged.mergedEvents} events)`);
+        // Solo's chat and each company's chat are reconciled apart; a
+        // company's Mia chat is stored here too but never merges into Solo's.
+        const { canonicals, merges } = nativeConversationRepository.reconcileGatewayConversations({
+          companyId, createdBy: owner, mergedAt: new Date().toISOString(),
+        });
+        for (const merge of merges) {
+          console.log(`native Mia reconciliation: merged ${merge.sourceId} into ${merge.targetId} (${merge.mergedEvents} events)`);
         }
-        const metadata = canonical.metadata && typeof canonical.metadata === 'object'
-          ? { ...canonical.metadata }
-          : {};
-        metadata.agentId = 'gateway';
-        metadata.departments = Array.isArray(metadata.departments) ? metadata.departments : [];
-        metadata.workspaceId = workspaceId;
-        if (!metadata.source) metadata.source = 'native-ui';
-        const metadataChanged = JSON.stringify(metadata) !== JSON.stringify(canonical.metadata || {});
-        if (canonical.name !== 'Mia' || metadataChanged) {
-          nativeConversationRepository.updateConversation({
-            companyId,
-            id: canonical.id,
-            name: 'Mia',
-            metadata,
-            updatedAt: canonical.updatedAt,
-          });
-        }
-        for (const member of nativeConversationRepository.listMembers({
-          companyId,
-          conversationId: canonical.id,
-          includeRemoved: false,
-        })) {
-          const isOwner = member.principalType === 'user'
-            && String(member.principalId).toLowerCase() === owner;
-          const isBoundAgent = member.principalType === 'agent'
-            && member.principalId === GATEWAY_AGENT_ID;
-          if (!isOwner && !isBoundAgent) {
-            nativeConversationRepository.removeMember({
+        for (const canonical of canonicals) {
+          const metadata = canonical.metadata && typeof canonical.metadata === 'object'
+            ? { ...canonical.metadata }
+            : {};
+          metadata.agentId = 'gateway';
+          metadata.departments = Array.isArray(metadata.departments) ? metadata.departments : [];
+          metadata.workspaceId = workspaceId;
+          if (!metadata.source) metadata.source = 'native-ui';
+          const metadataChanged = JSON.stringify(metadata) !== JSON.stringify(canonical.metadata || {});
+          if (canonical.name !== 'Mia' || metadataChanged) {
+            nativeConversationRepository.updateConversation({
               companyId,
-              conversationId: canonical.id,
-              principalId: member.principalId,
-              principalType: member.principalType,
+              id: canonical.id,
+              name: 'Mia',
+              metadata,
+              updatedAt: canonical.updatedAt,
             });
+          }
+          for (const member of nativeConversationRepository.listMembers({
+            companyId,
+            conversationId: canonical.id,
+            includeRemoved: false,
+          })) {
+            const isOwner = member.principalType === 'user'
+              && String(member.principalId).toLowerCase() === owner;
+            const isBoundAgent = member.principalType === 'agent'
+              && member.principalId === GATEWAY_AGENT_ID;
+            if (!isOwner && !isBoundAgent) {
+              nativeConversationRepository.removeMember({
+                companyId,
+                conversationId: canonical.id,
+                principalId: member.principalId,
+                principalType: member.principalType,
+              });
+            }
           }
         }
       } catch (err) {

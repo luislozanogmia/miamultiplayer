@@ -626,6 +626,15 @@ function migrateLegacyBotConversationData(db) {
   });
 }
 
+// Which main Mia chat a conversation is: Solo's ('') or one company's (its
+// teamWorkspace). The same key the canonical index and get-or-create use, so
+// a company's chat is only ever a duplicate of that company's chat.
+function gatewayPlaceOf(conversation) {
+  const metadata = conversation && conversation.metadata && typeof conversation.metadata === 'object'
+    ? conversation.metadata : {};
+  return typeof metadata.teamWorkspace === 'string' ? metadata.teamWorkspace : '';
+}
+
 // Databases created before fresh Mia chats, or before company Mia chats, have
 // a canonical-Mia index that also covers them. Drop it so SCHEMA recreates it
 // with the fresh exclusion and one chat per company.
@@ -745,6 +754,30 @@ function createConversationRepository(db) {
         ORDER BY c.created_at ASC, c.id ASC`
     ).all(normalizedCompanyId, normalizedCreatedBy);
     return rows.map(conversationRow);
+  }
+
+  // Merge duplicate main Mia chats into the oldest one of the same place
+  // (Solo with Solo, a company with the same company). Returns each place's
+  // canonical chat and the merges made.
+  function reconcileGatewayConversations({ companyId, createdBy, mergedAt } = {}) {
+    const byPlace = new Map();
+    for (const conversation of listGatewayConversations({ companyId, createdBy })) {
+      const place = gatewayPlaceOf(conversation);
+      if (!byPlace.has(place)) byPlace.set(place, []);
+      byPlace.get(place).push(conversation);
+    }
+    const canonicals = [];
+    const merges = [];
+    for (const [place, candidates] of byPlace) {
+      let canonical = candidates[0];
+      for (const duplicate of candidates.slice(1)) {
+        const merged = mergeConversations({ companyId, targetId: canonical.id, sourceId: duplicate.id, mergedAt });
+        canonical = merged.conversation;
+        merges.push({ place, sourceId: duplicate.id, targetId: canonical.id, mergedEvents: merged.mergedEvents });
+      }
+      canonicals.push(canonical);
+    }
+    return { canonicals, merges };
   }
 
   // Atomic get-or-create for the one canonical gateway/Mia conversation.
@@ -2309,6 +2342,7 @@ function createConversationRepository(db) {
   return {
     createConversation,
     listGatewayConversations,
+    reconcileGatewayConversations,
     getOrCreateGatewayConversation,
     getOrCreateBotConversation,
     getConversation,

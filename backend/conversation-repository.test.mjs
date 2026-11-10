@@ -508,3 +508,55 @@ test('each company gets its own main Mia chat, apart from Solo\'s', () => {
   assert.equal(companyOne.metadata.teamWorkspace, 'hub_' + 'a'.repeat(32));
   assert.equal(solo.metadata.teamWorkspace, undefined);
 });
+
+test('reconciling Mia chats keeps a company\'s chat apart from Solo\'s and merges only true duplicates', () => {
+  const { repository } = fixture();
+  const teamOne = 'hub_' + 'a'.repeat(32);
+  const teamTwo = 'hub_' + 'b'.repeat(32);
+  const ask = (metadata, createdAt) => repository.getOrCreateGatewayConversation({
+    companyId: 'company-a', createdBy: 'alice@example.com', name: 'Mia', createdAt,
+    metadata: { agentId: 'gateway', ...metadata },
+    owner: { principalId: 'alice@example.com', principalType: 'user', joinedAt: createdAt },
+  }).conversation;
+  // A legacy duplicate is a Mia chat known only by its gateway membership.
+  const legacy = (metadata, createdAt) => {
+    const conversation = createConversation(repository, { type: 'agent', name: 'Mia', createdAt, metadata });
+    createMember(repository, conversation.id, { principalId: 'gateway', principalType: 'agent', joinedAt: createdAt });
+    return conversation;
+  };
+  const say = (conversationId, text, createdAt) => repository.createEvent({
+    companyId: 'company-a', conversationId, senderId: 'alice@example.com', senderType: 'user',
+    content: { text }, createdAt,
+  });
+  const solo = ask({}, '2026-11-09T06:00:00.000Z');
+  const companyOne = ask({ teamWorkspace: teamOne }, '2026-11-09T07:00:00.000Z');
+  const companyTwo = ask({ teamWorkspace: teamTwo }, '2026-11-09T08:00:00.000Z');
+  const soloDuplicate = legacy({ source: 'legacy' }, '2026-11-09T09:00:00.000Z');
+  const companyOneDuplicate = legacy({ source: 'legacy', teamWorkspace: teamOne }, '2026-11-09T10:00:00.000Z');
+  say(solo.id, 'solo note', '2026-11-09T06:01:00.000Z');
+  say(companyOne.id, 'company one note', '2026-11-09T07:01:00.000Z');
+  say(companyTwo.id, 'company two note', '2026-11-09T08:01:00.000Z');
+  say(soloDuplicate.id, 'duplicate solo note', '2026-11-09T09:01:00.000Z');
+  say(companyOneDuplicate.id, 'duplicate company one note', '2026-11-09T10:01:00.000Z');
+
+  const { canonicals, merges } = repository.reconcileGatewayConversations({
+    companyId: 'company-a', createdBy: 'alice@example.com', mergedAt: '2026-11-10T06:00:00.000Z',
+  });
+  assert.deepEqual(canonicals.map((conversation) => conversation.id).sort(), [solo.id, companyOne.id, companyTwo.id].sort());
+  assert.deepEqual(merges.map(({ sourceId, targetId }) => [sourceId, targetId]).sort(), [
+    [soloDuplicate.id, solo.id],
+    [companyOneDuplicate.id, companyOne.id],
+  ].sort());
+  const texts = (conversationId) => repository.listEvents({ companyId: 'company-a', conversationId })
+    .events.map((event) => event.content.text);
+  assert.deepEqual(texts(solo.id), ['solo note', 'duplicate solo note']);
+  assert.deepEqual(texts(companyOne.id), ['company one note', 'duplicate company one note']);
+  assert.deepEqual(texts(companyTwo.id), ['company two note']);
+  assert.equal(repository.getConversation({ companyId: 'company-a', id: companyTwo.id }).metadata.mergedInto, undefined);
+
+  const again = repository.reconcileGatewayConversations({
+    companyId: 'company-a', createdBy: 'alice@example.com', mergedAt: '2026-11-11T06:00:00.000Z',
+  });
+  assert.equal(again.merges.length, 0, 'a restart merges nothing more');
+  assert.equal(again.canonicals.length, 3);
+});
