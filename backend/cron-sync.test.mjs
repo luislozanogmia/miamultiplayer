@@ -324,6 +324,34 @@ test('a model id with multiple slashes, a bare slash, or an unknown bracket suff
   }
 });
 
+test('a bot saved on the "default" placeholder runs on the model resolved for it, never on "default"', async () => {
+  resetCommands();
+  setJobs([]);
+  const agent = enabledAgent({ id: 'agent-placeholder', model: 'default', modelProvider: 'deepseek' });
+  await cronSync.syncBotAutomation(agent, null, null, { botModel: { provider: 'deepseek', model: 'deepseek-flash' } });
+  assert.deepEqual(readCommands()[0].slice(-4), ['--model', 'deepseek-flash', '--provider', 'deepseek']);
+
+  // Without a resolved model the placeholder is refused, in plain words.
+  resetCommands();
+  setJobs([]);
+  await assert.rejects(() => cronSync.syncBotAutomation(enabledAgent({ id: 'agent-placeholder-2', model: 'default' }), null),
+    /^Error: This automation has no valid connected model to run on\. Connect a model in Mia\.$/);
+  assert.equal(readCommands().length, 0);
+});
+
+test('with no connected model, a bot\'s running job is paused instead of sending its old model', async () => {
+  resetCommands();
+  const agent = enabledAgent({ id: 'agent-no-model', model: 'default' });
+  cronSync.migrateBotAutomations(agent);
+  const automation = agent.automations[0];
+  agent.hermesCronJobIds[automation.id] = 'placeholder-job';
+  setJobs([{ id: 'placeholder-job', name: cronSync.jobNameFor(agent, automation), enabled: true, model: 'default', provider: 'deepseek' }]);
+
+  await assert.rejects(() => cronSync.syncBotAutomation(agent, null, null, { botModel: null }), /no valid connected model/);
+
+  assert.deepEqual(readCommands().map((args) => args.slice(2)), [['pause', 'placeholder-job']]);
+});
+
 test('a stale Hermes job id is replaced by a newly created job', async () => {
   resetCommands();
   setJobs([]);

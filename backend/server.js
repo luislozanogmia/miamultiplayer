@@ -131,6 +131,7 @@ const {
   inventoryResponse,
   visibleChatModelInventory,
   normalizeChatModelSelection,
+  botModelSelection,
   chatModelSelectionInferenceOptions,
   managedRouterKeyMessage,
   managedRouterErrorCode,
@@ -3545,10 +3546,11 @@ function linkBotSkills(bot) {
     console.error('skills: could not link skills for', bot && bot.id, error.message);
   }
 }
-function syncBotAutomationWithInstructions(bot, existingJob, existingRegistry) {
+async function syncBotAutomationWithInstructions(bot, existingJob, existingRegistry) {
   const owner = ownerOf(bot);
   const globalInstructions = promptInstructions(owner).bot;
-  return cronSync.syncBotAutomation(bot, existingJob, existingRegistry, { globalInstructions });
+  const botModel = await botModelSelectionForUser(owner, bot);
+  return cronSync.syncBotAutomation(bot, existingJob, existingRegistry, { globalInstructions, botModel });
 }
 let runtimeApiKey = '';
 function getApiKey() {
@@ -4795,6 +4797,32 @@ async function inferenceOptionsForUser(email, baseOptions) {
     pinManagedRouterModel(options, MANAGED_ROUTER_MODEL_ALLOWLIST, MANAGED_ROUTER_HERMES_PROVIDER);
   }
   return Object.keys(options).length ? options : undefined;
+}
+
+// The model a bot runs on when no turn picked one: its own while connected,
+// else the person's current model, the one chats and new bots use. Every path
+// outside a chat turn (schedules, Mia's tools, browser work) asks here.
+// -> { provider, model } or null
+async function botModelSelectionForUser(email, bot) {
+  let providers = visibleChatModelProvidersForUser(nativeChatModelProviders, email);
+  if (!Object.keys(providers).length) {
+    try {
+      providers = visibleChatModelProvidersForUser(rememberNativeChatModelInventory(await getHermesGatewayModelOptions({ refresh: true })), email);
+    } catch (_) { /* an unknown inventory keeps a real saved model */ }
+  }
+  const own = botModelSelection(bot, providers, null);
+  if (own) return own;
+  const chosen = await inferenceOptionsForUser(email, { profile: MIAOS_BOT_HERMES_PROFILE }).catch(() => null);
+  return botModelSelection(null, providers, chosen);
+}
+
+// A bot's provider is the one that lists its model. The default provider was
+// once stamped onto any model, including another provider's.
+function stampBotModelProvider(record, email) {
+  const fallback = harnessCliProviderForUser(email);
+  const found = botModelSelection({ model: record.model, modelProvider: fallback },
+    visibleChatModelProvidersForUser(nativeChatModelProviders, email), null);
+  record.modelProvider = found ? found.provider : fallback;
 }
 
 // Provider credentials and guardrails are process-wide settings, so changing
@@ -6232,12 +6260,12 @@ registerResource({
     record.owner = String(req.userEmail || '').toLowerCase();
     record.workspaceId = workspaceIdFromRequest(req);
     if (!record.avatarColor) record.avatarColor = newBotColor(existing.filter((bot) => botVisibleInWorkspace(bot, req)));
-    record.modelProvider = harnessCliProviderForUser(req.userEmail);
+    stampBotModelProvider(record, req.userEmail);
     cronSync.migrateBotAutomations(record);
   },
   beforeUpdate: (record, existing, req) => {
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
-    if (record.model !== existing.model) record.modelProvider = harnessCliProviderForUser(req.userEmail);
+    if (record.model !== existing.model) stampBotModelProvider(record, req.userEmail);
     cronSync.migrateBotAutomations(record);
   },
   prepareUpdate: (record, existing, req) => {
@@ -9713,7 +9741,7 @@ async function initializeBrowserWork() {
         assignments: req.body?.assignments, models: req.body?.models,
         bots: db.loadAll(conn, 'bots').filter(bot => sameOwner(bot, owner) && bot.status !== 'draft'),
         resolveSelection: selection => chatModelSelectionForUser(selection, owner),
-        defaultModel: () => inferenceOptionsForUser(owner, { profile: MIAOS_AGENT_HERMES_PROFILE, workspaceDir: miaosWorkspaceDir() }),
+        botModel: bot => botModelSelectionForUser(owner, bot),
       });
       const work = await coordinator.plan(owner, { groupId: req.body?.groupId, goal: req.body?.goal, context: req.body?.context, candidates,
         ...(req.body?.personalSelection ? { personalSelection: req.body.personalSelection } : {}) });
@@ -9748,7 +9776,7 @@ const miaAppAnswers = miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
       return { conversationId: conversation ? conversation.id : undefined, companyId: nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot)) };
     },
     workspaceDir: () => miaosWorkspaceDir(),
-    botModel: async owner => (await inferenceOptionsForUser(owner, { profile: MIAOS_BOT_HERMES_PROFILE })).model,
+    botModel: async owner => ((await botModelSelectionForUser(owner, null)) || {}).model,
   }),
   activity: miaAppRoutes.createActivityLog(ARTIFACTS_DATA_DIR),
   resolveTurn(session, owner) {
@@ -9842,6 +9870,7 @@ async function onBackendListening() {
     // pointer to overwrite the repaired bot-conversation destination.
     .then(() => cronSync.reconcileBotCrons(conn, {
       globalInstructionsForBot: (bot) => promptInstructions(ownerOf(bot)).bot,
+      botModelFor: (bot) => botModelSelectionForUser(ownerOf(bot), bot),
     }))
     .then(deliverBotCronResults)
     .catch((err) => console.error('bot/cron boot reconciliation failed', err.message));

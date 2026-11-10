@@ -15269,12 +15269,16 @@
       navigateToAgentChat(already, true);
       return Promise.resolve(true);
     }
+    // A template's model is a placeholder: the bot runs on the person's chosen
+    // model, the same as a bot they create or get from a company.
+    var model = selectedConnectedBotModel();
+    if(!model){ showBenchToast('Could not install bot: connect and choose a model first.'); return Promise.resolve(false); }
     botStoreState.installingId = id;
     return api('/api/bots/catalog/' + encodeURIComponent(id)).then(function(res){
       if(res.status !== 200 || !res.data || !res.data.bot) throw new Error('manifest unavailable');
       var freshManifest = res.data;
       return createLibrarySkills(freshManifest.skills).then(function(skillIds){
-        return api('/api/bots', {method:'POST', body: skillIds.length ? Object.assign({}, freshManifest.bot, {skills: skillIds}) : freshManifest.bot});
+        return api('/api/bots', {method:'POST', body: Object.assign({}, freshManifest.bot, {model: model}, skillIds.length ? {skills: skillIds} : {})});
       }).then(function(createRes){
         if(createRes.status !== 201 || !createRes.data || !createRes.data.bot){
           throw new Error(createRes.data && (createRes.data.message || createRes.data.error) || 'install failed');

@@ -131,6 +131,35 @@ function normalizeChatModelSelection(raw, providers) {
   };
 }
 
+// The store's templates once saved the literal "default" as a bot's model.
+function isPlaceholderModel(model) {
+  const id = cleanId(model);
+  return !id || id === 'default';
+}
+
+// The one model a bot runs on when no turn picked one (schedules, Mia's
+// proposals). Its saved model wins while it is connected, under the provider
+// that lists it: bots were saved with the default provider stamped onto
+// another provider's model. A placeholder or a model no longer connected runs
+// on the person's current model (fallback), the one a new bot gets. With no
+// inventory to check against, a real saved model is kept.
+// -> { provider, model }, or null when no usable model is connected.
+function botModelSelection(bot, providers, fallback) {
+  const model = String((bot && bot.model) || '').trim();
+  const saved = cleanId(bot && bot.modelProvider);
+  const inventory = providers || {};
+  if (!isPlaceholderModel(model)) {
+    for (const id of [saved, ...Object.keys(inventory)].filter(Boolean)) {
+      const found = findProviderModel(inventory, id, currentHermesModel(id, model));
+      if (found) return { provider: found.provider.id, model: found.model };
+    }
+    if (saved && !Object.keys(inventory).length) return { provider: saved, model };
+  }
+  const chosen = fallback && String(fallback.model || '').trim();
+  const provider = fallback && String(fallback.provider || '').trim();
+  return chosen && provider && !isPlaceholderModel(chosen) ? { provider, model: chosen } : null;
+}
+
 function chatModelSelectionInferenceOptions(baseOptions, selection) {
   const options = { ...(baseOptions || {}) };
   if (!selection) return Object.keys(options).length ? options : undefined;
@@ -251,6 +280,8 @@ module.exports = {
   inventoryResponse,
   visibleChatModelInventory,
   normalizeChatModelSelection,
+  isPlaceholderModel,
+  botModelSelection,
   chatModelSelectionInferenceOptions,
   managedRouterKeyMessage,
   managedRouterErrorCode,

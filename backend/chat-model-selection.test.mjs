@@ -10,6 +10,7 @@ const {
   normalizeChatModelInventory,
   normalizeChatModelSelection,
   chatModelSelectionInferenceOptions,
+  botModelSelection,
   userFacingModelDispatchError,
   visibleChatModelInventory,
 } = require('./chat-model-selection.js');
@@ -56,6 +57,39 @@ test('rejects unavailable models and unsupported fast mode', () => {
     () => normalizeChatModelSelection({ provider: 'openai-codex', model: 'gpt-6.1-sol', speed: 'fast' }, inventory),
     /fast response speed/
   );
+});
+
+test('a bot runs on its own connected model, under the provider that lists it, else on the person\'s current model', () => {
+  const providers = normalizeChatModelInventory({ providers: [
+    { slug: 'deepseek', authenticated: true, models: ['deepseek-flash', 'deepseek-v4-pro'] },
+    { slug: 'claude', authenticated: true, models: ['claude-opus-5-5[1m]'] },
+  ] });
+  const current = { provider: 'deepseek', model: 'deepseek-v4-pro' };
+  assert.deepEqual(botModelSelection({ model: 'deepseek-flash', modelProvider: 'deepseek' }, providers, current),
+    { provider: 'deepseek', model: 'deepseek-flash' });
+  // Saved with another provider stamped on: the provider that lists the model wins.
+  assert.deepEqual(botModelSelection({ model: 'claude-opus-5-5[1m]', modelProvider: 'deepseek' }, providers, current),
+    { provider: 'claude', model: 'claude-opus-5-5[1m]' });
+  // The store's placeholder, a missing model, or one no longer connected runs on the current model.
+  for (const model of ['default', 'Default', '', 'retired-model']) {
+    assert.deepEqual(botModelSelection({ model, modelProvider: 'deepseek' }, providers, current), current);
+  }
+  // Nothing usable connected: no model at all, never "default".
+  assert.equal(botModelSelection({ model: 'default', modelProvider: 'deepseek' }, providers, null), null);
+  assert.equal(botModelSelection({ model: 'default' }, providers, { provider: 'deepseek', model: 'default' }), null);
+  // An inventory that could not load keeps a real saved model.
+  assert.deepEqual(botModelSelection({ model: 'deepseek-flash', modelProvider: 'deepseek' }, {}, null),
+    { provider: 'deepseek', model: 'deepseek-flash' });
+});
+
+test('every path outside a chat turn asks the one bot model resolver', () => {
+  assert.equal((serverSource.match(/botModelSelectionForUser\(/g) || []).length, 5);
+  assert.match(serverSource, /const botModel = await botModelSelectionForUser\(owner, bot\);\n  return cronSync\.syncBotAutomation\(bot, existingJob, existingRegistry, \{ globalInstructions, botModel \}\);/);
+  assert.match(serverSource, /botModelFor: \(bot\) => botModelSelectionForUser\(ownerOf\(bot\), bot\),/);
+  assert.match(serverSource, /botModel: bot => botModelSelectionForUser\(owner, bot\),/);
+  assert.match(serverSource, /botModel: async owner => \(\(await botModelSelectionForUser\(owner, null\)\) \|\| \{\}\)\.model,/);
+  // Saving a bot stamps the provider that lists its model, not just the default one.
+  assert.equal((serverSource.match(/stampBotModelProvider\(record, req\.userEmail\)/g) || []).length, 2);
 });
 
 test('selected chat model overrides a stale harness default for helper inference', () => {
