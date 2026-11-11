@@ -114,6 +114,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   hermesTokenBudgetFromOptions,
   hermesCharBudgetFromTokens,
+  newSkillsNotice,
 } = require('./inference');
 const { createCredentialOperationCoordinator } = require('./credential-operation-coordinator');
 const {
@@ -8654,7 +8655,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     // session once; what changes per turn (platform state, Google write
     // instructions) travels with each message instead.
     const systemPrompt = buildHermesTaskPrompt(botPromptAgent, [], '', senderLabel, '', [], false, globalInstructions.bot);
-    const sessionKey = nativeBotSessionKey(googleBotProfile, systemPrompt + '\nConnection capabilities: ' + connectionInventory.revision);
+    // The skills list stays out of the key: a skill added later is announced
+    // in the next message instead of starting the session over. The key
+    // carries the skills this session already knows.
+    const skillFreePrompt = buildHermesTaskPrompt({ ...botPromptAgent, bundledSkills: [] }, [], '', senderLabel, '', [], false, globalInstructions.bot);
+    const sessionBase = nativeBotSessionKey(googleBotProfile, skillFreePrompt + '\nConnection capabilities: ' + connectionInventory.revision);
+    const [storedBase, storedSkills = ''] = String(conversation.metadata && conversation.metadata.hermesGatewayProfile || '').split('@');
+    const sameSession = storedBase === sessionBase;
+    const knownSkills = storedSkills.split(',').filter(Boolean);
+    const currentSkills = (Array.isArray(botPromptAgent.skills) ? botPromptAgent.skills : []).map(String);
+    // A slash command carries no message, so its notice waits for the next one.
+    const sessionKey = `${sessionBase}@${(sameSession && slashCommand ? knownSkills : currentSkills).join(',')}`;
     const googleActionInstruction = googleWorkspaceWriteAuthorized
       && /authoritative server state\): CONNECTED/.test(String(platformContext || ''))
       ? googleWorkspaceActions.googleWorkspaceActionInstruction(
@@ -8667,6 +8678,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
       slashCommand ? '' : botInstructionActions.instructionActionInstruction(),
+      sameSession ? newSkillsNotice(botPromptAgent, knownSkills) : '',
       nativePromptLine(trigger) || message,
       turnAttachments.note,
       nativeBrowserContextNote(trigger, { ghostCli: !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly }),
@@ -8678,7 +8690,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     const botGatewayKey = nativeDispatchChainKey(dispatch);
     let activeBotRecord = null;
     const botRunArgs = {
-      storedSessionId: conversation.metadata && conversation.metadata.hermesGatewayProfile === sessionKey
+      storedSessionId: sameSession
         ? conversation.metadata.hermesGatewaySessionId
         : null,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),

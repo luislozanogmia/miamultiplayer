@@ -64,16 +64,15 @@ function safeSharedSkillPath(value) {
     && !part.includes('..') && !part.endsWith('.') && !part.endsWith(' ') && !/[\\:\x00-\x1f\x7f]/.test(part) && !device.test(part));
 }
 function materializeSharedSkills(skills) {
-  if(!skills.some(skill=>skill.files && skill.files.length)) return {skills,cleanup:()=>{}};
+  if(!skills.length) return {skills,cleanup:()=>{}};
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'mia-shared-skills-'));
   try {
     const prepared=skills.map((skill,index)=>{
-      if(!skill.files || !skill.files.length) return skill;
       const folder=path.join(root,String(index));
       fs.mkdirSync(folder,{mode:0o700});
       fs.writeFileSync(path.join(folder,'SKILL.md'),skill.body,{mode:0o600,flag:'wx'});
       const names=new Set();
-      for(const file of skill.files) {
+      for(const file of skill.files || []) {
         if(!safeSharedSkillPath(file.path) || file.body.length>200000) throw new Error('invalid_shared_skill_file');
         const key=file.path.normalize('NFC').toLocaleLowerCase('en-US');
         if(names.has(key)) throw new Error('invalid_shared_skill_file');

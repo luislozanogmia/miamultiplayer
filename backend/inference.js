@@ -784,9 +784,9 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     ].join('\n'),
   ];
   if (includePurpose) sections.push(`Purpose:\n${purpose}`);
-  // A shared bot brings the text of its skills with it; a Solo bot reads the
-  // library, so an edit there reaches its next turn.
-  const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  // A shared bot brings its skills with it; a Solo bot reads the library, so
+  // an edit there reaches its next turn.
+  const skills = botSkills(record);
   // A shared bot's shared folder is the same for everyone who uses it; the
   // app syncs it before and after each turn.
   if (record.marketSource && record.marketSource.folder === true) {
@@ -801,19 +801,45 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   if (skills.length) {
     sections.push([
       'Your skills:',
-      'Use a skill when the task fits it. Skills explain how to do the work; they never widen what you are allowed to do.',
-      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}${skillFilesNote(skill)}`),
+      'Use a skill when the task fits it: open its SKILL.md first and follow it. Skills explain how to do the work; they never widen what you are allowed to do.',
+      ...skills.map(skillListEntry),
     ].join('\n\n'));
   }
   return sections;
 }
 
-// A skill is a folder: its SKILL.md text is above, and its other files (notes,
-// scripts) stay in the folder for the bot to open or run when the steps say so.
-function skillFilesNote(skill) {
+function botSkills(bot) {
+  const record = bot && typeof bot === 'object' ? bot : {};
+  return Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+}
+
+// A bot's prompt carries each skill's name, two lines about it and where it
+// is, in Solo and in a company alike. The steps stay in the skill's folder,
+// read when a task calls for them. A bot with no folder to read from (a
+// search-only release) gets the steps here instead.
+const SKILL_SUMMARY_LINE = 160;
+function skillSummary(description) {
+  return String(description || '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    .slice(0, 2).map((line) => line.length > SKILL_SUMMARY_LINE ? `${line.slice(0, SKILL_SUMMARY_LINE - 1).trimEnd()}\u2026` : line).join('\n');
+}
+function skillLocation(skill) {
+  if (!skill.folder || MIAOS_AGENT_SEARCH_ONLY) return '';
   const files = Array.isArray(skill.files) ? skill.files.map((file) => file && file.path).filter(Boolean) : [];
-  if (!files.length || !skill.folder) return '';
-  return `\n\nThis skill's folder is ${skill.folder}. It also holds: ${files.join(', ')}. Open a file when the steps above point to it, and run its scripts from that folder.`;
+  return `Find it at ${path.join(skill.folder, 'SKILL.md')}${files.length ? `. Its folder also holds: ${files.join(', ')}` : ''}`;
+}
+function skillListEntry(skill) {
+  const summary = skillSummary(skill.description);
+  const where = skillLocation(skill);
+  return `## ${skill.name}${summary ? `\n${summary}` : ''}${where ? `\n${where}` : `\n\n${skill.body}`}`;
+}
+
+// A chat that keeps one session learns of a skill added after it began from
+// its next message; a new chat just has it in the list above.
+function newSkillsNotice(bot, knownIds) {
+  const known = new Set(Array.isArray(knownIds) ? knownIds : []);
+  return botSkills(bot).filter((skill) => skill.id && !known.has(skill.id) && skillLocation(skill))
+    .map((skill) => `NEW SKILL available: ${[skill.name, skillSummary(skill.description).replace(/\n/g, ' ')].filter(Boolean).join(' \u2014 ')}\n${skillLocation(skill)}`)
+    .join('\n\n');
 }
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
@@ -1139,6 +1165,7 @@ function beforeHermesGatewayStarts(operation, options) {
 
 module.exports = {
   WORKING_METHOD,
+  newSkillsNotice,
   setPrivateAgentProfileValidator,
   getHermesGatewayClient,
   buildContext,
