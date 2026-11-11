@@ -6538,23 +6538,41 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
 // A model may propose new persistent instructions, but only this explicit
 // answer from the bot's signed-in owner can write AGENTS.md. The proposal is
 // bound to the owner's private bot chat and the revision it was drafted from.
+// The card is found in the chat it sits in, not the app's current workspace:
+// a company's My Bots chat is stored in Solo whichever list its bot came
+// from, and the app then names the company (see botAnswersConversation).
 app.post('/api/bots/:id/instruction-proposals/:eventId', requireInteractiveAuth, (req, res) => {
+  const refuse = (status, reason) => {
+    console.error('instruction proposal not answered:', reason);
+    return res.status(status).json({ error: status === 403 ? 'forbidden' : 'not_found', reason });
+  };
   const bot = db.loadOne(conn, 'bots', req.params.id);
-  if (!bot || !botVisibleInWorkspace(bot, req)) return res.status(404).json({ error: 'not_found' });
-  if (!sameOwner(bot, req.userEmail)) return res.status(403).json({ error: 'forbidden' });
+  if (!bot || !isActiveWorkspaceUser(ownerOf(bot))) return refuse(404, 'bot_not_found');
+  if (!sameOwner(bot, req.userEmail)) return refuse(botVisibleInWorkspace(bot, req) ? 403 : 404, 'not_owner');
   const decision = String((req.body || {}).decision || '');
   if (decision !== 'accept' && decision !== 'dismiss') return res.status(400).json({ error: 'invalid_decision' });
-  const companyId = nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot));
-  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  let companyId = null;
+  let event = null;
+  for (const candidate of new Set([nativeCompanyId(workspaceIdForRecord(bot), ownerOf(bot)), nativeCompanyId('solo', ownerOf(bot))])) {
+    event = nativeConversationRepository.getEvent({ companyId: candidate, id: req.params.eventId, includeDeleted: false });
+    if (event) { companyId = candidate; break; }
+  }
   const proposal = event && event.metadata && event.metadata.instructionProposal;
   const trigger = proposal && nativeConversationRepository.getEvent({ companyId, id: proposal.triggerEventId, includeDeleted: false });
   const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
-  if (!event || event.senderType !== 'bot' || event.senderId !== bot.id
+  if (!event) return refuse(404, 'event_not_found');
+  if (event.senderType !== 'bot' || event.senderId !== bot.id
     || !proposal || proposal.botId !== bot.id || !proposal.baseRevision
-    || typeof proposal.instructions !== 'string' || !proposal.instructions.trim()
-    || !trigger || trigger.senderType !== 'user' || trigger.conversationId !== event.conversationId
-    || !sameOwner(bot, trigger.senderId) || !ownsPrivateBotConversation(conversation, bot, trigger)) {
-    return res.status(404).json({ error: 'not_found' });
+    || typeof proposal.instructions !== 'string' || !proposal.instructions.trim()) {
+    return refuse(404, 'not_a_proposal');
+  }
+  if (!trigger || trigger.senderType !== 'user' || trigger.conversationId !== event.conversationId
+    || !sameOwner(bot, trigger.senderId)) {
+    return refuse(404, 'trigger_mismatch');
+  }
+  if (!botAnswersConversation(bot, NATIVE_COMPANY_ID, conversation, req.userEmail)
+    || !ownsPrivateBotConversation(conversation, bot, trigger)) {
+    return refuse(404, 'not_private_bot_chat');
   }
   if (proposal.status !== 'pending') return res.status(409).json({ error: 'already_answered', proposal });
   const answer = (status, fields = {}) => {
@@ -6581,6 +6599,7 @@ app.post('/api/bots/:id/instruction-proposals/:eventId', requireInteractiveAuth,
       const updated = answer('stale');
       return res.status(409).json({ error: 'instructions_changed', proposal: updated.metadata.instructionProposal, event: updated });
     }
+    console.error('instruction proposal not saved:', (error && error.code) || 'save_failed');
     return res.status(500).json({ error: 'instructions_save_failed', message: 'The instructions were not saved. Try again.' });
   }
 });

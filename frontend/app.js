@@ -12556,12 +12556,13 @@
         }
         cardState = instructionCardStates[eventId] = {error: 'These instructions changed. Ask the bot for a fresh update.'};
       } else {
-        cardState.error = 'That didn’t save. Try again.';
+        cardState.error = (res.data && res.data.message) || 'That didn’t save. Try again.';
       }
       renderChatThread();
-    }).catch(function(){
+    }).catch(function(error){
       cardState.busy = false;
-      cardState.error = 'That didn’t save. Try again.';
+      cardState.error = error && error.message === 'unauthorized'
+        ? 'You’re signed out, so nothing was saved. Sign in and try again.' : 'That didn’t save. Try again.';
       renderChatThread();
     });
   }
