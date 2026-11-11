@@ -9,6 +9,20 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.8] — 2026-11-11
+
+### Added
+- People can add company bots to channels without an approval queue. Bot owners and workspace admins can publish updates for that company; copies in that company follow the latest version automatically. Solo and other companies keep their own versions.
+- Connected apps can open their sign-in page in the system browser. Mia resumes the task after sign-in or key setup.
+- Mia can show a folder or reveal a file in the system file manager. Bots are limited to their own working folders.
+
+### Changed
+- Idle browser tabs and Hermes sessions sleep to use less memory. Channels and direct messages show their latest message before they are opened.
+
+### Fixed
+- Company bot chats reconnect after a dropped connection, and completed replies clear the thinking indicator.
+- Browser playback continues under dialogs, and stopped browser work clears its glow.
+
 ## [0.3.7] — 2026-11-10
 
 ### Added
