@@ -5744,15 +5744,6 @@
   }
   window.addEventListener('offline',renderOfflinePill);
   window.addEventListener('online',renderOfflinePill);
-  function hubRoomPreview(roomId){
-    var state=chatWs.byRoom[roomId];
-    var last=state && (state.messages||[]).filter(function(m){return !m.system && !m.threadRoot && (m.body || m.hubFile);}).slice(-1)[0];
-    if(!last) return '';
-    if(!last.body && last.hubFile) return 'Image';
-    var drive=googleDriveMessageDisplay(last.body);
-    if(!drive.text.trim() && drive.files.length) return 'Google Drive file';
-    return excerpt(markdownPreviewText(drive.text).replace(/\s+/g,' ').trim(),58);
-  }
   function renderHubSidebar(){
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
@@ -5768,7 +5759,7 @@
       var unread=channel.id!==chatWs.activeRoomId && (Number(channel.unread||0)>0 || chatNeedsAttention(channel.id));
       button.className='chat-recent-row hub-channel-row'+(chatWs.activeRoomId===channel.id?' active':'');
       button.setAttribute('data-hub-channel-id',channel.id);
-      var preview=hubRoomPreview(channel.id);
+      var preview=roomPreview(channel.id);
       var previewHtml=preview ? esc(preview) : state && (state.sidebarPreviewLoaded || state.historyInitialized) ? 'No messages yet' : '&nbsp;';
       button.innerHTML=hubChannelMark(channel)+'<span class="row-text"><span class="row-line1"><span class="row-label">'+esc(hubChannelTitle(channel))+'</span>'
         +renderChatActivityIndicator(live,unread)
@@ -5851,6 +5842,7 @@
       'Bots you hid. Right-click one to show it again.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
     all.appendChild(myBotSection.node);
+    loadSidebarPreviews();
   }
   // Pinned bots live with every other pinned chat (one store per workspace,
   // as in Solo). Pins kept in the older bots-only store move over once.
@@ -6063,11 +6055,15 @@
     return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
   }
   // A bot row in a team opens your private chat with it for this team.
-  function teamBotRow(bot,pinned){
-    var chat=(chatWs.nativeConversations||[]).filter(function(conversation){
+  // A company bot's row opens its ongoing chat on this computer, if any.
+  function teamBotChat(bot){
+    return (chatWs.nativeConversations||[]).filter(function(conversation){
       var metadata=conversation.metadata||{};
       return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
-    })[0];
+    })[0] || null;
+  }
+  function teamBotRow(bot,pinned){
+    var chat=teamBotChat(bot);
     var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var button=document.createElement('button'); button.type='button';
@@ -6618,14 +6614,14 @@
           markHubSpaceRead(roomId,row.sequence);
           return;
         }
-        if(state && state.historyInitialized){applyHubRows(roomId,[row]);render[roomId]=true;}
+        if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[row]);render[roomId]=true;}
         var fromOther=row.author_type!=='system' && row.author_id!==subject;
         if(!fromOther)return;
         if(roomId===chatWs.activeRoomId && appInForeground()){markHubRead(roomId);return;}
         channel.unread=Number(channel.unread||0)+1;
         notifyDesktopChatMessage(roomId,window.MiaHubChat.message(row));
       } else if(event.kind==='message_updated' && event.message){
-        if(state && state.historyInitialized){applyHubRows(roomId,[event.message]);render[roomId]=true;}
+        if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[event.message]);render[roomId]=true;}
         if(event.message.deleted)refreshChannels=true;
       } else if(event.kind==='dispatch' && event.dispatch){
         var job=Object.assign({channel_id:roomId},event.dispatch);
@@ -6662,8 +6658,13 @@
       onEvents:function(events){ if(workspace===activeWorkspaceKey)applyHubEvents(events); },
       onReset:function(lost){
         if(workspace!==activeWorkspaceKey)return;
-        // Anything missed while offline is reloaded from the authoritative history.
-        Object.keys(chatWs.byRoom).forEach(function(key){chatWs.byRoom[key].historyInitialized=false;});
+        // Anything missed while offline is reloaded from the authoritative
+        // history, and each channel's sidebar line is fetched again once.
+        Object.keys(chatWs.byRoom).forEach(function(key){
+          var state=chatWs.byRoom[key];
+          state.historyInitialized=false;
+          if(hubChannel(key)){state.hubPreviewTried=false;state.hubPreviewFetched=false;state.sidebarPreviewLoaded=false;}
+        });
         refreshHubChannels().then(function(){ if(chatWs.activeRoomId)return loadHubRoom(); }).catch(function(){});
         if(lost && chatWs.activeRoomId)pollHubBots(chatWs.activeRoomId,true);
         if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.onReset();
@@ -17685,36 +17686,94 @@
     els('.chat-recent-row.active', el('#panel-chat')).forEach(function(r){ r.classList.remove('active'); });
   }
 
-  function loadNativeSidebarPreviews(options){
+  // Every sidebar row shows its room's latest line before the room is opened.
+  // A room with nothing loaded fetches its newest page once (a Hub channel
+  // from the Hub, a chat on this computer from the local backend); live
+  // updates keep the line current after that. Hub requests go a few at a
+  // time so a company with many channels does not burst the Hub.
+  var SIDEBAR_HUB_PREVIEW_PARALLEL = 4;
+  function sidebarPreviewRoomIds(){
+    if(!hubWorkspace()) return chatSidebarRoomIds();
+    // Only channels with a row: a bot channel opens from its bot's row and a
+    // closed conversation has none.
+    var ids = hubChat.channels.filter(function(channel){
+      return channel.pinned || (channel.kind !== 'bot' && !hubConversationClosed(channel));
+    }).map(function(channel){ return channel.id; });
+    (chatWs.myBotRecords || []).forEach(function(bot){
+      var chat = teamBotChat(bot);
+      if(chat && ids.indexOf(chat.id) < 0) ids.push(chat.id);
+    });
+    return ids;
+  }
+  function loadNativeRoomPreview(roomId, state){
+    return api(nativeEventsUrl(roomId, 0, 10, true)).then(function(res){
+      if(res.status !== 200) return false;
+      var rawMessages = (res.data && res.data.events) || [];
+      var messages = nativeEventsToMessages(rawMessages);
+      if(!state.messages.length){
+        state.messages = messages;
+        state.lastTs = rawMessages.reduce(function(timestamp, event){
+          return Math.max(timestamp, Date.parse(event.createdAt) || 0);
+        }, state.lastTs || 0);
+        state.lastSequence = rawMessages.reduce(function(sequence, event){
+          return Math.max(sequence, Number(event.sequence || 0));
+        }, state.lastSequence || 0);
+      }
+      state.sidebarPreviewLoaded = true;
+      return true;
+    });
+  }
+  // The same newest page the channel shows when opened; opening it replaces
+  // these rows with its own load.
+  // A company left mid-queue is tried again when it opens next.
+  function loadHubRoomPreview(roomId, state, workspace){
+    if(workspace !== activeWorkspaceKey){ state.hubPreviewTried = false; return Promise.resolve(false); }
+    return hubCall('GET', hubPath() + '/channels/' + roomId + '/messages/before/0').then(function(result){
+      if(workspace !== activeWorkspaceKey){ state.hubPreviewTried = false; return false; }
+      if(state.historyInitialized || !hubChannel(roomId)) return false;
+      applyHubRows(roomId, result.messages || []);
+      state.hubPreviewFetched = true;
+      // A page of only hidden rows or thread replies is not an empty channel.
+      state.sidebarPreviewLoaded = !result.hasMore || !!roomPreview(roomId);
+      return true;
+    });
+  }
+  function loadSidebarPreviews(options){
     options = options || {};
-    if(chatWs.configured === false) return Promise.resolve();
-    var requests = chatSidebarRoomIds().map(function(roomId){
+    var hub = hubWorkspace(), workspace = activeWorkspaceKey;
+    if(!hub && chatWs.configured === false) return Promise.resolve();
+    var hubQueue = [];
+    var requests = sidebarPreviewRoomIds().map(function(roomId){
       var state = chatRoomState(roomId);
-      if(state.messages.length){
+      var fromHub = hub && !!hubChannel(roomId);
+      if(fromHub ? state.historyInitialized : state.messages.length){
         state.sidebarPreviewLoaded = true;
         return Promise.resolve();
       }
-      if(state.sidebarPreviewLoaded || state.sidebarPreviewLoading) return Promise.resolve();
+      // Tried once per room; a failed try waits for the next reconnect.
+      if(state.sidebarPreviewLoaded || state.sidebarPreviewLoading || (fromHub && state.hubPreviewTried)) return Promise.resolve();
       state.sidebarPreviewLoading = true;
-      return api(nativeEventsUrl(roomId, 0, 10, true)).then(function(res){
-        if(res.status !== 200) return;
-        var rawMessages = (res.data && res.data.events) || [];
-        var messages = nativeEventsToMessages(rawMessages);
-        if(!state.messages.length){
-          state.messages = messages;
-          state.lastTs = rawMessages.reduce(function(timestamp, event){
-            return Math.max(timestamp, Date.parse(event.createdAt) || 0);
-          }, state.lastTs || 0);
-          state.lastSequence = rawMessages.reduce(function(sequence, event){
-            return Math.max(sequence, Number(event.sequence || 0));
-          }, state.lastSequence || 0);
-        }
-        state.sidebarPreviewLoaded = true;
-        if(options.render !== false) renderChatSidebar();
+      if(fromHub){
+        state.hubPreviewTried = true;
+        hubQueue.push({roomId: roomId, state: state});
+        return Promise.resolve();
+      }
+      return finishSidebarPreview(state, loadNativeRoomPreview(roomId, state));
+    });
+    function finishSidebarPreview(state, request){
+      return request.then(function(changed){
+        if(changed && options.render !== false) renderChatSidebar();
       }).catch(function(){}).then(function(){
         state.sidebarPreviewLoading = false;
       });
-    });
+    }
+    function nextHubPreview(){
+      var job = hubQueue.shift();
+      if(!job) return Promise.resolve();
+      return finishSidebarPreview(job.state, loadHubRoomPreview(job.roomId, job.state, workspace)).then(nextHubPreview);
+    }
+    var workers = Math.min(SIDEBAR_HUB_PREVIEW_PARALLEL, hubQueue.length);
+    for(var i = 0; i < workers; i++) requests.push(nextHubPreview());
     return Promise.all(requests);
   }
 
@@ -17732,19 +17791,30 @@
     var state = roomId && chatWs.byRoom[roomId];
     return (state && state.lastTs) || 0;
   }
+  // One latest line for every sidebar row: Solo chats, company channels, DMs
+  // and bot chats. A Hub thread reply stays in its thread, as in the channel.
   function roomPreview(roomId){
     var state = roomId && chatWs.byRoom[roomId];
     if(!state || !state.messages || !state.messages.length) return '';
-    var real = state.messages.filter(function(m){ return !m.system && (m.body || chatMessageHasAttachments(m)); });
-    if(!real.length) return '';
-    var last = real[real.length - 1];
-    if(!last.body && chatMessageHasAttachments(last)) return 'Attachment';
+    for(var i = state.messages.length - 1; i >= 0; i--){
+      var text = messagePreviewText(state.messages[i]);
+      if(text) return text;
+    }
+    return '';
+  }
+  function messagePreviewText(m){
+    if(!m || m.system || (m.hubMessage && m.threadRoot) || !(m.body || chatMessageHasAttachments(m))) return '';
+    if(!m.body) return m.hubFile || m.hubUpload ? 'Image' : 'Attachment';
+    // A Hub row says who wrote it; the active room must not decide that.
+    var human = m.hubMessage ? String(m.sender || '').indexOf('hub-bot:') !== 0 : isHumanSender(m.sender);
     // Bot messages must go through displayBotBody to strip internal plumbing
     // text and legacy filler placeholders, matching the main thread renderer.
-    var body = isHumanSender(last.sender) ? last.body : displayBotBody(last.body);
+    var body = human ? m.body : displayBotBody(m.body);
     if(!body) return '';
-    var parsed = isHumanSender(last.sender) ? parseSignedHumanBody(body) : parseSignedBody(body);
-    var text = parsed && parsed.text ? parsed.text : body;
+    var drive = googleDriveMessageDisplay(body);
+    if(!drive.text.trim() && drive.files.length) return 'Google Drive file';
+    var parsed = human ? parseSignedHumanBody(drive.text) : parseSignedBody(drive.text);
+    var text = parsed && parsed.text ? parsed.text : drive.text;
     return excerpt(markdownPreviewText(text).replace(/\s+/g, ' ').trim(), 58);
   }
   // Every row keeps a second line so titles sit on one line across the
@@ -17857,7 +17927,7 @@
         mockupOrder: entry.mockupOrder});
     });
     primeChannelRosters();
-    loadNativeSidebarPreviews();
+    loadSidebarPreviews();
 
     // Keep known people visible even before a human DM room exists, then
     // preserve the existing agent and group-DM rows. A direct human room is
@@ -18301,7 +18371,7 @@
     ]).then(function(results){
       applyNativeConversationList(results[0]);
       chatWs.humans = Array.isArray(results[2]) ? results[2].slice() : [];
-      return loadNativeSidebarPreviews({render:false}).then(function(){
+      return loadSidebarPreviews({render:false}).then(function(){
         startChatPolling();
         renderChatSidebar();
         refreshChatMain();
