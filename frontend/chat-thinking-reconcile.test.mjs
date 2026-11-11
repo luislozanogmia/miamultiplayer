@@ -67,3 +67,28 @@ test('an older bot reply in history keeps the row of a message just sent', async
   await ctx.loadChatRoom('room-b', 'agent', 'Researcher');
   assert.equal(states['room-b'].thinking, true);
 });
+
+// A bot chat inside a company uses the same local chat socket as Solo. When
+// it dropped there it never reconnected, so the open chat stopped at the last
+// event it had and kept its thinking row.
+test('a dropped chat socket reconnects for a bot chat inside a company', () => {
+  const sockets = [];
+  const timers = [];
+  const ctx = {
+    JSON, Number,
+    WebSocket: function () { sockets.push(this); this.send = () => {}; },
+    setTimeout: fn => { timers.push(fn); return timers.length; },
+    inHubRoom: () => false, teamBotRoom: id => id === 'bot-room',
+    chatWs: { native: false, activeRoomId: 'bot-room' },
+    chatRoomState: () => ({ lastSequence: 7 }),
+    closeNativeChatSocket() {}, nativeSocketUrl: () => 'ws://local', setMiaServiceUnavailable() {}, scheduleMiaServiceUnavailable() {},
+    applyNativeEvent() {}, applyChatActivity() {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(sourceFunction('connectNativeChatSocket'), ctx);
+  ctx.connectNativeChatSocket('bot-room');
+  sockets[0].onclose();
+  assert.equal(timers.length, 1);
+  timers[0]();
+  assert.equal(sockets.length, 2);
+});

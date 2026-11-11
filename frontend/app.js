@@ -7312,7 +7312,9 @@
       if(payload.type === 'history') (payload.events || []).forEach(function(event){ applyNativeEvent(event, {autoOpenThread: false}); });
     };
     socket.onclose = function(){
-      if(chatWs.nativeSocket !== socket || !chatWs.native || chatWs.activeRoomId !== conversationId) return;
+      // A bot chat inside a company is local too, so it reconnects like Solo's
+      // and catches up on what it missed (afterSequence above).
+      if(chatWs.nativeSocket !== socket || !(chatWs.native || teamBotRoom(conversationId)) || chatWs.activeRoomId !== conversationId) return;
       chatWs.nativeSocket = null;
       chatWs.nativeSocketConversationId = null;
       scheduleMiaServiceUnavailable();
