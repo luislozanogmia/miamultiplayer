@@ -432,6 +432,9 @@ test('Mia tasks load the app-owned native browser policy', () => {
   assert.match(skill, /on every request[\s\S]*run ghost_instance_create/i);
   assert.match(skill, /macOS.*open.*forbidden/i);
   assert.match(skill, /ghost_file_open/);
+  // Mia may open an existing file anywhere; a bot's policy never says so.
+  assert.match(inference.MIAOS_BROWSER_TURN_POLICY, /existing file anywhere on the computer/);
+  assert.doesNotMatch(inference.appOwnedToolPolicy({ botWorker: true }), /anywhere on the computer/);
   assert.doesNotMatch(skill, /live-status|live-connect|chrome-devtools-mcp/i);
   assert.match(inference.MIAOS_BROWSER_TURN_POLICY, /macOS open command/i);
   assert.match(inference.hermesProcessEnv().PATH, /miaos-hermes-bin/);

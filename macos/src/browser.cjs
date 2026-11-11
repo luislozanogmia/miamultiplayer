@@ -128,7 +128,9 @@ function isClerkCallbackNavigation(value) {
   } catch (_) { return false; }
 }
 
-function normalizeLocalFileTarget(value, workspaceRoot) {
+// anyRoot lets an existing file outside the workspace through (Mia's own
+// file_open only); every other check still applies.
+function normalizeLocalFileTarget(value, workspaceRoot, { anyRoot = false } = {}) {
   const rootInput = String(workspaceRoot || "").trim();
   if (!rootInput) throw new Error("Mia local workspace is unavailable.");
   let root;
@@ -155,7 +157,7 @@ function normalizeLocalFileTarget(value, workspaceRoot) {
   let resolved;
   try { resolved = fs.realpathSync(candidate); } catch (_) { throw new Error("Local preview file was not found."); }
   const relative = path.relative(root, resolved);
-  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!anyRoot && (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) {
     throw new Error("Local previews are limited to the Mia workspace.");
   }
   return pathToFileURL(resolved).toString();
@@ -1313,8 +1315,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     return target;
   }
 
-  function openLocalFile(tab, value) {
-    const target = normalizeLocalFileTarget(value, workspaceRoot);
+  function openLocalFile(tab, value, { anyRoot = false } = {}) {
+    const target = normalizeLocalFileTarget(value, workspaceRoot, { anyRoot });
+    // Remembered so a sleeping tab Mia opened outside the workspace can wake.
+    tab.anyRootFile = anyRoot;
     tab.asleep = null;
     tab.url = target;
     tab.error = "";
@@ -2447,10 +2451,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (typeof filePath !== "string" || !filePath.trim()) {
         throw protocolError("INVALID_PARAMS", "path is required.");
       }
-      const target = normalizeLocalFileTarget(filePath, workspaceRoot);
+      // Mia may open an existing file anywhere on the computer; bots stay
+      // inside the workspace.
+      const anyRoot = actor === null;
+      const target = normalizeLocalFileTarget(filePath, workspaceRoot, { anyRoot });
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
-      openLocalFile(tab, target);
+      openLocalFile(tab, target, { anyRoot });
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
       openBrowserSurface();
@@ -2737,7 +2744,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (saved.entries.length && typeof wc.navigationHistory.restore === "function") {
         trackBrowserOperation(wc, wc.navigationHistory.restore({ entries: saved.entries, index: saved.index }),
           () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
-      } else if (isLocalFileTarget(target)) openLocalFile(tab, target);
+      } else if (isLocalFileTarget(target)) openLocalFile(tab, target, { anyRoot: tab.anyRootFile === true });
       else navigate(tab, target);
     } catch (error) { tab.waking = false; showLoadError(tab, target, error.message, false); }
     return true;

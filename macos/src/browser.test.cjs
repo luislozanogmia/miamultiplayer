@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
+const { pathToFileURL } = require("node:url");
 const { EventEmitter } = require("node:events");
 
 // Every run belongs to a workspace; these all run in Solo unless a test says otherwise.
@@ -771,12 +772,15 @@ test("protocol commands dispatch through the native WebContentsView", async () =
   assert.deepEqual(h.views[0].webContents.inputEvents.map(event => event.keyCode), ["Enter", "Enter"]);
 });
 
-test("Ghost can open only workspace files in the embedded browser", async () => {
+test("Ghost opens workspace files for everyone, and files elsewhere only for Mia", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-file-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-file-outside-"));
   try {
     const htmlPath = path.join(workspace, "report.html");
     fs.writeFileSync(htmlPath, "<h1>Mia report</h1>");
-    const h = harness({ workspaceRoot: workspace });
+    const outsidePath = path.join(outside, "notes.html");
+    fs.writeFileSync(outsidePath, "<h1>Notes</h1>");
+    const h = harness({ workspaceRoot: workspace, resolveActor: knownActor({ "s-bot": { botId: "bot-a", name: "Scout" } }) });
     const opened = await h.controller.protocol("file_open", { actor_session: "s-mia", path: htmlPath });
     assert.equal(opened.tab_id, 1);
     assert.match(opened.url, /^file:\/\//);
@@ -784,14 +788,33 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
     assert.equal(h.window.webContents.sent.at(-1).channel, "miaos-browser-open");
     assert.equal(h.window.webContents.sent.at(-1).payload, "web-browser");
 
+    // Mia: an existing file anywhere on the computer, by its full path.
+    const elsewhere = await h.controller.protocol("file_open", { actor_session: "s-mia", path: outsidePath });
+    assert.equal(elsewhere.url, pathToFileURL(fs.realpathSync(outsidePath)).toString());
     await assert.rejects(
-      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(workspace, "..", "outside.html") }),
-      /not found|limited to the Mia workspace/,
+      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(outside, "missing.html") }),
+      /not found/,
     );
-    assert.throws(() => h.normalizeLocalFileTarget(path.join(workspace, "..", "outside.html"), workspace));
+    // Still never a symlink, even for Mia.
+    fs.symlinkSync(outsidePath, path.join(outside, "link.html"));
+    await assert.rejects(
+      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(outside, "link.html") }),
+      /regular file/,
+    );
+
+    // A bot: workspace files only.
+    await h.controller.protocol("file_open", { actor_session: "s-bot", path: htmlPath });
+    await assert.rejects(
+      h.controller.protocol("file_open", { actor_session: "s-bot", path: outsidePath }),
+      /limited to the Mia workspace/,
+    );
+    assert.throws(() => h.normalizeLocalFileTarget(outsidePath, workspace), /limited to the Mia workspace/);
+    assert.equal(h.normalizeLocalFileTarget(outsidePath, workspace, { anyRoot: true }),
+      pathToFileURL(fs.realpathSync(outsidePath)).toString());
     h.window.emit("closed");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 

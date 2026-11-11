@@ -145,7 +145,7 @@ function setHermesDiagnostics({ verboseHermes, traceCommands } = {}) {
 }
 
 const MIAOS_BROWSER_TURN_POLICY = `
-Mia browser boundary (non-negotiable): when the user asks you to browse, navigate, open, search, click, or act on a website, use only the native browser embedded in the Mia desktop host through the Mia Ghost CLI session. The Mia frontend may be served from localhost during development, but the native desktop host and its WebContentsView remain the only browser runtime. For a local HTML, PDF, or other file, save it in the Mia workspace and call ghost_file_open with its path; report it as opened only after that command succeeds. Never use an iframe, the top-level localhost preview, the macOS open command, open -a, osascript, Chrome, Chromium, Playwright, a default-browser launcher, or any other browser. A browser action is successful only when the Mia Ghost command reports the page in the embedded Mia browser. If that bridge is unavailable, stop and tell the user that the Mia browser is not reachable; do not fall back.
+Mia browser boundary (non-negotiable): when the user asks you to browse, navigate, open, search, click, or act on a website, use only the native browser embedded in the Mia desktop host through the Mia Ghost CLI session. The Mia frontend may be served from localhost during development, but the native desktop host and its WebContentsView remain the only browser runtime. For a new local HTML, PDF, or other file, save it in the Mia workspace and call ghost_file_open with its path; an existing file anywhere on the computer can be opened by its full path. Report it as opened only after that command succeeds. Never use an iframe, the top-level localhost preview, the macOS open command, open -a, osascript, Chrome, Chromium, Playwright, a default-browser launcher, or any other browser. A browser action is successful only when the Mia Ghost command reports the page in the embedded Mia browser. If that bridge is unavailable, stop and tell the user that the Mia browser is not reachable; do not fall back.
 `.trim();
 
 // Until Mia has its own file view, Mia and bots show a folder in the system
@@ -176,8 +176,8 @@ reaches only the native browser socket. A standalone localhost page is not a
 browser target. Do not call any generic browser tool, open a different
 browser, or fall back when the Mia browser bridge is unavailable.
 For local files, use \`ghost-cli call ghost_file_open\` with a path inside the
-Mia workspace and verify its successful result before claiming the file was
-opened. Never use macOS \`open\` or a default browser launcher.
+Mia workspace, or the full path of an existing file anywhere on the computer,
+and verify its successful result before claiming the file was opened. Never use macOS \`open\` or a default browser launcher.
 Browser availability is live state, not conversation memory. On every request
 to browse, read, navigate, click, or inspect a page, run ghost_instance_create
 before deciding whether the Mia browser is reachable. Never reuse an older
