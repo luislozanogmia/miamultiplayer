@@ -2167,6 +2167,8 @@ function createWindow() {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       safeStorage,
       workspaceRoot: miaosWorkspacePath(),
+      // Development only: a shorter wait before background tabs sleep.
+      tabSleepAfterMs: app.isPackaged ? undefined : Number(process.env.MIAOS_TAB_SLEEP_MS) || undefined,
       onActorEvent: createActorDiagnostics({
         enabled: !app.isPackaged && process.env.MIAOS_LOCAL_PROFILE === "1" && process.env.MIAOS_BROWSER_ACTOR_DIAGNOSTICS === "1",
         log: desktopLog,
@@ -2398,7 +2400,12 @@ async function resolveBrowserActor(window, sessionId) {
     if (found && found.kind === "mia" && found.botId == null) actor = { kind: "mia", workspace };
     else if (found && found.kind === "bot" && typeof found.botId === "string"
         && /^[A-Za-z0-9_.:-]{1,120}$/.test(found.botId)) {
-      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace };
+      // The folders this bot's run works in: the only ones it may show in
+      // the file manager (folder-open.cjs).
+      const folders = Array.isArray(found.folders)
+        ? found.folders.filter(folder => typeof folder === "string" && folder.length <= 4096 && path.isAbsolute(folder)).slice(0, 4)
+        : [];
+      actor = { kind: "bot", botId: found.botId, name: typeof found.name === "string" ? found.name : "", workspace, folders };
     } else throw unavailable();
   } catch (_) {
     throw unavailable();
@@ -2719,6 +2726,28 @@ ipcMain.handle("miaos-app-pane", (event, command = {}) => {
   } catch (_) {
     return { ok: false, error: "That app could not be opened." };
   }
+});
+
+// The sign-in page of an MCP app in Connected apps, opened in the person's
+// default browser. The backend made the proof with this launch's secret, so
+// only an address it got from Hermes's own sign-in opens; any https vendor.
+ipcMain.handle("miaos-mcp-app-auth-open", async (event, value) => {
+  if (!isMainWindowSender(event)) return { ok: false };
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length !== 2 || typeof value.url !== "string"
+        || typeof value.proof !== "string" || value.url.length > 12000
+        || !/^[A-Za-z0-9_-]{43}$/.test(value.proof)) return { ok: false };
+    const expectedProof = crypto.createHmac("sha256", googleAuthOpenSecret).update(value.url).digest();
+    const suppliedProof = Buffer.from(value.proof, "base64url");
+    if (suppliedProof.length !== expectedProof.length || !crypto.timingSafeEqual(suppliedProof, expectedProof)) {
+      return { ok: false };
+    }
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" || url.username || url.password) return { ok: false };
+    await shell.openExternal(url.toString());
+    return { ok: true };
+  } catch (_) { return { ok: false }; }
 });
 
 ipcMain.handle("miaos-google-workspace-auth-open", async (event, value) => {

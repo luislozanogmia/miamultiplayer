@@ -1160,7 +1160,10 @@
   @keyframes chatThinkingSweep{0%{background-position:140% 0;}100%{background-position:-40% 0;}}
   .chat-md-table{width:100%;min-width:0;max-width:100%;margin:8px 0;overflow-x:auto;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;}
   .chat-md-table table{border-collapse:collapse;width:100%;font-size:13px;}
-  .chat-md-table th,.chat-md-table td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--sand-border-default);white-space:nowrap;}
+  /* Cells wrap between words, so a table fits its bubble and scrolls only when
+     one word (a long address) cannot fit. The min width keeps a column from
+     collapsing into a one-word-per-line stack. */
+  .chat-md-table th,.chat-md-table td{min-width:10ch;padding:6px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--sand-border-default);white-space:normal;overflow-wrap:normal;word-break:normal;}
   .chat-md-table tr:last-child td{border-bottom:none;}
   .chat-md-table thead th{font-family:var(--styled-sans);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--sand-text-secondary);background:var(--sand-fill-secondary);}
   .chat-md-hr{border:none;border-top:1px solid var(--sand-border-default);margin:10px 0;}
@@ -1280,6 +1283,8 @@
   }
   .cmp-confirm{padding:8px;}
   .cmp-confirm-text{font-family:var(--styled-sans);font-size:12.5px;color:var(--sand-text-primary);line-height:1.4;padding:0 2px 10px;}
+  .cmp-confirm-access{display:flex;flex-direction:column;gap:4px;padding:0 2px 10px;font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-secondary);}
+  .cmp-confirm-access select{font:inherit;font-size:12px;color:var(--sand-text-primary);background:var(--sand-fill-surface, transparent);border:1px solid var(--sand-border-default);border-radius:8px;padding:5px 6px;}
   .cmp-confirm-actions{display:flex;gap:8px;}
   .cmp-confirm-btn{flex:1;appearance:none;border-radius:8px;padding:7px 0;font-family:var(--styled-sans);font-size:11px;cursor:pointer;}
   .cmp-confirm-add{background:var(--sand-fill-accent);border:1px solid var(--sand-fill-accent);color:var(--sand-text-on-primary);}
@@ -2774,7 +2779,6 @@
   body.styled-skin .hub-bot-row{display:flex;align-items:center;gap:4px;}
   body.styled-skin .hub-bot-row .manage-agent-open{flex:1;min-width:0;}
   body.styled-skin .hub-bot-row > .manage-agent-copy{flex:1;min-width:0;padding:6px 4px;}
-  body.styled-skin .manage-agent-description.hub-bot-pending{color:var(--sand-warning-fg);}
   body.styled-skin .manage-agent-menu-wrap{position:relative;flex:0 0 28px;align-self:center;}
   body.styled-skin .manage-agent-more{appearance:none;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);font:20px/24px var(--styled-sans);cursor:pointer;display:flex;align-items:center;justify-content:center;}
   body.styled-skin .manage-agent-more:hover{background:var(--sand-fill-secondary);color:var(--sand-text-primary);}
@@ -2937,9 +2941,13 @@
   .automations-row-avatar{display:grid;place-items:center;width:26px;height:26px;}
   .automations-row[data-status="scheduled"] .automations-row-avatar,
   .automations-row[data-status="paused"] .automations-row-avatar{opacity:.5;}
-  .automations-row[data-status="needs"] .automations-row-avatar{outline:1.5px dashed var(--sand-text-tertiary);outline-offset:2px;border-radius:50%;}
   .automations-row-name{font-size:14px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .automations-row-detail{margin-top:2px;font-size:12px;color:var(--sand-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* A row that needs the person has a light red Blocked tag under its bot. */
+  .automations-row[data-status="needs"]{grid-template-columns:50px minmax(0,1fr) auto;}
+  .automations-row[data-status="needs"] .automations-row-avatar{display:flex;flex-direction:column;align-items:center;gap:4px;width:auto;height:auto;}
+  .automations-row[data-status="needs"] .automations-row-avatar>img{width:26px;height:auto;flex:none;}
+  .automations-row-blocked{padding:3px 6px;border-radius:999px;font-size:11px;line-height:1;background:color-mix(in srgb,var(--sand-text-danger) 10%,transparent);color:var(--sand-text-danger);}
   .automations-row-side{font-size:12px;color:var(--sand-text-tertiary);white-space:nowrap;}
   .automations-row[data-status="running"] .automations-row-side{color:var(--sand-text-primary);}
   .automations-live{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#1d9e75;vertical-align:1px;animation:automations-live 1.6s ease-in-out infinite;}
@@ -4172,7 +4180,7 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .chat-msg-reaction.on{border-color:var(--sand-text-primary);color:var(--sand-text-primary);}
 .chat-msg-reaction:disabled{cursor:default;}
 .chat-msg-react-add{appearance:none;position:absolute;left:calc(100% + 6px);bottom:2px;z-index:2;width:24px;height:24px;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid var(--sand-border-default);border-radius:50%;background:var(--sand-bg-base);color:var(--sand-text-secondary);cursor:pointer;opacity:0;}
-.chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
+.chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-row:hover>.chat-msg-body>.chat-msg-text>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
 .chat-msg-react-add:hover{color:var(--sand-text-primary);}
 @media (hover:none){.chat-msg-react-add{opacity:1;}}
 /* A company bot's approved instructions and skills in its chat's details. */
@@ -4304,10 +4312,17 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .styled-agent-edit-skill-option:hover{background:var(--sand-fill-ghost-hover);}
 .styled-agent-edit-skill-option span{font-size:12px;color:var(--sand-text-secondary);}
 
-/* The reaction button sits right beside the end of the bubble: after an
-   incoming one, before your own (which sits on the right). */
+/* The reaction button sits on the bubble's border, at the lower corner away
+   from the side the bubble hangs from: lower-right on an incoming bubble,
+   lower-left on your own (which sits on the right). It lives inside the
+   bubble, so it follows the bubble's width, not the row's. A message with no
+   text bubble keeps it just beside the message body. */
 .chat-msg-row>.chat-msg-body{position:relative;}
 .chat-msg-row.is-you>.chat-msg-body>.chat-msg-react-add{left:auto;right:calc(100% + 6px);}
+.chat-msg-row>.chat-msg-body>.chat-msg-text{position:relative;}
+.chat-msg-text>.chat-msg-react-add{left:auto;right:-12px;bottom:-4px;user-select:none;-webkit-user-select:none;cursor:pointer;}
+.chat-msg-row.is-you>.chat-msg-body>.chat-msg-text>.chat-msg-react-add{left:-12px;right:auto;}
+.chat-msg-text>:has(+.chat-msg-react-add:last-child){margin-bottom:0;}
 /* A file dragged over the composer: the drop target lights up. */
 .chat-composer-wrap.is-drop-target .chat-composer{outline:2px dashed var(--accent,#DC4E13);outline-offset:2px;background:var(--accent-tint,rgba(220,78,19,.06));}
 /* Your apps in Connected apps: MCP apps Mia added, with their logos. */
@@ -4318,21 +4333,34 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .mcp-apps-ask:hover{background:var(--sand-fill-ghost-hover);}
 .mcp-apps-note,.mcp-apps-empty{font-size:13px;color:var(--sand-text-secondary);margin:6px 0 12px;}
 .mcp-apps-list{display:flex;flex-direction:column;gap:10px;}
-.mcp-app{display:flex;align-items:flex-start;gap:12px;padding:12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);}
-.mcp-app-logo{flex:none;width:40px;height:40px;border-radius:10px;overflow:hidden;display:grid;place-items:center;background:var(--sand-fill-secondary-hover);}
+.mcp-app{display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);}
+.mcp-app-head{display:flex;align-items:center;gap:10px;min-width:0;}
+.mcp-app-logo{flex:none;width:36px;height:36px;border-radius:9px;overflow:hidden;display:grid;place-items:center;background:var(--sand-fill-secondary-hover);}
 .mcp-app-logo img{width:100%;height:100%;object-fit:contain;}
 .mcp-app-initial{font-weight:600;color:var(--sand-text-secondary);}
-.mcp-app-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
-.mcp-app-name{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;}
-.mcp-app-status{font-size:11px;font-weight:500;padding:1px 7px;border-radius:999px;background:var(--sand-fill-secondary-hover);color:var(--sand-text-secondary);}
-.mcp-app-status.is-needs_key{background:#fff4d6;color:#8a5a00;}
-.mcp-app-status.is-ready{background:#e7f6ec;color:#1f6b3a;}
-.mcp-app-desc,.mcp-app-where{font-size:12px;color:var(--sand-text-secondary);}
-.mcp-app-key{display:flex;gap:8px;margin-top:6px;}
-.mcp-app-key input{flex:1;min-width:0;border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;}
-.mcp-app-key button,.mcp-app-remove{border:1px solid var(--sand-border-default);background:var(--sand-bg-base);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;}
-.mcp-app-remove{flex:none;color:var(--sand-text-danger);}
-.mcp-app-error{font-size:12px;color:var(--sand-text-danger);}
+.mcp-app-title{flex:1;min-width:0;display:flex;align-items:center;gap:10px;}
+.mcp-app-name{flex:1;min-width:0;font-size:14px;line-height:18px;font-weight:600;color:var(--sand-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mcp-app-status{flex:none;display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--sand-text-secondary);white-space:nowrap;}
+.mcp-app-status::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--sand-warning-fg);}
+.mcp-app-status.is-ready::before,.mcp-app-status.is-signed_in::before{background:var(--sand-success-fg);}
+.mcp-app-status.is-signing_in::before{animation:mcp-app-pulse 1.4s ease-in-out infinite;}
+@keyframes mcp-app-pulse{50%{opacity:.3;}}
+@media (prefers-reduced-motion:reduce){.mcp-app-status.is-signing_in::before{animation:none;}}
+.mcp-app-desc{font-size:13px;line-height:18px;color:var(--sand-text-primary);}
+.mcp-app-where,.mcp-app-hint{font-size:12px;line-height:16px;color:var(--sand-text-secondary);overflow-wrap:anywhere;}
+.mcp-app-where a{color:inherit;text-decoration:underline;text-underline-offset:2px;}
+.mcp-app-where a:hover{color:var(--sand-text-primary);}
+.mcp-app-key{display:flex;gap:8px;}
+.mcp-app-key input{flex:1;min-width:0;border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;background:var(--sand-bg-base);color:var(--sand-text-primary);}
+.mcp-app-foot{display:flex;align-items:center;gap:8px;margin-top:2px;padding-top:10px;border-top:1px solid var(--sand-border-subtle);}
+.mcp-app-action{flex:none;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);color:var(--sand-text-primary);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;white-space:nowrap;cursor:pointer;}
+.mcp-app-action:hover{background:var(--sand-fill-ghost-hover);}
+.mcp-app-action.is-primary{border-color:transparent;background:var(--sand-fill-primary);color:var(--sand-text-on-primary);}
+.mcp-app-action.is-primary:hover{background:var(--sand-fill-primary-hover);}
+.mcp-app-action:disabled,.mcp-app-remove:disabled{opacity:.55;cursor:default;}
+.mcp-app-remove{margin-left:auto;border:0;background:none;padding:6px 4px;font:inherit;font-size:12px;color:var(--sand-text-secondary);cursor:pointer;}
+.mcp-app-remove:hover{color:var(--sand-text-danger);}
+.mcp-app-error{font-size:12px;line-height:16px;color:var(--sand-text-danger);}
 .mcp-app-error:empty{display:none;}
 .styled-agent-edit-folder-note{font-size:12px;color:var(--sand-text-secondary);margin:0 0 8px;line-height:1.5;}
 .styled-agent-edit-folder-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}

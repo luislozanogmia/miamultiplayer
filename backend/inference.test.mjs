@@ -432,6 +432,9 @@ test('Mia tasks load the app-owned native browser policy', () => {
   assert.match(skill, /on every request[\s\S]*run ghost_instance_create/i);
   assert.match(skill, /macOS.*open.*forbidden/i);
   assert.match(skill, /ghost_file_open/);
+  // Mia may open an existing file anywhere; a bot's policy never says so.
+  assert.match(inference.MIAOS_BROWSER_TURN_POLICY, /existing file anywhere on the computer/);
+  assert.doesNotMatch(inference.appOwnedToolPolicy({ botWorker: true }), /anywhere on the computer/);
   assert.doesNotMatch(skill, /live-status|live-connect|chrome-devtools-mcp/i);
   assert.match(inference.MIAOS_BROWSER_TURN_POLICY, /macOS open command/i);
   assert.match(inference.hermesProcessEnv().PATH, /miaos-hermes-bin/);
@@ -460,6 +463,26 @@ test('full-mode bot workers get a compact local-browser boundary without the ful
   assert.doesNotMatch(policy, /# Mia browser/);
   assert.match(policy, /ghost-cli call ghost_tab_list/, 'bots know how to list their own browser tabs');
   assert.match(policy, /not Google Sheets tabs/);
+});
+
+test('Mia and bots are told to show folders through the app, never through open or xdg-open', async () => {
+  const mia = inference.appOwnedToolPolicy({ botWorker: false });
+  const bot = inference.appOwnedToolPolicy({ botWorker: true });
+  for (const policy of [mia, bot]) {
+    assert.ok(policy.includes(inference.MIAOS_FOLDER_OPEN_POLICY), 'one shared instruction for Mia and every bot');
+    assert.match(policy, /ghost-cli call ghost_folder_open --arguments '\{"instance_id":"miaos","path":/);
+  }
+  assert.match(inference.MIAOS_FOLDER_OPEN_POLICY, /never opened or run/);
+  assert.match(inference.MIAOS_FOLDER_OPEN_POLICY, /Never use open, open -R, explorer, xdg-open or osascript/);
+  // The shell openers stay blocked; their refusal points at the folder command.
+  const { SHELL_GUARD } = (await import('./hermes-bot-profile.js')).default;
+  for (const opener of ['open', 'osascript', 'xdg-open']) assert.match(SHELL_GUARD, new RegExp(`^${opener}\\(\\) \\{ miaos_block_external_browser`, 'm'));
+  assert.match(SHELL_GUARD, /ghost_folder_open/);
+  assert.match(fs.readFileSync(new URL('./miaos-hermes-bin/open', import.meta.url), 'utf8'), /ghost_folder_open/);
+  const windowsGuard = fs.readFileSync(new URL('./miaos-shell-guard.ps1', import.meta.url), 'utf8');
+  assert.match(windowsGuard, /^function explorer \{ miaos_block_external_browser \}$/m);
+  assert.match(windowsGuard, /ghost_folder_open/);
+  assert.match(fs.readFileSync(new URL('./miaos-ghost-cli.py', import.meta.url), 'utf8'), /"ghost_folder_open": "folder_open",/);
 });
 
 test('bot context keeps durable instructions while Hermes owns structured conversation context', () => {

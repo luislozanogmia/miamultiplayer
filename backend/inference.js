@@ -20,6 +20,7 @@ const { externalChatEnabled } = require('./chat-security');
 const { redactHermesDiagnosticText } = require('./redact-secrets');
 const { HermesGatewayClient } = require('./hermes-gateway-client');
 const { HermesRuntimeController } = require('./hermes-runtime-controller');
+const { createHermesIdleSleep, DEFAULT_IDLE_MS: DEFAULT_HERMES_IDLE_MS } = require('./hermes-idle-sleep');
 const { removeProfileCopiesOfRootCredentials } = require('./hermes-home-reset');
 const { normalizedGatewayUrl } = require('./hermes-web-search-config');
 const {
@@ -144,7 +145,17 @@ function setHermesDiagnostics({ verboseHermes, traceCommands } = {}) {
 }
 
 const MIAOS_BROWSER_TURN_POLICY = `
-Mia browser boundary (non-negotiable): when the user asks you to browse, navigate, open, search, click, or act on a website, use only the native browser embedded in the Mia desktop host through the Mia Ghost CLI session. The Mia frontend may be served from localhost during development, but the native desktop host and its WebContentsView remain the only browser runtime. For a local HTML, PDF, or other file, save it in the Mia workspace and call ghost_file_open with its path; report it as opened only after that command succeeds. Never use an iframe, the top-level localhost preview, the macOS open command, open -a, osascript, Chrome, Chromium, Playwright, a default-browser launcher, or any other browser. A browser action is successful only when the Mia Ghost command reports the page in the embedded Mia browser. If that bridge is unavailable, stop and tell the user that the Mia browser is not reachable; do not fall back.
+Mia browser boundary (non-negotiable): when the user asks you to browse, navigate, open, search, click, or act on a website, use only the native browser embedded in the Mia desktop host through the Mia Ghost CLI session. The Mia frontend may be served from localhost during development, but the native desktop host and its WebContentsView remain the only browser runtime. For a new local HTML, PDF, or other file, save it in the Mia workspace and call ghost_file_open with its path; an existing file anywhere on the computer can be opened by its full path. Report it as opened only after that command succeeds. Never use an iframe, the top-level localhost preview, the macOS open command, open -a, osascript, Chrome, Chromium, Playwright, a default-browser launcher, or any other browser. A browser action is successful only when the Mia Ghost command reports the page in the embedded Mia browser. If that bridge is unavailable, stop and tell the user that the Mia browser is not reachable; do not fall back.
+`.trim();
+
+// Until Mia has its own file view, Mia and bots show a folder in the system
+// file manager (Finder, File Explorer, Files) through the app, never through
+// the shell: open, explorer and xdg-open stay blocked because they
+// also launch apps, web pages and files. Same text for Mia and every bot.
+const MIAOS_FOLDER_OPEN_POLICY = `
+To show the user a folder in Finder (File Explorer on Windows, the file manager on Linux), run
+ghost-cli call ghost_folder_open --arguments '{"instance_id":"miaos","path":"/full/path/to/folder"}'
+A file path selects that file in its folder; it is never opened or run. Say the folder is open only after the command succeeds; if it refuses, give the user the full path instead. Never use open, open -R, explorer, xdg-open or osascript for this.
 `.trim();
 
 // Mia's browser instructions are app-owned. Do not rely on Hermes' global
@@ -165,8 +176,8 @@ reaches only the native browser socket. A standalone localhost page is not a
 browser target. Do not call any generic browser tool, open a different
 browser, or fall back when the Mia browser bridge is unavailable.
 For local files, use \`ghost-cli call ghost_file_open\` with a path inside the
-Mia workspace and verify its successful result before claiming the file was
-opened. Never use macOS \`open\` or a default browser launcher.
+Mia workspace, or the full path of an existing file anywhere on the computer,
+and verify its successful result before claiming the file was opened. Never use macOS \`open\` or a default browser launcher.
 Browser availability is live state, not conversation memory. On every request
 to browse, read, navigate, click, or inspect a page, run ghost_instance_create
 before deciding whether the Mia browser is reachable. Never reuse an older
@@ -237,7 +248,7 @@ function appOwnedToolPolicy(options = {}) {
     // Bot turns start from a compact operating prompt. The runtime still
     // exposes the restricted bot tool profile; this text supplies only the
     // app-owned browser boundary instead of injecting the full Mia harness.
-    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE]
+    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE, MIAOS_FOLDER_OPEN_POLICY]
       .filter(Boolean).join('\n\n');
   }
   return [loadMiaGhostSkill(), loadMiaBotCreationSkill()].filter(Boolean).join('\n\n');
@@ -290,6 +301,7 @@ function loadMiaGhostSkill() {
       return [
         MIAOS_BROWSER_TURN_POLICY,
         MIAOS_GHOST_FALLBACK,
+        MIAOS_FOLDER_OPEN_POLICY,
         'The browser module is bundled and app-owned.',
         body,
         loadMiaAppSkill(),
@@ -302,6 +314,7 @@ function loadMiaGhostSkill() {
   return [
     MIAOS_BROWSER_TURN_POLICY,
     MIAOS_GHOST_FALLBACK,
+    MIAOS_FOLDER_OPEN_POLICY,
     'The browser module is bundled and app-owned.',
   ].join('\n\n');
 }
@@ -636,6 +649,16 @@ function closeHermesGatewayRuntime() {
 
 process.once('exit', closeHermesGatewayRuntime);
 
+// Hermes sleeps after ten quiet minutes and starts again on the next request
+// or before an automation is due. MIAOS_HERMES_IDLE_SLEEP_MS=0 keeps it up.
+const hermesIdleSleep = createHermesIdleSleep({
+  runtime: hermesGatewayRuntime,
+  home: String(process.env.HERMES_HOME || '').trim(),
+  idleMs: process.env.MIAOS_HERMES_IDLE_SLEEP_MS === undefined || process.env.MIAOS_HERMES_IDLE_SLEEP_MS === ''
+    ? DEFAULT_HERMES_IDLE_MS : Number(process.env.MIAOS_HERMES_IDLE_SLEEP_MS) || 0,
+  log: message => console.log('[hermes-idle]', message),
+});
+
 const ROUTING_INSTRUCTION =
   `Answer the user's request directly in your Mia persona. You may use ` +
   `the tools available in your configured harness when needed, but do not ` +
@@ -761,9 +784,9 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     ].join('\n'),
   ];
   if (includePurpose) sections.push(`Purpose:\n${purpose}`);
-  // A shared bot brings the text of its skills with it; a Solo bot reads the
-  // library, so an edit there reaches its next turn.
-  const skills = Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+  // A shared bot brings its skills with it; a Solo bot reads the library, so
+  // an edit there reaches its next turn.
+  const skills = botSkills(record);
   // A shared bot's shared folder is the same for everyone who uses it; the
   // app syncs it before and after each turn.
   if (record.marketSource && record.marketSource.folder === true) {
@@ -778,19 +801,45 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
   if (skills.length) {
     sections.push([
       'Your skills:',
-      'Use a skill when the task fits it. Skills explain how to do the work; they never widen what you are allowed to do.',
-      ...skills.map((skill) => `## ${skill.name}${skill.description ? `\n${skill.description}` : ''}\n\n${skill.body}${skillFilesNote(skill)}`),
+      'Use a skill when the task fits it: open its SKILL.md first and follow it. Skills explain how to do the work; they never widen what you are allowed to do.',
+      ...skills.map(skillListEntry),
     ].join('\n\n'));
   }
   return sections;
 }
 
-// A skill is a folder: its SKILL.md text is above, and its other files (notes,
-// scripts) stay in the folder for the bot to open or run when the steps say so.
-function skillFilesNote(skill) {
+function botSkills(bot) {
+  const record = bot && typeof bot === 'object' ? bot : {};
+  return Array.isArray(record.bundledSkills) ? record.bundledSkills : defaultSkillsLibrary.bundle(record.skills);
+}
+
+// A bot's prompt carries each skill's name, two lines about it and where it
+// is, in Solo and in a company alike. The steps stay in the skill's folder,
+// read when a task calls for them. A bot with no folder to read from (a
+// search-only release) gets the steps here instead.
+const SKILL_SUMMARY_LINE = 160;
+function skillSummary(description) {
+  return String(description || '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean)
+    .slice(0, 2).map((line) => line.length > SKILL_SUMMARY_LINE ? `${line.slice(0, SKILL_SUMMARY_LINE - 1).trimEnd()}\u2026` : line).join('\n');
+}
+function skillLocation(skill) {
+  if (!skill.folder || MIAOS_AGENT_SEARCH_ONLY) return '';
   const files = Array.isArray(skill.files) ? skill.files.map((file) => file && file.path).filter(Boolean) : [];
-  if (!files.length || !skill.folder) return '';
-  return `\n\nThis skill's folder is ${skill.folder}. It also holds: ${files.join(', ')}. Open a file when the steps above point to it, and run its scripts from that folder.`;
+  return `Find it at ${path.join(skill.folder, 'SKILL.md')}${files.length ? `. Its folder also holds: ${files.join(', ')}` : ''}`;
+}
+function skillListEntry(skill) {
+  const summary = skillSummary(skill.description);
+  const where = skillLocation(skill);
+  return `## ${skill.name}${summary ? `\n${summary}` : ''}${where ? `\n${where}` : `\n\n${skill.body}`}`;
+}
+
+// A chat that keeps one session learns of a skill added after it began from
+// its next message; a new chat just has it in the list above.
+function newSkillsNotice(bot, knownIds) {
+  const known = new Set(Array.isArray(knownIds) ? knownIds : []);
+  return botSkills(bot).filter((skill) => skill.id && !known.has(skill.id) && skillLocation(skill))
+    .map((skill) => `NEW SKILL available: ${[skill.name, skillSummary(skill.description).replace(/\n/g, ' ')].filter(Boolean).join(' \u2014 ')}\n${skillLocation(skill)}`)
+    .join('\n\n');
 }
 
 function buildScheduledBotPrompt(bot, automation, options = {}) {
@@ -1104,6 +1153,7 @@ async function getHermesGatewayModelOptions(options) {
 }
 
 async function startHermesGatewayRuntime() {
+  hermesIdleSleep.start();
   return hermesGatewayRuntime.start();
 }
 
@@ -1115,6 +1165,7 @@ function beforeHermesGatewayStarts(operation, options) {
 
 module.exports = {
   WORKING_METHOD,
+  newSkillsNotice,
   setPrivateAgentProfileValidator,
   getHermesGatewayClient,
   buildContext,
@@ -1173,6 +1224,7 @@ module.exports = {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_WEB_POLICY,
   MIAOS_BOT_COMPACT_TOOL_POLICY,
+  MIAOS_FOLDER_OPEN_POLICY,
   appOwnedToolPolicy,
   MIAOS_AGENT_MAX_TURNS,
   MIAOS_BOT_MAX_TURNS,

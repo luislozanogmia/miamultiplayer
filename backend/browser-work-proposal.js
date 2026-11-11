@@ -14,9 +14,10 @@ function proposalBot(bots, wanted) {
 }
 
 // Turns an accepted suggestion into the candidates the Start button would send.
-// Each bot runs on its configured model unless Mia named one for it; a bot with
-// no model runs on Mia's current model. Every choice must be a connected model.
-async function resolveProposalCandidates({ assignments, bots, models, resolveSelection, defaultModel }) {
+// Each bot runs on its own model (botModel: its configured one while connected,
+// else the person's current model) unless Mia named one for it. Every choice
+// must be a connected model.
+async function resolveProposalCandidates({ assignments, bots, models, resolveSelection, botModel }) {
   if (!Array.isArray(assignments) || !assignments.length) throw failure('This suggestion has no bots', 400);
   const requested = models && typeof models === 'object' ? models : {};
   const candidates = [];
@@ -24,7 +25,7 @@ async function resolveProposalCandidates({ assignments, bots, models, resolveSel
     const bot = proposalBot(bots, assignment.bot);
     if (!bot) throw failure(`Mia suggested ${assignment.bot}, which is not one of your bots`);
     const wanted = requested[assignment.bot] || requested[bot.name] || requested[bot.id]
-      || (bot.model ? { provider: bot.modelProvider || bot.provider, model: bot.model } : await defaultModel());
+      || await botModel(bot);
     const selection = wanted && await resolveSelection({ provider: wanted.provider, model: wanted.model });
     if (!selection) throw failure(`${bot.name || bot.id}'s model is not connected. Choose a connected model for this bot`);
     candidates.push({ botId: bot.id, tabId: assignment.tabId, provider: selection.provider, model: selection.model });

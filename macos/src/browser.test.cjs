@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
+const { pathToFileURL } = require("node:url");
 const { EventEmitter } = require("node:events");
 
 // Every run belongs to a workspace; these all run in Solo unless a test says otherwise.
@@ -61,7 +62,9 @@ function harness(options = {}) {
     constructor() {
       super(); this.loads = []; this.scripts = []; this.closed = false;
       this.sent = [];
-      this.navigationHistory = { canGoBack: () => false, canGoForward: () => false };
+      this.navigationHistory = { canGoBack: () => false, canGoForward: () => false,
+        getAllEntries: () => this.loads.map(url => ({ url, title: "" })), getActiveIndex: () => Math.max(0, this.loads.length - 1),
+        restore: saved => { this.restored = saved; return Promise.resolve(); } };
     }
     insertCSS(css) { this.styles = [...(this.styles || []), css]; return Promise.resolve("style-key"); }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
@@ -155,6 +158,7 @@ function harness(options = {}) {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate,
     setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout,
+    setInterval, clearInterval,
     AbortController, ReadableStream, process,
     __dirname,
   };
@@ -229,7 +233,8 @@ test("new creates one tab; switching and hiding preserve loaded pages", () => {
   h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
   assert.equal(h.views[0].webContents.loads.length, 1);
   assert.equal(h.views[0].webContents.closed, false);
-  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 1);
+  // The pause guard, plus the listener that keeps a playing tab awake.
+  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 2);
   assert.match(h.views[0].webContents.scripts.at(-1), /querySelectorAll\("audio,video"\)/);
   assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
   h.views[0].webContents.emit("media-started-playing");
@@ -251,6 +256,22 @@ test("a menu over a page still hides the view without pausing its media", async 
   assert.match((await h.command("snapshot")).error, /No page/, "nothing to capture while the view is hidden");
   h.command("layout", { visible: true, bounds: { x: 0, y: 100, width: 700, height: 600 } });
   assert.equal(h.views[0].visible, true);
+});
+
+test("closing the panel while a dialog covers the page still pauses its media", () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/music" });
+  const box = { x: 0, y: 100, width: 700, height: 600 };
+  h.command("layout", { visible: true, bounds: box });
+  const scripts = h.views[0].webContents.scripts.length;
+  // A dialog (Edit channel) opens over the page: hidden, still playing.
+  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
+  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
+  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs for a dialog");
+  // The panel closes behind the dialog: now it is really hidden.
+  h.command("layout", { visible: false, panelOpen: false, bounds: box });
+  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
 });
 
 test("tab favicon is refetched as a data: URI and clears on navigation", async () => {
@@ -451,7 +472,7 @@ test("browser media position survives close and restores paused", async () => {
     await new Promise(resolve => setImmediate(resolve));
     assert.match(restored.views[0].webContents.scripts.at(-1), /video\.pause\(\)/);
     assert.match(restored.views[0].webContents.scripts.at(-1), /currentTime = 42\.5/);
-    assert.equal(restored.views[0].webContents.listenerCount("media-started-playing"), 1);
+    assert.equal(restored.views[0].webContents.listenerCount("media-started-playing"), 2);
     restored.views[0].webContents.emit("media-started-playing");
     assert.match(restored.views[0].webContents.scripts.at(-1), /video\.pause\(\)/);
     assert.doesNotMatch(restored.views[0].webContents.scripts.at(-1), /navigator\.userActivation/);
@@ -751,12 +772,15 @@ test("protocol commands dispatch through the native WebContentsView", async () =
   assert.deepEqual(h.views[0].webContents.inputEvents.map(event => event.keyCode), ["Enter", "Enter"]);
 });
 
-test("Ghost can open only workspace files in the embedded browser", async () => {
+test("Ghost opens workspace files for everyone, and files elsewhere only for Mia", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-file-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-file-outside-"));
   try {
     const htmlPath = path.join(workspace, "report.html");
     fs.writeFileSync(htmlPath, "<h1>Mia report</h1>");
-    const h = harness({ workspaceRoot: workspace });
+    const outsidePath = path.join(outside, "notes.html");
+    fs.writeFileSync(outsidePath, "<h1>Notes</h1>");
+    const h = harness({ workspaceRoot: workspace, resolveActor: knownActor({ "s-bot": { botId: "bot-a", name: "Scout" } }) });
     const opened = await h.controller.protocol("file_open", { actor_session: "s-mia", path: htmlPath });
     assert.equal(opened.tab_id, 1);
     assert.match(opened.url, /^file:\/\//);
@@ -764,14 +788,73 @@ test("Ghost can open only workspace files in the embedded browser", async () => 
     assert.equal(h.window.webContents.sent.at(-1).channel, "miaos-browser-open");
     assert.equal(h.window.webContents.sent.at(-1).payload, "web-browser");
 
+    // Mia: an existing file anywhere on the computer, by its full path.
+    const elsewhere = await h.controller.protocol("file_open", { actor_session: "s-mia", path: outsidePath });
+    assert.equal(elsewhere.url, pathToFileURL(fs.realpathSync(outsidePath)).toString());
     await assert.rejects(
-      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(workspace, "..", "outside.html") }),
-      /not found|limited to the Mia workspace/,
+      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(outside, "missing.html") }),
+      /not found/,
     );
-    assert.throws(() => h.normalizeLocalFileTarget(path.join(workspace, "..", "outside.html"), workspace));
+    // Still never a symlink, even for Mia.
+    fs.symlinkSync(outsidePath, path.join(outside, "link.html"));
+    await assert.rejects(
+      h.controller.protocol("file_open", { actor_session: "s-mia", path: path.join(outside, "link.html") }),
+      /regular file/,
+    );
+
+    // A bot: workspace files only.
+    await h.controller.protocol("file_open", { actor_session: "s-bot", path: htmlPath });
+    await assert.rejects(
+      h.controller.protocol("file_open", { actor_session: "s-bot", path: outsidePath }),
+      /limited to the Mia workspace/,
+    );
+    assert.throws(() => h.normalizeLocalFileTarget(outsidePath, workspace), /limited to the Mia workspace/);
+    assert.equal(h.normalizeLocalFileTarget(outsidePath, workspace, { anyRoot: true }),
+      pathToFileURL(fs.realpathSync(outsidePath)).toString());
     h.window.emit("closed");
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("Mia and bots show folders in the file manager, a bot only inside its own folders", async () => {
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "miaos-folder-open-")));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "miaos-folder-outside-")));
+  try {
+    const botFolder = path.join(workspace, "bots", "Scout");
+    fs.mkdirSync(botFolder, { recursive: true });
+    const file = path.join(botFolder, "report.html");
+    fs.writeFileSync(file, "<h1>Report</h1>");
+    const h = harness({ workspaceRoot: workspace, resolveActor: knownActor({
+      "s-a": { botId: "bot-a", name: "Scout", folders: [botFolder] },
+      "s-b": { botId: "bot-b", name: "Empty" },
+    }) });
+
+    // Mia: any folder; a file is selected in its folder, never opened.
+    assert.deepEqual(await h.controller.protocol("folder_open", { actor_session: "s-mia", path: outside }),
+      { shown: true, opened: "folder", path: outside });
+    assert.equal((await h.controller.protocol("folder_open", { actor_session: "s-mia", path: file })).opened, "revealed");
+    // A bot: its own folder opens; anywhere else is refused.
+    assert.equal((await h.controller.protocol("folder_open", { actor_session: "s-a", path: botFolder })).opened, "folder");
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-a", path: outside }), /only show folders inside its own/);
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-a", path: workspace }), /only show folders inside its own/);
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-b", path: botFolder }), /no folder of its own/);
+    // Never a web address, an app or a launcher flag; never an unverified session.
+    for (const value of ["https://example.com", "-a", "Safari", "mailto:someone@example.com"]) {
+      await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-mia", path: value }), { code: "FOLDER_OPEN_REFUSED" });
+    }
+    await assert.rejects(h.controller.protocol("folder_open", { actor_session: "s-unknown", path: outside }), { code: "BROWSER_ACTOR_UNAVAILABLE" });
+    await assert.rejects(h.controller.protocol("folder_open", { path: outside }), { code: "BROWSER_ACTOR_UNAVAILABLE" });
+
+    assert.deepEqual(h.opened, [outside, botFolder]);
+    assert.deepEqual(h.shown, [file]);
+    // Showing a folder is not browser work: no tab opened.
+    assert.equal(h.command("state").tabs.length, 0);
+    h.window.emit("closed");
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -2152,6 +2235,53 @@ test("bot tab groups: the glow stays through a reply and comes back after a page
   assert.ok(!userPage.insertedCSS, "Mia's tab is never lit as bot work");
 });
 
+// A command that never returns is let go at the command limit. The glow must
+// go off then too, and the tab strip must get a state that says so: it keeps
+// a tab lit for as long as its last state shows a bot working there.
+test("bot tab groups: a stuck command let go at the limit turns the glow off", async () => {
+  const LIMIT = 4321;
+  const held = [];
+  const holdTimer = (fn, ms, ...args) => {
+    // The command limit fires when the test says; a stuck page script's own
+    // timeouts never do, so the command stays stuck.
+    if (ms === LIMIT || ms === 10000 || ms === 60000) { const timer = { fn, ms, unref() { return timer; } }; held.push(timer); return timer; }
+    return setTimeout(fn, ms, ...args);
+  };
+  const releaseTimer = timer => { const at = held.indexOf(timer); if (at >= 0) held.splice(at, 1); else clearTimeout(timer); };
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: knownActor(sessions), botCommandLimitMs: LIMIT, setTimeout: holdTimer, clearTimeout: releaseTimer });
+  h.command("new");
+  const opened = await h.controller.protocol("tab_open", { url: "a.example", actor_session: "s-a", wait: "none" });
+  const botPage = h.views[h.views.length - 1].webContents;
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  let removed = 0;
+  botPage.removeInsertedCSS = () => { removed++; return Promise.resolve(); };
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  await flush();
+  const lit = () => botPage.insertedCSS - removed;
+  assert.equal(lit(), 0, "idle after the first command");
+
+  botPage.executeJavaScript = () => new Promise(() => {});
+  h.controller.protocol("read", { actor_session: "s-a", tab_id: opened.tab_id }).catch(() => {});
+  await flush(); await flush();
+  assert.equal(lit(), 1, "the page glows while the command runs");
+
+  // The stuck page script is let go at its own limit first; the command,
+  // still waiting on it, holds the tab until the command limit.
+  for (const timer of held.filter(item => item.ms === 60000)) timer.fn();
+  await flush();
+  assert.equal(lit(), 1, "the command still holds the page");
+  const limit = held.find(timer => timer.ms === LIMIT);
+  assert.ok(limit, "the command limit is set");
+  limit.fn();
+  await new Promise(resolve => setTimeout(resolve, 2700));
+  await flush();
+  assert.equal(lit(), 0, "the glow goes off once the command is let go");
+  const states = h.window.webContents.sent.filter(item => item.channel === "miaos-browser-state");
+  const last = states.at(-1).payload.tabs.find(tab => tab.id === opened.tab_id);
+  assert.equal(last.botActivity, null, "the tab strip is told the bot stopped working there");
+});
+
 test("bot tab groups: the glow takes the bot's color, and Mia's is gold", async () => {
   const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
   const h = harness({ resolveActor: knownActor(sessions) });
@@ -2219,6 +2349,30 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
+});
+
+test("a click from the chat into the page in front keeps the focus it gives the page", async () => {
+  const h = harness();
+  h.command("new");
+  const app = h.window.webContents;
+  const page = h.views.at(-1).webContents;
+  const pause = () => new Promise(resolve => setTimeout(resolve, 1100)); // Past the time a press counts.
+  await pause(); // Opening the tab is long past.
+  app.emit("focus"); // The person was typing in the chat.
+  const before = app.focusCalls || 0;
+  // The window focuses the clicked page first, then hands it the press.
+  page.emit("focus");
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 400, y: 600 });
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls || 0, before, "the prompt box keeps the focus the click gave it");
+
+  // The page focusing itself, with no press, still gives focus back to the chat.
+  app.emit("focus");
+  await pause();
+  page.emit("focus");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
 });
 
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
@@ -3294,4 +3448,78 @@ test("Chrome sign-in works on a bot's ChatGPT tab, but not while the bot is driv
   await new Promise(resolve => setTimeout(resolve, 2600));
   assert.equal((await h.command("chromeSignInStart")).chromeSignIn.tabId, opened.tab_id, "the bot's tab, once it is idle");
   h.window.emit("closed");
+});
+
+// Sleeping tabs: pages in the back give their memory back and load again when used.
+const LATER = () => Date.now() + 60 * 60 * 1000;
+function openTabs(h, count) {
+  const ids = [];
+  for (let index = 0; index < count; index++) {
+    ids.push(h.command("new").activeId);
+    h.command("navigate", { value: `https://site${index}.example/` });
+  }
+  return ids;
+}
+test("saved tabs come back asleep and load only when they come to the front", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-sleep-"));
+  const statePath = path.join(directory, "browser.json");
+  try {
+    const first = harness({ statePath });
+    const ids = openTabs(first, 4);
+    first.command("select", { id: ids[1] });
+    first.window.emit("closed");
+
+    const again = harness({ statePath });
+    const tabs = again.command("state").tabs;
+    assert.deepEqual(Array.from(tabs, tab => tab.asleep), [true, false, true, true], "only the tab in front is awake");
+    assert.deepEqual(Array.from(tabs, tab => tab.url), [0, 1, 2, 3].map(index => `https://site${index}.example/`), "every tab keeps its address");
+    assert.deepEqual(again.views.map(view => view.webContents.loads.length), [0, 1, 0, 0], "only the tab in front loaded");
+    const woken = again.command("select", { id: ids[3] }).tabs;
+    assert.equal(woken[3].asleep, false);
+    assert.deepEqual(again.views[3].webContents.loads, ["https://site3.example/"], "picking a sleeping tab loads it");
+    assert.equal(woken[0].asleep, true, "the others stay asleep");
+    again.window.emit("closed");
+    assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).tabs.length, 4, "sleeping tabs are still saved");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("tabs left in the back go to sleep, except the three used last, and wake with their history", () => {
+  const h = harness();
+  const ids = openTabs(h, 6);
+  assert.equal(h.controller.sleepIdleTabs(), 0, "nothing sleeps before its time in the back");
+  assert.equal(h.controller.sleepIdleTabs(LATER()), 3);
+  const tabs = h.command("state").tabs;
+  assert.deepEqual(Array.from(tabs, tab => tab.asleep), [true, true, true, false, false, false], "the tab in front and the two before it stay awake");
+  assert.deepEqual(h.views.slice(0, 3).map(view => view.webContents.closed), [true, true, true], "a sleeping tab's page is closed");
+  assert.equal(tabs[0].url, "https://site0.example/");
+  h.command("select", { id: ids[0] });
+  const fresh = h.views.at(-1).webContents; // tab 0 went to sleep last, so its empty page is the newest
+  assert.equal(JSON.stringify(fresh.restored), JSON.stringify({ entries: [{ url: "https://site0.example/", title: "" }], index: 0 }), "it wakes with its back and forward list");
+  assert.equal(h.command("state").tabs[0].asleep, false);
+});
+
+test("a tab that is playing, docked or held by a bot never sleeps", () => {
+  const h = harness();
+  const ids = openTabs(h, 7);
+  h.views[0].webContents.emit("media-started-playing");
+  h.views[1].webContents.isCurrentlyAudible = () => true;
+  h.command("dock", { id: ids[2] });
+  h.command("botHeld", { ids: [ids[3]] });
+  h.controller.sleepIdleTabs(LATER());
+  assert.deepEqual(Array.from(h.command("state").tabs, tab => tab.asleep), [false, false, false, false, false, false, false],
+    "seven tabs: four that cannot sleep, the one in front and the two before it");
+  h.views[0].webContents.emit("media-paused");
+  h.controller.sleepIdleTabs(LATER());
+  assert.equal(h.command("state").tabs[0].asleep, true, "it sleeps once it stops playing");
+});
+
+test("a bot command on a sleeping tab loads the page first", async () => {
+  const h = harness({ resolveActor: knownActor({}) });
+  const ids = openTabs(h, 5);
+  h.controller.sleepIdleTabs(LATER());
+  assert.equal(h.command("state").tabs[0].asleep, true);
+  const result = await h.controller.protocol("read", { tab_id: ids[0], actor_session: "s-mia" });
+  assert.equal(h.command("state").tabs[0].asleep, false);
+  assert.ok(h.views.at(-1).webContents.restored, "the page was loaded before the read");
+  assert.equal(result.url ?? "https://site0.example/", "https://site0.example/");
 });

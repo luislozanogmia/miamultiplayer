@@ -911,6 +911,52 @@ test('turns and goal verdicts Hermes starts on its own reach the session listene
   client.close();
 });
 
+test('a refused first connect attempt leaves one socket, so a reply is not also posted as a goal turn', async () => {
+  // Hermes is still starting when Mia first connects, and it sends a
+  // session's events to every socket attached to it.
+  const sockets = [];
+  class StartingGateway {
+    constructor() {
+      this.readyState = 0;
+      const attempt = sockets.push(this);
+      setImmediate(() => {
+        if (attempt === 1) { this.readyState = 3; this.onerror?.(new Error('connection refused')); return; }
+        this.readyState = 1;
+        this.onopen?.();
+        this.frame({ jsonrpc: '2.0', method: 'event', params: { type: 'gateway.ready', payload: {} } });
+      });
+    }
+    frame(value) { setImmediate(() => this.onmessage?.({ data: `${JSON.stringify(value)}\n` })); }
+    send(raw) {
+      const request = JSON.parse(raw.trim());
+      if (request.method === 'session.create') {
+        this.frame({ jsonrpc: '2.0', id: request.id, result: { session_id: 'live-1', stored_session_id: 'stored-1' } });
+        return;
+      }
+      this.frame({ jsonrpc: '2.0', id: request.id, result: { status: 'streaming' } });
+      if (request.method !== 'prompt.submit') return;
+      for (const socket of sockets.filter((item) => item.readyState === 1)) {
+        for (const [type, payload] of [['message.start', {}], ['message.delta', { text: 'awake' }], ['message.complete', { text: 'awake', status: 'complete' }]]) {
+          socket.frame({ jsonrpc: '2.0', method: 'event', params: { type, session_id: 'live-1', payload } });
+        }
+      }
+    }
+    close() { this.readyState = 3; }
+  }
+  const seen = [];
+  const client = new HermesGatewayClient({
+    url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: StartingGateway, env: {},
+    onSessionEvent: (sessionId, kind) => seen.push(kind),
+  });
+  await client.connect();
+  const result = await client.run({ message: 'Reply with just the word awake.', options: {} });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  client.close();
+  assert.equal(result.text, 'awake');
+  assert.equal(sockets.length, 2, 'the request after the retry reuses the socket that connected');
+  assert.deepEqual(seen, [], 'the reply is not posted a second time as a goal continuation');
+});
+
 test('reads the goal snapshot for the chip', async () => {
   const gateway = scriptedGateway({
     'session.control.read': () => ({ control: { goal: { title: 'ship it', status: 'active', turns_used: 3, max_turns: 20 } } }),

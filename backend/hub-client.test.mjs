@@ -251,3 +251,10 @@ test('Hub admin lists may be long, and their writes stay small',()=>{
  assert.equal(end.response,131072);assert.equal(end.request,8192);assert.equal(end.timeout,15000);
  assert.equal(hubRouteLimits('DELETE',t+'/apps/'+id).response,131072);
 });
+test('a channel picture (up to 64 KB as base64) fits through the proxy; other channel writes stay small',()=>{
+ const channel='/v1/teams/'+'a'.repeat(32)+'/channels/'+'c'.repeat(32);
+ const body=JSON.stringify({mime:'image/webp',data:Buffer.alloc(64*1024).toString('base64')});
+ assert.ok(Buffer.byteLength(body)<=hubRouteLimits('PUT',channel+'/picture').request);
+ assert.equal(hubRouteLimits('PATCH',channel).request,8192);
+ assert.equal(hubRouteLimits('PUT',channel+'/pin').request,8192);
+});

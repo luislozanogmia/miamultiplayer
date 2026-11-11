@@ -441,6 +441,63 @@ inference.runInferenceViaHermesGateway = async () => ({ text: 'I changed it.\\n<
   }
 });
 
+test('a Solo bot\'s instruction card can be accepted while a company is open', async () => {
+  const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async () => ({ text: 'Done.\\n<MIA_INSTRUCTIONS>Company-open fixture instructions.</MIA_INSTRUCTIONS>' });
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const solo = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: solo,
+      body: JSON.stringify({ name: 'Solo Review Fixture', instructions: 'Original solo instructions.',
+        model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    assert.equal(bot.workspaceId, 'solo');
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1")
+      .get(`%${bot.id}%`);
+    database.close();
+    assert.ok(chat);
+    // The app keeps a company's bot chats with Solo's (localChatWorkspaceKey).
+    const sent = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, {
+      method: 'POST', headers: solo,
+      body: JSON.stringify({ content: { text: 'Update your instructions.' }, clientIdempotencyKey: 'instruction-review-company-open' }),
+    });
+    assert.equal(sent.status, 201, await sent.clone().text());
+    let proposalEvent;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, { headers: solo });
+      const payload = await response.json();
+      proposalEvent = (payload.events || []).find((event) => event.metadata && event.metadata.instructionProposal);
+      if (proposalEvent) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(proposalEvent, 'the bot posted a pending review card');
+    // The card's request carries the open company as its workspace.
+    const accepted = await fetch(`${server.origin}/api/bots/${bot.id}/instruction-proposals/${proposalEvent.id}`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-miaos-workspace': `hub_${'a'.repeat(32)}` },
+      body: JSON.stringify({ decision: 'accept' }),
+    });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    assert.equal((await accepted.json()).event.metadata.instructionProposal.status, 'accepted');
+    const packageRoot = path.join(server.tempDir, 'bots');
+    const packageDir = fs.readdirSync(packageRoot).map((name) => path.join(packageRoot, name))
+      .find((candidate) => candidate.endsWith(`--${bot.id}`));
+    assert.ok(packageDir);
+    assert.match(fs.readFileSync(path.join(packageDir, 'AGENTS.md'), 'utf8'), /Company-open fixture instructions/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('relative STATIC_DIR serves the standalone admin page', async () => {
   const server = await startServer({ extraEnv: { STATIC_DIR: '../frontend' } });
   try {

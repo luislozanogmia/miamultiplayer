@@ -38,6 +38,7 @@ test('a scheduled run keeps the bot\'s guards: rm blocked without waiting, shell
   assert.equal(config.compression.enabled, true);
   assert.equal(config.approvals.mode, 'manual');
   assert.equal(config.approvals.cron_mode, 'deny');
+  assert.equal(config.desktop.auto_continue.enabled, false, 'work cut off by a close is not resumed by Hermes itself');
   assert.equal(config.security.protected_instruction_files, true, 'the instruction-file guard stays on for bots');
   assert.deepEqual(config.terminal.shell_init_files, [guard]);
 

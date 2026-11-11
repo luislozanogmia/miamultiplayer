@@ -87,7 +87,7 @@ const isManagedProfileConfig = text => typeof text === 'string' && (
 const SHELL_GUARD = `#!/bin/bash
 # Managed by Mia. Keep browser launches inside the app-owned browser.
 miaos_block_external_browser() {
-  echo "Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead." >&2
+  echo "Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead. To show a folder in Finder or the file manager, use: ghost-cli call ghost_folder_open --arguments '{\\"instance_id\\":\\"miaos\\",\\"path\\":\\"/full/path\\"}'" >&2
   return 126
 }
 
@@ -262,6 +262,14 @@ function runtimeProfileConfig({
     `  threshold_tokens: ${COMPRESSION_THRESHOLD_TOKENS}`,
     '  protect_last_n: 20',
     '  min_tail_user_messages: 3',
+    // Mia owns what happens to work cut off by a close: it holds the message
+    // and asks the person (interrupted-work.js). Hermes' own resume would
+    // also re-run the turn as soon as the chat's session reopens, collide
+    // with the person's next message, end at once and leave "Your request
+    // was not processed" behind for a request that did run.
+    'desktop:',
+    '  auto_continue:',
+    '    enabled: false',
   ];
   if (editsBots) {
     // Mia's own agent creates and edits bots, whose instructions live in

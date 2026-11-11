@@ -7,8 +7,8 @@ const { resolveProposalCandidates, summarizeWork, workResults } = require('./bro
 const bots = [{ id: 'b1', name: 'Scout', model: 'm1', modelProvider: 'p1' }, { id: 'b2', name: 'Analyst' }, { id: 'b3', name: 'Twin' }, { id: 'b4', name: 'twin' }];
 const connected = { p1: ['m1', 'm9'], p2: ['m2'] };
 const resolveSelection = async s => (connected[s.provider] || []).includes(s.model) ? s : null;
-const defaultModel = async () => ({ provider: 'p2', model: 'm2' });
-const resolve = (assignments, models) => resolveProposalCandidates({ assignments, models, bots, resolveSelection, defaultModel });
+const botModel = async bot => (bot.model ? { provider: bot.modelProvider, model: bot.model } : { provider: 'p2', model: 'm2' });
+const resolve = (assignments, models) => resolveProposalCandidates({ assignments, models, bots, resolveSelection, botModel });
 
 test('each bot defaults to its configured model, then to Mia\'s, and Mia can name one', async () => {
   assert.deepEqual(await resolve([{ tabId: 1, bot: ' scout ' }, { tabId: 2, bot: 'Analyst' }]), [

@@ -1,5 +1,5 @@
 'use strict';
-const {sharedSkills}=require('./hub-bot-client');
+const {sharedSkills,materializeSharedSkills}=require('./hub-bot-client');
 const { createHash, randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -444,10 +444,13 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
     if(!journal.start(s,row)) return;
     const stopLease=keepLease(stopOn);
     const limit=setTimeout(()=>{timedOut=true;controller.abort();},stepTimeoutMs);
-    let read=null,files={fileIds:[],skipped:0};
+    let read=null,files={fileIds:[],skipped:0},skillFilesCleanup=()=>{};
     try {
+      // The step's bot reads its skills from a folder, as in a channel.
+      const preparedSkills=materializeSharedSkills(sharedSkills(order.definition.skills));
+      skillFilesCleanup=preparedSkills.cleanup;
       const reply=await runBot({owner:s.owner,
-        bot:{id:'shared-'+order.botId+'-v'+order.definition.version,name:order.botName||'Company bot',instructions:order.definition.instructions,bundledSkills:sharedSkills(order.definition.skills)},
+        bot:{id:'shared-'+order.botId+'-v'+order.definition.version,name:order.botName||'Company bot',instructions:order.definition.instructions,bundledSkills:preparedSkills.skills},
         trigger:{author_email:s.email,body:stepPrompt(order,input.inputs,filesSupported?outbox:null)},
         // Only the step's own text may name Google files to open, never a teammate's note.
         contextText:order.text,history:[],channel:{teamId:s.teamId,channelId},
@@ -456,7 +459,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
       if(read && read.kind==='send' && read.outcome==='done') files=await shareOutputs(s,order,outbox,token,controller.signal);
     } catch {
       // The error text can carry private content, so it never becomes the note.
-    } finally {clearTimeout(limit);await stopLease();}
+    } finally {clearTimeout(limit);skillFilesCleanup();await stopLease();}
     // Mia is closing: the journal keeps this as started, and the person decides next time.
     if(isClosing()) return;
     if(stopped) return finish(s,row);

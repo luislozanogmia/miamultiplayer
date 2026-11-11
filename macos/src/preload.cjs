@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("miaDesktop", {
     install: () => ipcRenderer.invoke("miaos-claude-code-install"),
   },
   openGoogleWorkspaceAuth: (url, proof) => ipcRenderer.invoke("miaos-google-workspace-auth-open", { url, proof }),
+  openMcpAppAuth: (url, proof) => ipcRenderer.invoke("miaos-mcp-app-auth-open", { url, proof }),
   accounts: {
     list: () => ipcRenderer.invoke("miaos-accounts", "list"),
     add: () => ipcRenderer.invoke("miaos-accounts", "add"),

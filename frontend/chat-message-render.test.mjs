@@ -246,7 +246,8 @@ test('image-only messages render through the native attachment endpoint', async 
   assert.match(renderer, /attachments\.map\(chatArtifactCardHtml\)/);
   assert.match(source, /function chatArtifactCardHtml\(media\)/);
   assert.match(source, /chat-msg-media/);
-  assert.match(renderer, /\(text \|\| driveDisplay\.files\.length \? '<div class="chat-msg-text/);
+  assert.match(renderer, /var hasBubble = !!\(text \|\| driveDisplay\.files\.length\)/);
+  assert.match(renderer, /\(hasBubble \? '<div class="chat-msg-text/);
 });
 
 test('native artifact cards preserve every attachment, keep originals downloadable, and sandbox previews', async () => {
@@ -387,6 +388,49 @@ test('a preview cut mid-span leaves no stray markdown behind', async () => {
   assert.equal(cut('Finished **bold** then more words', 2), 'Finished **bold**…');
   assert.equal(cut('Short message', 5), 'Short message');
   assert.match(mdInline(cut('- **Marvell bets big** ok', 2).slice(2)), /^<strong>Marvell<\/strong>…$/);
+});
+
+test('a preview never cuts a table or a code block in half', async () => {
+  const {chatMessagePreview} = await chatMarkdownHelpers();
+  const mdLite = await chatMdLite();
+  const table = '| Company | Contact | Size | Note |\n|---|---|---|---|\n' +
+    '| Brightfold | Nora Vance | 11-50 | Hiring two ops roles |\n' +
+    '| Tallowick | Ravi Ostrand | 51-200 | Asked for workflow help |\n' +
+    '| Quillmere | Dana Holt | 11-50 | Reports by hand weekly |';
+  const text = 'Here is the shortlist.\n\n' + table + '\n\nMore words follow here.';
+  const words = n => text.split(/\s+/).slice(0, n).join(' ').split(/\s+/).length;
+  for (let n = 4; n < words(200) - 4; n++) {
+    const cut = chatMessagePreview(text, n);
+    const html = mdLite(cut);
+    assert.ok(tagsBalanced(html), html);
+    assert.doesNotMatch(html.replace(/<table[\s\S]*<\/table>/, ''), /\|/, `no raw pipes outside the table at ${n} words: ${cut}`);
+    if (/\| Company/.test(cut)) assert.match(html, /<table[\s\S]*Brightfold[\s\S]*<\/table>/, 'a cut table keeps its first row');
+    assert.match(cut, /…$/);
+  }
+  // A cut mid-row keeps only whole rows, and the "…" stands on its own line.
+  const midRow = chatMessagePreview(text, 32);
+  assert.match(midRow, /\| Brightfold [^\n]*\|\n\n…$|\| Tallowick [^\n]*\|\n\n…$/);
+
+  const code = 'Run this:\n\n```\nnpm install\nnpm run build --watch\nnpm test\n```\n\nThen check the output.';
+  const codeCut = chatMessagePreview(code, 6);
+  assert.equal(codeCut, 'Run this:\n\n```\nnpm install\n```\n\n…');
+  assert.match(mdLite(codeCut), /<pre class="chat-md-code"><code>npm install<\/code><\/pre><p[^>]*>…<\/p>/);
+  assert.equal(chatMessagePreview(code, 3), 'Run this:\n\n…', 'a cut on the opening fence drops the block');
+});
+
+test('Show less sits under the expanded message, where Show more sat', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const html = app.slice(app.indexOf('  function chatExpandableMessageHtml('), app.indexOf('  function syncChatCompactPreviewVisibility('));
+  assert.match(html, /previewHtml \+ '<\/div>' \+ full \+ toggle;/);
+});
+
+test('table cells wrap between words instead of forcing a sideways scroll', async () => {
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const rule = styles.match(/\.chat-md-table th,\.chat-md-table td\{[^}]*\}/);
+  assert.ok(rule, 'table cell rule is available');
+  assert.match(rule[0], /white-space:normal;/);
+  assert.match(rule[0], /overflow-wrap:normal;/, 'a cell never breaks inside a word');
+  assert.match(styles, /\.chat-md-table\{[^}]*overflow-x:auto;/, 'a table that truly cannot fit still scrolls');
 });
 
 test('a chat link wraps between words, so a short label never splits mid-word', async () => {

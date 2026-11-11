@@ -541,3 +541,32 @@ test('private Mia shared-room replies fail closed for forged or unowned dispatch
     companyId: 'company-a', dispatchId: unowned.id, type: 'agent_message', content: { text: 'blocked' },
   }), /active owner-bound private agent is required/);
 });
+
+test("a system line the app posts as the owner in Mia's chat starts her turn once", (t) => {
+  const db = new Database(':memory:');
+  t.after(() => db.close());
+  const repository = createConversationRepository(db);
+  const authorization = createConversationAuthorization(repository);
+  const dispatch = createConversationDispatchService({ repository });
+  const service = createConversationService({
+    repository,
+    authorization,
+    dispatch,
+    resolveParticipants: () => [{ id: 'gateway', name: 'Mia', manager: true, principalType: 'agent', private: true }],
+  });
+  const mia = service.createConversation({ companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } });
+  const note = {
+    companyId: 'company-a', conversationId: mia.id, principal: owner(), type: 'system',
+    content: { text: 'Note from the Mia app, not typed by the person: they accepted your card.' },
+    clientIdempotencyKey: 'mia-app-answer-card-1', metadata: { miaAppNote: { line: 'Mia was told.', cards: ['card-1'] } },
+  };
+  const sent = service.createEvent(note);
+  assert.equal(sent.event.type, 'system');
+  assert.equal(sent.dispatch.dispatches.length, 1);
+  assert.equal(sent.dispatch.dispatches[0].targetType, 'gateway');
+  // The same note again (a retry) is the same event and queues nothing new.
+  const again = service.createEvent(note);
+  assert.equal(again.idempotent, true);
+  assert.equal(again.event.id, sent.event.id);
+  assert.equal(again.dispatch.idempotent, true);
+});

@@ -144,9 +144,26 @@ test('a skill used by a bot in another workspace cannot be removed', async (t) =
   assert.ok(library.read(skill.id), 'the skill stays in the library');
 });
 
-test('a bot is told where its skill folders are and which files they hold', async () => {
-  const source = fs.readFileSync(new URL('./inference.js', import.meta.url), 'utf8');
-  assert.match(source, /function skillFilesNote\(skill\)\{|function skillFilesNote\(skill\) \{/);
-  assert.match(source, /\$\{skill\.body\}\$\{skillFilesNote\(skill\)\}/);
-  assert.match(source, /This skill's folder is \$\{skill\.folder\}\. It also holds: \$\{files\.join\(', '\)\}/);
+test('a bot prompt lists each skill by name, two lines about it and where it is', () => {
+  const { buildBotContext, newSkillsNotice } = require('./inference');
+  const skills = [
+    { id: 'voice', name: 'LinkedIn Voice', description: 'How we write posts.\nShort and plain.\nA third line.', body: 'SECRET STEPS', folder: '/data/skills/voice', files: [{ path: 'notes.md', body: 'x' }] },
+    { id: 'loose', name: 'No folder', description: 'Carried as text.', body: 'Inline steps.' },
+  ];
+  const prompt = buildBotContext({ name: 'Writer', bundledSkills: skills }, [], '', '', '', null);
+  assert.match(prompt, /## LinkedIn Voice\nHow we write posts\.\nShort and plain\.\nFind it at \/data\/skills\/voice\/SKILL\.md\. Its folder also holds: notes\.md/);
+  assert.doesNotMatch(prompt, /A third line|SECRET STEPS/);
+  // A skill with no folder to read from keeps its steps in the prompt.
+  assert.match(prompt, /## No folder\nCarried as text\.\n\nInline steps\./);
+  // A session that began before a skill was added hears of it once, by name.
+  assert.equal(newSkillsNotice({ bundledSkills: skills }, ['voice', 'loose']), '');
+  assert.equal(newSkillsNotice({ bundledSkills: skills }, ['loose']),
+    'NEW SKILL available: LinkedIn Voice \u2014 How we write posts. Short and plain.\nFind it at /data/skills/voice/SKILL.md. Its folder also holds: notes.md');
+});
+
+test('a bot chat keeps its session when a skill is added and announces it in the next message', () => {
+  const source = fs.readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  assert.match(source, /const skillFreePrompt = buildHermesTaskPrompt\(\{ \.\.\.botPromptAgent, bundledSkills: \[\] \}/);
+  assert.match(source, /storedSessionId: sameSession\s*\? conversation\.metadata\.hermesGatewaySessionId/);
+  assert.match(source, /sameSession \? newSkillsNotice\(botPromptAgent, knownSkills\) : ''/);
 });

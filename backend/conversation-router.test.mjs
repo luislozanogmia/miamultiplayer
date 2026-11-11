@@ -60,6 +60,7 @@ async function startApp({ withAttachments = false, ensureMembers = null, authori
   return {
     db,
     repository,
+    service,
     request,
     async close() {
       server.close();
@@ -461,6 +462,39 @@ test('stop clears every message waiting on the same agent and posts one notice',
     const notices = result.payload.events.filter((event) => event.metadata && event.metadata.status === 'stopped');
     assert.equal(notices.length, 1);
     assert.equal(notices[0].metadata.dispatchId, ids[0]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a run cut off when Mia closed leaves one plain line in the chat', async () => {
+  const app = await startApp();
+  try {
+    let result = await app.request('/conversations', {
+      method: 'POST',
+      body: { type: 'bot', name: 'Helper', metadata: { botId: 'bot-helper' } },
+    });
+    const conversationId = result.payload.conversation.id;
+    result = await app.request(`/conversations/${conversationId}/events`, {
+      method: 'POST',
+      body: { content: { text: 'find prospects' }, clientIdempotencyKey: 'closed-turn-1' },
+    });
+    const dispatchId = result.payload.dispatch.dispatches[0].id;
+    app.repository.claimDispatch({ companyId: 'acme', id: dispatchId, claimToken: 'running' });
+    const [held] = app.repository.holdClaimedDispatches({ companyId: 'acme', error: 'stopped when Mia closed' });
+    assert.equal(held.id, dispatchId);
+
+    // Twice, as two launches in a row would: still one line.
+    for (let launch = 0; launch < 2; launch += 1) {
+      app.service.postStopNotice({ companyId: 'acme', conversationId, stoppedDispatch: held, reason: 'app-closed' });
+    }
+    result = await app.request(`/conversations/${conversationId}/events?latest=true&limit=5`);
+    const notices = result.payload.events.filter((event) => event.metadata && event.metadata.status === 'stopped');
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].senderId, 'bot-helper');
+    assert.equal(notices[0].type, 'bot_message');
+    assert.equal(notices[0].content.text, '⏹ Stopped when Mia closed — the bot was mid-response. Send it again to restart it.');
+    assert.doesNotMatch(notices[0].content.text, /not processed|Stopped by you/);
   } finally {
     await app.close();
   }

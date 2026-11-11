@@ -143,6 +143,22 @@ test('Mia provisions agent and bot configurations in the shared Hermes runtime',
   assert.equal(unchanged.changed, false);
 });
 
+test('every profile leaves work cut off by a close to Mia, not to Hermes auto-continue', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-auto-continue-'));
+  const profilesRoot = path.join(root, 'profiles');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot });
+    for (const profile of [
+      MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+    ]) {
+      const config = fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8');
+      assert.match(config, /\ndesktop:\n  auto_continue:\n    enabled: false\n/, profile);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('background_review defaults to enabled for gateway/agent profiles and disabled for the bot-worker profile', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bg-review-'));
   const profilesRoot = path.join(root, 'profiles');

@@ -39,6 +39,53 @@ function botSummary(bot) {
     updatedAt: bot.updatedAt,
   };
 }
+// What Mia is told once the person answers a card she is waiting on. The note
+// posts into her chat as a system line from the person's session, so her turn
+// goes on by itself; `line` is what the person sees, `text` what Mia reads.
+// A key is never part of either: only whether it is saved.
+const APP_NOTE = 'Note from the Mia app, not typed by the person:';
+const oneLine = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+function mcpAppFollowUp(proposal) {
+  const name = oneLine(proposal.result?.name || proposal.input?.name, 80) || 'The app';
+  if (proposal.status === 'dismissed') {
+    return { line: `Mia was told you dismissed ${name}.`,
+      text: `they dismissed your card to add ${name} to Connected apps, so it was not added. Carry on without it, and do not propose it again unless they ask.` };
+  }
+  if (proposal.status === 'failed') {
+    return { line: `Mia was told adding ${name} failed.`,
+      text: `they accepted your card, but adding ${name} to Connected apps failed: ${oneLine(proposal.error, 300).replace(/[.\s]+$/, '') || 'no reason given'}. Tell them in one short line and say what they can do next.` };
+  }
+  if (proposal.status !== 'accepted') return null;
+  const ready = { line: `Mia was told ${name} is ready.`,
+    text: `they accepted your card, and ${name} is now in Connected apps and ready to use. Carry on with what you were doing.` };
+  if (proposal.result?.status === 'needs_key' && proposal.result.app_id) {
+    return { keyApp: String(proposal.result.app_id), ready, line: `Mia was told ${name} is waiting for its key.`,
+      text: `they accepted your card, and ${name} is now in Connected apps, but it cannot work until they save its key in its key field there. Never ask for the key in chat. Tell them that in one short line, carry on with anything that does not need ${name}, and wait: another note comes when the key is saved.` };
+  }
+  if (proposal.result?.status === 'needs_sign_in' && proposal.result.app_id) {
+    return { keyApp: String(proposal.result.app_id), ready, line: `Mia was told ${name} is waiting for its sign-in.`,
+      text: `they accepted your card, and ${name} is now in Connected apps, but it cannot work until they sign in to it. Its sign-in page opens in their browser by itself; if they closed it, the Sign in button is on ${name} in Connected apps. Tell them that in one short line, carry on with anything that does not need ${name}, and wait: another note comes when they are signed in.` };
+  }
+  return ready;
+}
+function mcpAppKeyNote(name) {
+  const app = oneLine(name, 80) || 'The app';
+  return { line: `Mia was told ${app}'s key was saved.`,
+    text: `${APP_NOTE} the key for ${app} was saved in Connected apps, so ${app} is ready to use. Carry on with what you were doing.` };
+}
+function mcpAppSignedInNote(name) {
+  const app = oneLine(name, 80) || 'The app';
+  return { line: `Mia was told you signed in to ${app}.`,
+    text: `${APP_NOTE} they signed in to ${app}, so ${app} is ready to use. Carry on with what you were doing.` };
+}
+// Several answered cards from one of Mia's replies become one note.
+function answerNote(parts) {
+  return {
+    line: parts.map(part => part.line).join(' '),
+    text: parts.length === 1 ? `${APP_NOTE} ${parts[0].text}` : [APP_NOTE, ...parts.map(part => `- ${part.text}`)].join('\n'),
+  };
+}
+
 function lastRunsByBot(checklists) {
   const runs = {};
   for (const item of checklists || []) (runs[item.botId] = runs[item.botId] || []).push(item);
@@ -85,7 +132,7 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
     skill_get: { group: 'A', description: "One skill folder: SKILL.md, every other file in it with its text, and the bots that carry it.", args: { skill_id: 'string' }, async run({ call, args }) {
       return call('GET', `/api/skills/${seg(text(args.skill_id, 'skill_id', 80))}`);
     } },
-    mcp_apps_list: { group: 'A', description: 'Your own MCP apps in Connected apps (beside Google): name, where its server runs, how you sign in, and whether it needs its key.', args: {}, run: ({ call }) => call('GET', '/api/mcp-apps') },
+    mcp_apps_list: { group: 'A', description: 'Your own MCP apps in Connected apps (beside Google): name, where its server runs, how you sign in, and its status: ready, signed_in, needs_key (they paste it in Connected apps), or needs_sign_in (they press Sign in on it in Connected apps; it opens in their browser).', args: {}, run: ({ call }) => call('GET', '/api/mcp-apps') },
     marketplace_list: { group: 'A', description: "The Bot marketplace's From Mia shelf: each bot with what it does, its skills and whether the person already has it.", args: {}, async run({ call }) {
       const [index, { bots }] = await Promise.all([call('GET', '/api/bots/catalog'), call('GET', '/api/bots')]);
       const have = new Set(bots.map(bot => String(bot.name || '').trim().toLowerCase()));
@@ -321,7 +368,7 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         try { checked = require('./mcp-apps').cleanMcpApp(input, apps.map(app => app.id)); } catch (error) { throw fail(400, error.message); }
         if (!checked.docsUrl) throw fail(400, "Name the vendor's page for this server (docs_url), so the person can check it.");
         const logo = await fetchAppLogo(args.logo_url);
-        const signIn = { oauth: 'You sign in to it the first time Mia uses it.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
+        const signIn = { oauth: 'Its sign-in opens in your browser when you accept.', key: 'You paste its key in Connected apps; it never goes through chat.', none: 'No sign-in.' }[checked.auth];
         return { summary: `Add ${checked.name} to Connected apps`,
           details: [checked.description, `Server: ${checked.url || `${checked.runner} ${checked.package}`}`,
             ...(!checked.url && checked.args.length ? [`Arguments: ${checked.args.join(' ')}`] : []),
@@ -332,8 +379,11 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
       },
       async apply({ call }, input) {
         const added = await call('POST', '/api/mcp-apps', input);
-        return { app_id: added.app.id, status: added.app.status };
-      } },
+        return { app_id: added.app.id, name: added.app.name, status: added.app.status };
+      },
+      // Mia proposed this mid-task, so the answer goes back to her and she
+      // carries on (see answerNote below).
+      followUp: mcpAppFollowUp },
     app_install_propose: { group: 'C', trust: null, description: "Ask to install one version of a company's app on this computer.", args: { team_id: 'string', app_id: 'string', version: 'string' },
       prepare({ args }) {
         const input = { team_id: text(args.team_id, 'team_id', 200), app_id: text(args.app_id, 'app_id', 200), version: text(args.version, 'version', 80) };
@@ -407,7 +457,7 @@ function routeCaller(req, workspace) {
 }
 const publicEntry = ({ undo, ...entry }) => ({ ...entry, canUndo: !!undo && !entry.undoneAt });
 
-function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, postCard, findCard, updateCard }) {
+function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, postCard, findCard, updateCard, listCards = () => [], postNote = null }) {
   const ownerOf = req => String(req.userEmail).toLowerCase();
   app.get('/api/mia-app/trust', requireAuth, (req, res) => res.json({ trust: trustFor(loadSettings(), ownerOf(req)) }));
   app.post('/api/mia-app/trust', requireInteractiveAuth, (req, res) => {
@@ -470,6 +520,82 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
       return res.json({ result: propose(plan) });
     } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'That Mia tool failed' }); }
   });
+  // When the person answers a card Mia is waiting on (a tool with followUp),
+  // Mia is told in a note and carries on. Cards from one of her replies wait
+  // for each other and go as one note, so answering three cards starts one
+  // turn, not three. The note's key is the card's id, so it posts once.
+  const followsUp = proposal => !!proposal && Object.hasOwn(tools, proposal.tool) && typeof tools[proposal.tool].followUp === 'function';
+  const keyWaits = () => loadSettings().miaAppKeyWaits || {};
+  const saveKeyWaits = (owner, waits) => {
+    const settings = loadSettings();
+    const all = { ...(settings.miaAppKeyWaits || {}) };
+    if (Object.keys(waits).length) all[owner] = waits; else delete all[owner];
+    settings.miaAppKeyWaits = all;
+    saveSettings(settings);
+  };
+  function settleAnswer(card, owner, chatModelSelection) {
+    if (!postNote || !followsUp(card.proposal)) return null;
+    const part = tools[card.proposal.tool].followUp(card.proposal);
+    if (!part) return null;
+    const { keyApp, ready, ...shown } = part;
+    card.proposal = { ...card.proposal, followUp: { ...shown, ...(keyApp ? { keyApp, ready } : {}) } };
+    let event = updateCard(card, card.proposal);
+    if (keyApp) {
+      const waits = { ...(keyWaits()[owner] || {}) };
+      waits[keyApp] = { companyId: card.companyId, conversationId: card.conversationId, eventId: card.event.id, name: card.proposal.result?.name || '',
+        ...(chatModelSelection ? { chatModelSelection } : {}) };
+      saveKeyWaits(owner, waits);
+    }
+    const turn = card.proposal.turn;
+    const siblings = turn ? listCards(card).filter(other => other.event.id !== card.event.id && other.proposal.turn === turn && followsUp(other.proposal)) : [];
+    if (siblings.some(other => other.proposal.status === 'pending' || other.proposal.status === 'applying')) return { event, held: true };
+    const group = [...siblings.filter(other => other.proposal.followUp && !other.proposal.followUp.sentAt), card];
+    // A key saved while this note waited is already in: say it is ready.
+    const waits = { ...(keyWaits()[owner] || {}) };
+    let told = false;
+    const parts = group.map(({ event, proposal }) => {
+      const { keyApp: app, ready: readyPart, line, text } = proposal.followUp;
+      if (!app) return { line, text };
+      if (!waits[app] || waits[app].eventId !== event.id) return readyPart || { line, text };
+      waits[app] = { ...waits[app], noteSent: true };
+      told = true;
+      return { line, text };
+    });
+    if (told) saveKeyWaits(owner, waits);
+    const note = answerNote(parts);
+    const sentAt = new Date().toISOString();
+    for (const answered of group) {
+      const updated = updateCard(answered, { ...answered.proposal, followUp: { ...answered.proposal.followUp, sentAt } });
+      if (answered === card) event = updated;
+    }
+    try {
+      return { event, note: postNote({ companyId: card.companyId, conversationId: card.conversationId, owner }, {
+        text: note.text, key: `mia-app-answer-${card.event.id}`,
+        metadata: { miaAppNote: { line: note.line, cards: group.map(answered => answered.event.id) }, ...(chatModelSelection ? { chatModelSelection } : {}) },
+      }) };
+    } catch (_) { return { event }; }
+  }
+  // Connected apps saved an app's key, or the person finished its sign-in: if
+  // Mia was told she is waiting on it, tell her it is in. Called only after
+  // the key is written or the sign-in is saved.
+  const keySaved = (owner, appId) => appReady(owner, appId, mcpAppKeyNote);
+  const signedIn = (owner, appId) => appReady(owner, appId, mcpAppSignedInNote);
+  function appReady(owner, appId, readyNote) {
+    const waits = { ...(keyWaits()[owner] || {}) };
+    const wait = waits[appId];
+    if (!wait) return null;
+    delete waits[appId];
+    saveKeyWaits(owner, waits);
+    // Not yet told about the app at all: that note will say it is ready.
+    if (!wait.noteSent || !postNote) return null;
+    const note = readyNote(wait.name);
+    try {
+      return postNote({ companyId: wait.companyId, conversationId: wait.conversationId, owner }, {
+        text: note.text, key: `mia-app-key-${wait.eventId}`,
+        metadata: { miaAppNote: { line: note.line, cards: [wait.eventId] }, ...(wait.chatModelSelection ? { chatModelSelection: wait.chatModelSelection } : {}) },
+      });
+    } catch (_) { return null; }
+  }
   // The person's answer to a card. Only their own session reaches this, and
   // the app, not Mia, runs what the card says.
   app.post('/api/mia-app/proposals/:eventId', requireInteractiveAuth, async (req, res) => {
@@ -480,18 +606,31 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
     const tool = card && Object.hasOwn(tools, card.proposal.tool) ? tools[card.proposal.tool] : null;
     if (!tool?.apply) return res.status(404).json({ error: 'not_found' });
     if (card.proposal.status !== 'pending') return res.status(409).json({ error: 'already_answered', proposal: card.proposal });
-    const answer = fields => updateCard(card, { ...card.proposal, ...fields, answeredAt: new Date().toISOString() });
-    if (decision === 'dismiss') return res.json({ event: answer({ status: 'dismissed' }) });
+    // The model picked in the chat, so Mia carries on with the same one. The
+    // dispatch checks it again, as it does for a typed message.
+    const picked = req.body?.chatModelSelection;
+    const chatModelSelection = picked && typeof picked === 'object' && !Array.isArray(picked) && JSON.stringify(picked).length <= 2000 ? picked : null;
+    const answer = fields => {
+      card.proposal = { ...card.proposal, ...fields, answeredAt: new Date().toISOString() };
+      return updateCard(card, card.proposal);
+    };
+    // The card as it is now (with whether its note went), and the note.
+    const withNote = event => {
+      const settled = settleAnswer(card, owner, chatModelSelection);
+      return { event: settled?.event || event, ...(settled?.note?.event ? { note: settled.note } : {}) };
+    };
+    if (decision === 'dismiss') return res.json(withNote(answer({ status: 'dismissed' })));
     answer({ status: 'applying' });
     const turn = { session: card.proposal.turn, conversationId: card.conversationId };
     try {
       const result = await tool.apply({ owner, turn, call: routeCaller(req, card.workspace) }, card.proposal.input);
       activity.add(owner, { tool: card.proposal.tool, workspace: card.workspace, turn: card.proposal.turn, conversationId: card.conversationId, summary: card.proposal.summary, via: 'accepted' });
-      res.json({ event: answer({ status: 'accepted', result }), result });
+      res.json({ ...withNote(answer({ status: 'accepted', result })), result });
     } catch (error) {
       const message = error.status ? error.message : 'That could not be done.';
-      res.status(error.status || 500).json({ event: answer({ status: 'failed', error: String(message).slice(0, 300) }), error: message });
+      res.status(error.status || 500).json({ ...withNote(answer({ status: 'failed', error: String(message).slice(0, 300) })), error: message });
     }
   });
+  return { keySaved, signedIn };
 }
 module.exports = { TRUST_CATEGORIES, trustFor, createActivityLog, createMiaAppTools, registerMiaAppRoutes };

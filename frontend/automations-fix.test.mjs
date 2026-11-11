@@ -56,3 +56,25 @@ test('Fix with Mia opens her chat and sends what is wrong, with the automation a
   ].join('\n'));
   assert.equal(button.disabled, false, 'the button works again afterwards');
 });
+
+test('opening an automation leaves the chat on the right where it was', () => {
+  const switched = []; const rendered = [];
+  const automationsPage = { open: true, botId: null, automationId: null, tabs: [] };
+  const ctx = {
+    automationsPage,
+    automationsTabId: (botId, automationId) => botId + ':' + automationId,
+    automationsTabById: () => null,
+    renderAutomationsPage: () => rendered.push('page'),
+    el: () => ({ scrollTop: 40 }),
+    loadChatRoom: (id) => switched.push(id),
+    navigateToAgentChat: (agent) => switched.push(agent.id),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(slice('openAutomationsDetail'), ctx);
+  ctx.openAutomationsDetail('bot-1', 'auto-1');
+  assert.deepEqual(switched, [], 'no bot chat opens');
+  assert.equal(automationsPage.automationId, 'auto-1');
+  assert.equal(JSON.stringify(automationsPage.tabs), JSON.stringify([{ botId: 'bot-1', automationId: 'auto-1' }]));
+  assert.deepEqual(rendered, ['page']);
+  assert.doesNotMatch(slice('openAutomationsDetail'), /loadChatRoom|navigateToAgentChat|showAutomationsChat/);
+});

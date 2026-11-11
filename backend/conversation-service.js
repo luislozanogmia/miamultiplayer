@@ -525,6 +525,9 @@ function createConversationService({ repository, authorization, realtime = null,
   function stopNoticeText({ targetType, reason, page }) {
     const noun = targetType === 'gateway' ? 'the agent' : 'the bot';
     if (reason === 'take-over') return `⏸ Browser is yours.${page ? ` I was on ${page}.` : ''} Press Continue when you want me back.`;
+    // Nothing runs again by itself after a close (interrupted-work.js), so
+    // the chat says so instead of leaving the message without an answer.
+    if (reason === 'app-closed') return `⏹ Stopped when Mia closed — ${noun} was mid-response. Send it again to restart it.`;
     return `⏹ Stopped by you — ${noun} was mid-response.`;
   }
 
@@ -679,6 +682,7 @@ function createConversationService({ repository, authorization, realtime = null,
     listEvents,
     listActiveDispatches,
     stopDispatch,
+    postStopNotice,
     updateEvent,
     toggleEventReaction,
     deleteEvent,

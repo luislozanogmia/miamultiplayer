@@ -7,7 +7,7 @@ import vm from 'node:vm';
 // and a details pane about the bot.
 const app = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 test('company bot details name the participant whose computer and credentials execute the work', () => {
-  assert.match(app, /Runs on the requesting or approving participant\\'s computer, using that participant\\'s credentials/);
+  assert.match(app, /Runs on the computer of whoever asks it, with that person\\'s own apps and sign-ins/);
   assert.doesNotMatch(app, /Runs on its owner\\'s computer/);
 });
 function sourceFunction(name) {

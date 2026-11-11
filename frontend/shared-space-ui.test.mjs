@@ -343,7 +343,7 @@ test('My Bots keeps its own list, and dialogs hide the browser page that would c
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(app, /var myBots=chatWs\.myBotRecords\|\|\[\]/);
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
-  assert.match(browser, /!document\.querySelector\('\.app-prompt-overlay\.open, \.app-confirm-overlay\.open, \.chat-image-viewer'\)/);
+  assert.match(browser, /var dialogOpen = !!document\.querySelector\('\.app-prompt-overlay\.open, \.app-confirm-overlay\.open, \.chat-image-viewer'\)/);
   assert.match(browser, /attributeFilter: \['class'\], childList: true/);
 });
 

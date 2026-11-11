@@ -15,7 +15,7 @@ test('desktop reveals a loading gate while the first authoritative chat hydratio
   const showSource = source.slice(showStart, showEnd);
 
   assert.match(initSource, /Promise\.all\(\[\s*loadNativeConversations\(\),\s*loadAgents\(\),\s*loadChatHumans\(\),\s*fetchDepartmentsSilently\(\),\s*loadActiveAutomationRuns\(\)/);
-  assert.match(initSource, /return loadNativeSidebarPreviews\(\{render:false\}\)\.then/);
+  assert.match(initSource, /return loadSidebarPreviews\(\{render:false\}\)\.then/);
   assert.match(initSource, /return loadNativeConversationStates\(rooms\)/);
   assert.match(showSource, /var initialRender = route\(\);/);
   assert.match(showSource, /var initialRender = route\(\);[\s\S]*signalDesktopReady\(\);[\s\S]*Promise\.resolve\(initialRender\)/);
@@ -24,7 +24,7 @@ test('desktop reveals a loading gate while the first authoritative chat hydratio
 
 test('sidebar previews and opened rooms start from the latest event page', async () => {
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  const previewStart = source.indexOf('function loadNativeSidebarPreviews(options)');
+  const previewStart = source.indexOf('function loadNativeRoomPreview(roomId, state)');
   const previewEnd = source.indexOf('\n  function renderChatSidebar()', previewStart);
   const roomStart = source.indexOf('function loadChatRoom(roomId, kind, label)');
   const roomEnd = source.indexOf('\n  function selectHomeRoom()', roomStart);

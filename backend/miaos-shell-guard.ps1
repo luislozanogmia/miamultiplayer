@@ -28,7 +28,7 @@
 # shape (`open -a Safari`, `Start-Process -FilePath x -Wait`, ...) without
 # parameter-binding errors, exactly like the .sh function's "$@".
 function miaos_block_external_browser {
-    $message = 'Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead.'
+    $message = 'Mia browser policy: external browser launch is disabled. Use ghost-cli and the embedded Mia browser instead. To show a folder in File Explorer, use: ghost-cli call ghost_folder_open --arguments ''{"instance_id":"miaos","path":"C:\\full\\path"}'''
     # Plain text on stderr, matching the .sh guard's `echo ... >&2`.
     [Console]::Error.WriteLine($message)
     # Exit-code semantics: the .sh functions `return 126`. External-command

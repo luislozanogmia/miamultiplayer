@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import path from 'node:path';
 
 function route() {
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
@@ -10,7 +11,7 @@ function route() {
   const sessions = new Map(); const shared = new Map(); const calls = []; let handler;
   const requireAuth = () => {};
   // Conversations: Solo ones live in the Solo company; 'company' is the local team space.
-  const context = { String, Date, nativeGatewaySessionConversations: sessions, sharedBotRunSessions: shared, requireAuth,
+  const context = { String, Date, path, nativeGatewaySessionConversations: sessions, sharedBotRunSessions: shared, requireAuth,
     DEFAULT_WORKSPACE_ID: 'multiplayer_test', nativeCompanyId: (workspace, email) => workspace + ':' + email,
     app: { get: (path, auth, callback) => { assert.equal(path, '/api/browser/actor'); assert.equal(auth, requireAuth); handler = callback; } },
     nativeConversationService: { getConversation: input => { calls.push(input); if (input.principal.principalId !== 'owner@example.test') throw new Error('denied'); return { id: input.conversationId, metadata: input.conversationId === 'team-chat' ? { teamWorkspace: 'hub_' + 'b'.repeat(32) } : {} }; } } };
@@ -27,7 +28,7 @@ test('browser actor route distinguishes authorized Mia and bot sessions from unr
   h.sessions.set('mia-session', { companyId: 'company', conversationId: 'mia-private', browserActiveUntil: Date.now() + 60_000 });
   h.sessions.set('bot-session', { companyId: 'company', conversationId: 'bot-private', botId: 'bot-a', agentName: 'A', browserActiveUntil: Date.now() + 60_000 });
   assert.deepEqual(h.invoke('mia-session'), { actor: { kind: 'mia', workspace: 'multiplayer_test' } });
-  assert.deepEqual(h.invoke('bot-session'), { actor: { kind: 'bot', botId: 'bot-a', name: 'A', workspace: 'multiplayer_test' } });
+  assert.deepEqual(h.invoke('bot-session'), { actor: { kind: 'bot', botId: 'bot-a', name: 'A', workspace: 'multiplayer_test', folders: [] } });
   assert.deepEqual(h.invoke('mia-session', 'stranger@example.test'), { actor: null });
   assert.deepEqual(h.invoke('bot-session', 'stranger@example.test'), { actor: null });
   const previous = h.calls.length;
@@ -43,16 +44,29 @@ test('browser actor route distinguishes authorized Mia and bot sessions from unr
 test('a team bot running on this computer may use the browser for the person running it, while it runs', () => {
   const h = route();
   h.shared.set('team-run', { owner: 'owner@example.test', botId: 'shared-reg1-v2', name: 'LinkedIn', workspace: 'hub_' + 'c'.repeat(32) });
-  assert.deepEqual(h.invoke('team-run'), { actor: { kind: 'bot', botId: 'shared-reg1-v2', name: 'LinkedIn', workspace: 'hub_' + 'c'.repeat(32) } });
+  assert.deepEqual(h.invoke('team-run'), { actor: { kind: 'bot', botId: 'shared-reg1-v2', name: 'LinkedIn', workspace: 'hub_' + 'c'.repeat(32), folders: [] } });
   assert.deepEqual(h.invoke('team-run', 'stranger@example.test'), { actor: null });
   h.shared.delete('team-run');
   assert.deepEqual(h.invoke('team-run'), { actor: null });
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const turn = source.slice(source.indexOf('async function runSharedBotTurn('), source.indexOf('function nativeConversationPrincipal('));
-  assert.match(turn, /sharedBotRunSessions\.set\(id, \{ owner: String\(owner \|\| ''\)\.trim\(\)\.toLowerCase\(\)[^}]*workspace: `hub_\$\{String\(channel\.teamId \|\| ''\)\.toLowerCase\(\)\}` \}\);/, 'a company run is that company\'s');
+  assert.match(turn, /sharedBotRunSessions\.set\(id, \{ owner: String\(owner \|\| ''\)\.trim\(\)\.toLowerCase\(\)[^}]*workspace: `hub_\$\{String\(channel\.teamId \|\| ''\)\.toLowerCase\(\)\}`,[^}]*folders: \[teamFolder, teamWorkFolder\]\.filter\(Boolean\) \}\);/, 'a company run is that company\'s');
   assert.match(turn, /onSession,\n\s*\},\n\s*signal,\n\s*\}\)\.finally\(\(\) => \{ runSessions\.forEach\(\(id\) => sharedBotRunSessions\.delete\(id\)\); \}\);/);
   const inference = readFileSync(new URL('./inference.js', import.meta.url), 'utf8');
   assert.match(inference, /onSession: typeof options\.onSession === 'function' \? options\.onSession : null,/);
+});
+
+test('a bot identity carries only the absolute folders its run works in; Mia carries none', () => {
+  const h = route();
+  h.sessions.set('mia-run', { companyId: 'company', conversationId: 'mia-private', folders: ['/data/mia'], browserActiveUntil: Date.now() + 60_000 });
+  h.sessions.set('bot-run', { companyId: 'company', conversationId: 'bot-private', botId: 'bot-a', agentName: 'A',
+    folders: ['/data/mia/bots/A', '/data/work/../work/A', 'relative/folder', 42], browserActiveUntil: Date.now() + 60_000 });
+  h.shared.set('team-run', { owner: 'owner@example.test', botId: 'shared-1', name: 'T', workspace: 'hub_' + 'c'.repeat(32), folders: ['/data/mia/companies/c/T'] });
+  assert.equal(h.invoke('mia-run').actor.folders, undefined, 'Mia is not limited to a bot folder list');
+  assert.deepEqual(h.invoke('bot-run').actor.folders, ['/data/mia/bots/A', '/data/work/A']);
+  assert.deepEqual(h.invoke('team-run').actor.folders, ['/data/mia/companies/c/T']);
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  assert.match(source, /botId: agent\.id,[\s\S]{0,300}folders: \[artifactWorkspace, botWorkFolder\]\.filter\(Boolean\),/, 'a Solo bot run records its Mia folder and working folder');
 });
 
 test('every browser identity says which workspace its run belongs to', () => {

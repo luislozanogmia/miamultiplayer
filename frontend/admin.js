@@ -242,24 +242,32 @@
     }).join('');
   }
 
-  var TEAM_BOT_STATUS = {accepted: 'Active', pending: 'Pending', rejected: 'Rejected'};
-
   // Bots are added per channel, so the team roster is every bot in the
-  // channels the admin can see, labelled with where it lives.
-  function teamRosterAgents(channelBots){
-    var agents = [];
+  // channels the admin can see, labelled with where it lives. A bot is live
+  // as soon as it is added; `market` is the company's own list of them and
+  // `members` gives each one's owner a name.
+  function teamRosterAgents(channelBots, market, members){
+    var agents = [], seen = {}, channels = {}, emails = {};
+    (members || []).forEach(function(member){ emails[member.clerk_user_id] = member.email || ''; });
+    function where(channel){ return channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? 'Group' : '#' + (channel.name || 'channel'); }
+    (channelBots || []).forEach(function(entry){ if(entry.channel && entry.channel.id) channels[entry.channel.id] = entry.channel; });
+    (market || []).forEach(function(bot){
+      if(bot.archived_at) return;
+      seen[bot.id] = true;
+      var owner = emails[bot.shared_by] || '';
+      var places = (bot.channel_ids || []).map(function(id){ return channels[id] ? where(channels[id]) : ''; }).filter(Boolean);
+      agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: owner || 'Unknown member', ownerDescription: 'Colleague',
+        status: 'Active', model: '—', departments: places, createdAt: hubTime(bot.shared_at)});
+    });
     (channelBots || []).forEach(function(entry){
       var channel = entry.channel || {};
-      var where = channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? 'Group' : '#' + (channel.name || 'channel');
       (entry.bots || []).forEach(function(bot){
-        // The company-wide list has no admission; a bot with no approved version is waiting for an admin.
-        var admission = bot.admission || {};
-        var state = admission.status || (bot.published ? 'accepted' : 'pending');
-        var owner = admission.requester_email || bot.owner_email || '';
+        // A bot from before the company list that never went live is not one.
+        if(!bot.published || seen[bot.id]) return;
+        var owner = bot.admission && bot.admission.requester_email || bot.owner_email || '';
         agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: bot.owner_display_name || owner || 'Unknown member',
-          ownerDescription: 'Colleague', status: TEAM_BOT_STATUS[state] || 'Unknown',
-          reviewChannelId: state === 'pending' ? channel.id : '',
-          model: '—', departments: [where], createdAt: hubTime(bot.created_at)});
+          ownerDescription: 'Colleague', status: 'Active',
+          model: '—', departments: [where(channel)], createdAt: hubTime(bot.created_at)});
       });
     });
     return agents;
@@ -404,9 +412,7 @@
           '<div class="admin-agent-id">' + esc(id || '—') + '</div>' +
         '</td>' +
         '<td><span class="pill admin-agent-type ' + (mia ? 'mia' : 'bot') + '">' + esc(type) + '</span></td>' +
-        '<td><span class="pill ' + agentStatusClass(status) + '">' + esc(status) + '</span>' +
-          (agent && agent.reviewChannelId ? ' <button type="button" class="btn small" data-agent-review data-bot-id="' + esc(id) + '" data-channel-id="' + esc(agent.reviewChannelId) + '">Review</button>' : '') +
-        '</td>' +
+        '<td><span class="pill ' + agentStatusClass(status) + '">' + esc(status) + '</span></td>' +
         '<td class="admin-cell-sub">' + esc(model) + '</td>' +
         '<td class="admin-agent-departments">' + esc(departments.length ? departments.join(', ') : 'No departments') + '</td>' +
         '<td class="admin-cell-sub">' + esc(fmtDate(agent && agent.createdAt)) + '</td>' +
@@ -1336,10 +1342,13 @@
     }
 
     function loadTeamAgents(){
-      return win.MiaHubChat.teamBots(team.id).catch(function(error){
+      function optional(path, key){ return win.MiaHubChat.call('GET', '/v1/teams/' + team.id + path).then(function(result){ return result[key] || []; }, function(){ return []; }); }
+      return Promise.all([win.MiaHubChat.teamBots(team.id).catch(function(error){
         toast(error.message, true);
         throw error;
-      }).then(teamRosterAgents);
+      }), optional('/market/bots', 'bots'), optional('/members', 'members')]).then(function(results){
+        return teamRosterAgents(results[0], results[1], results[2]);
+      });
     }
 
     function loadAgents(){
@@ -1609,21 +1618,6 @@
         btn.addEventListener('click', function(){
           bulkUserAction(btn.getAttribute('data-bulk-action'));
         });
-      });
-
-      // An admin approves a bot here even when it was asked for in a channel they are not in.
-      var agentsBody = $('#agentsBody');
-      if(agentsBody) agentsBody.addEventListener('click', function(ev){
-        var btn = ev.target.closest && ev.target.closest('button[data-agent-review]');
-        if(!btn || btn.disabled || !team || !win.MiaHubBots) return;
-        var botId = btn.getAttribute('data-bot-id'), channelId = btn.getAttribute('data-channel-id');
-        btn.disabled = true;
-        hub('GET', '/channels/' + channelId + '/bots/' + botId + '/versions').then(function(result){
-          var waiting = (result.versions || []).filter(function(v){ return !v.approved_by && !v.rejected_by; })[0];
-          if(!waiting){ toast('Nothing is waiting for approval. Refreshing.'); return loadAgents(); }
-          return win.MiaHubBots.decide({teamId: team.id, channelId: channelId, refresh: loadAgents, report: function(message){ toast(message, true); }},
-            botId, Number(waiting.version), 'review', null);
-        }).catch(function(){ /* hub() already showed the error */ }).then(function(){ btn.disabled = false; });
       });
 
       var usersBody = $('#usersBody');

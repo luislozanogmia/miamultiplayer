@@ -32,6 +32,7 @@ const db = require('./db');
 const { createBotPackageStore } = require('./bot-packages');
 const { configuredHermesLaunch, requiredConfiguredExecutable, requiredConfiguredPath } = require('./runtime-paths');
 const { buildScheduledBotPrompt, hermesProcessEnv } = require('./inference');
+const { isPlaceholderModel } = require('./chat-model-selection');
 const {
   SAFE_DERIVATIVE_PREVIEW_MIME_TYPES,
   validatedArtifactFile,
@@ -450,6 +451,11 @@ const CRON_GUARD_SCRIPT = [
   'g and t.update({"shell_init_files":[g],"auto_source_bashrc":False})',
   // Long runs compress at the same point as chat (hermes-bot-profile.js).
   'cfg.setdefault("compression",{}).update({"enabled":True,"threshold_tokens":int(sys.argv[2]),"protect_last_n":20,"min_tail_user_messages":3})',
+  // Work cut off by a close waits for the person (interrupted-work.js).
+  // Hermes reads this switch from the main home when a chat's session
+  // reopens, whichever profile the chat runs in, so the profile line in
+  // hermes-bot-profile.js alone did not stop its own resume.
+  'cfg.setdefault("desktop",{}).setdefault("auto_continue",{})["enabled"]=False',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
@@ -679,18 +685,24 @@ function jobPromptFor(bot, automation, options = {}) {
   return buildScheduledBotPrompt(bot, automation, options);
 }
 
-// An automation can pick its own model; otherwise it runs on the bot's.
-function jobModelFor(bot, automation) {
+const NO_MODEL_MESSAGE = 'This automation has no valid connected model to run on. Connect a model in Mia.';
+
+// An automation can pick its own model; otherwise it runs on the bot's, as
+// botModelSelection resolved it for the caller (botModel, null when nothing is
+// connected). The store's "default" placeholder is never sent to a provider.
+function jobModelFor(bot, automation, botModel) {
   const own = automation && String(automation.model || '').trim() && String(automation.modelProvider || '').trim();
-  const source = own ? automation : bot;
+  const source = own ? automation
+    : botModel !== undefined ? botModel && { model: botModel.model, modelProvider: botModel.provider } : bot;
   const model = String(source && source.model || '').trim();
   const provider = String(source && source.modelProvider || '').trim();
+  if (isPlaceholderModel(model)) throw new Error(NO_MODEL_MESSAGE);
   // Some provider model ids use a single slash-delimited namespace.
   // Hermes' Claude subscription plugin publishes extended-context models
   // with the literal `[1m]` suffix. Keep the existing bounded namespace
   // grammar and allow only that documented bracketed suffix.
   if (!/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?(?:\[1m\])?$/i.test(model) || model.length > 128) {
-    throw new Error('scheduled bot requires a valid connected model');
+    throw new Error(NO_MODEL_MESSAGE);
   }
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(provider)) {
     throw new Error('scheduled bot requires a valid connected model provider');
@@ -862,7 +874,16 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   }
   const artifactWorkspace = artifactWorkspaceForBot(bot);
 
-  const { model, provider } = jobModelFor(bot, automation);
+  let jobModel;
+  try {
+    jobModel = jobModelFor(bot, automation, options.botModel);
+  } catch (error) {
+    // A job left running would keep sending its old model; pause it until a
+    // connected model is there, the way a missing workdir does.
+    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+    throw error;
+  }
+  const { model, provider } = jobModel;
 
   if (job) {
     if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation))) {
@@ -981,7 +1002,8 @@ async function reconcileBotCrons(conn, options = {}) {
       const globalInstructions = typeof options.globalInstructionsForBot === 'function'
         ? options.globalInstructionsForBot(agent)
         : '';
-      await syncBotAutomation(agent, null, registry, { globalInstructions });
+      const botModel = typeof options.botModelFor === 'function' ? await options.botModelFor(agent) : undefined;
+      await syncBotAutomation(agent, null, registry, { globalInstructions, botModel });
       db.saveOne(conn, 'bots', agent.id, agent);
     } catch (err) {
       errors++;

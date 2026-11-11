@@ -39,7 +39,9 @@ test('Install fetches the manifest, creates the bot through POST \\/api\\/bots, 
   assert.match(install, /api\('\/api\/bots\/catalog\/' \+ encodeURIComponent\(id\)\)/);
   // The bot's skills become skill folders first, then the bot carries their ids.
   assert.match(install, /createLibrarySkills\(freshManifest\.skills\)\.then\(function\(skillIds\)\{/);
-  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: skillIds\.length \? Object\.assign\(\{\}, freshManifest\.bot, \{skills: skillIds\}\) : freshManifest\.bot\}\)/);
+  assert.match(install, /api\('\/api\/bots', \{method:'POST', body: Object\.assign\(\{\}, freshManifest\.bot, \{model: model\}, skillIds\.length \? \{skills: skillIds\} : \{\}\)\}\)/);
+  // The template's placeholder model is never saved: the bot gets the person's chosen model.
+  assert.match(install, /var model = selectedConnectedBotModel\(\);\s*if\(!model\)\{ showBenchToast\('Could not install bot: connect and choose a model first\.'\); return Promise\.resolve\(false\); \}/);
   assert.match(install, /createNativeAgentConversation\(created, \{\}\)/);
   assert.match(install, /chatRoomState\(conversation\.id\)\.localWelcome = buildBotStoreWelcomeMessage\(conversation\.id, created, freshManifest\.welcome\);/);
   assert.match(install, /loadChatRoom\(conversation\.id, 'agent', created\.name\);/);
