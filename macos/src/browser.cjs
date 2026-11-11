@@ -1233,12 +1233,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // A focus this soon after the person pressed in a page is theirs.
   const PERSON_FOCUS_MS = 1000;
   const PERSON_LOAD_MS = 10000;
+  function giveFocusBack(target = userFocus || window.webContents) {
+    if (disposed || !target || target.isDestroyed()) return;
+    if (target.isFocused && target.isFocused()) return;
+    target.focus();
+  }
   function restoreUserFocus(target = userFocus || window.webContents) {
-    setImmediate(() => {
-      if (disposed || !target || target.isDestroyed()) return;
-      if (target.isFocused && target.isFocused()) return;
-      target.focus();
-    });
+    setImmediate(() => giveFocusBack(target));
   }
   function focusLocation() {
     window.webContents.focus();
@@ -2792,12 +2793,20 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     // in front while a bot works there, or while the person's focus is in
     // Mia (the chat, the address bar), unless they just clicked into the
     // page or picked or loaded it themselves.
+    // A click focuses the page before its press reaches before-mouse-event
+    // (the window focuses the clicked view first, then hands it the mouse
+    // down), so the decision waits one turn, for that press to arrive.
+    // Deciding at once gave the focus of every click from the chat back to
+    // the chat: the click did nothing.
     wc.on("focus", () => {
       if (borrowingTabId === tab.id) return;
-      const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
-      const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
-      if (tab.id === activeId && !taken) userFocus = wc;
-      else restoreUserFocus();
+      setImmediate(() => {
+        if (disposed || wc.isDestroyed() || tab.view.webContents !== wc) return;
+        const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
+        const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
+        if (tab.id === activeId && !taken) userFocus = wc;
+        else giveFocusBack();
+      });
     });
     wc.on("found-in-page", (_event, result) => {
       if (tab.id === activeId) window.webContents.send("miaos-browser-find-result", {

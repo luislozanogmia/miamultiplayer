@@ -2328,6 +2328,30 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
 });
 
+test("a click from the chat into the page in front keeps the focus it gives the page", async () => {
+  const h = harness();
+  h.command("new");
+  const app = h.window.webContents;
+  const page = h.views.at(-1).webContents;
+  const pause = () => new Promise(resolve => setTimeout(resolve, 1100)); // Past the time a press counts.
+  await pause(); // Opening the tab is long past.
+  app.emit("focus"); // The person was typing in the chat.
+  const before = app.focusCalls || 0;
+  // The window focuses the clicked page first, then hands it the press.
+  page.emit("focus");
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 400, y: 600 });
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls || 0, before, "the prompt box keeps the focus the click gave it");
+
+  // The page focusing itself, with no press, still gives focus back to the chat.
+  app.emit("focus");
+  await pause();
+  page.emit("focus");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
+});
+
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
   const h = harness({ resolveActor: async () => { throw new Error("backend down"); } });
   const mine = h.command("new").activeId;
