@@ -706,6 +706,29 @@ test('a group picker says when the team is too small for a group',async()=>{
   assert.equal(dialog.primary().label,'Needs 2+ colleagues');assert.equal(dialog.primary().disabled,true);
   assert.match(source,/renderPrimary\(\); filter\.focus\(\); load\(\);/);
 });
+test('an edit made inside a company updates its copy for everyone, and an edit in Solo does not',async()=>{
+  const run=async(workspace,role,updated)=>{const calls=[],toasts=[];
+    const env={activeWorkspaceKey:workspace,hubChat:{membership:{role}},refreshCompanyBots(){},showBenchToast:text=>toasts.push(text),Promise,String,
+      window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return updated?Promise.resolve({updated}):Promise.reject(new Error('offline'));}}},
+      hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
+    appFunction('approveHubBotVersion',env);
+    await appFunction('publishCompanyBotEdit',env)('local7');
+    return {calls:JSON.parse(JSON.stringify(calls)),toasts};};
+  const copy=[{channelId:'chan',botId:'bot1',version:3}];
+  assert.deepEqual((await run('solo','admin',copy)).calls,[],'a Solo edit leaves the company copy alone');
+  const admin=await run('hub_t','admin',copy);
+  assert.deepEqual(admin.calls,[['POST','/update',{teamId:'t',localBotId:'local7'}],['POST','/v1/teams/t/channels/chan/bots/bot1/versions/3/approve']]);
+  assert.match(admin.toasts[0],/updated for everyone/);
+  const member=await run('hub_t','member',copy);
+  assert.equal(member.calls.length,1);assert.match(member.toasts[0],/admin must approve/);
+  const same=await run('hub_t','admin',[]);
+  assert.equal(same.calls.length,1);assert.deepEqual(same.toasts,[]);
+  assert.match((await run('hub_t','admin',null)).toasts[0],/didn’t update/);
+  const source=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
+  for(const caller of ['function saveEditCinema(','function answerInstructionCard(']){
+    const start=source.indexOf(caller);assert.match(source.slice(start,start+3200),/publishCompanyBotEdit\(/);
+  }
+});
 // Adding an existing bot and creating a new one share one path: an admin's
 // bot is published at once, anyone else's waits for an admin.
 test('adding a bot to a channel publishes it only when you are an admin',async()=>{
@@ -713,6 +736,7 @@ test('adding a bot to a channel publishes it only when you are an admin',async()
     const env={hubChat:{membership:{role}},hubPath:()=>'/v1/teams/t',refreshCompanyBots(){},
       window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot1'},proposal:{version:2}});}}},
       hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
+    appFunction('approveHubBotVersion',env);
     const published=await appFunction('shareBotToHubChannel',env)('t','chan','local7');
     return {published,calls};};
   const admin=await run('admin');
@@ -726,6 +750,7 @@ test('adding a bot to a channel publishes it only when you are an admin',async()
     window:{MiaHubChat:{localCall:(m,p,b)=>{copyEnv.calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot9'},proposal:{version:1}});}}},
     hubCall:(m,p)=>{copyEnv.calls.push([m,p]);return Promise.resolve({});}};
   const skills=[{name:'Report',description:'',body:'Write it.'}];
+  appFunction('approveHubBotVersion',copyEnv);
   assert.equal(await appFunction('shareBotToHubChannel',copyEnv)('other','room','local8',{skills,role:'admin'}),true);
   assert.deepEqual(JSON.parse(JSON.stringify(copyEnv.calls)),[['POST','/share',{teamId:'other',channelId:'room',localBotId:'local8',skills}],
     ['POST','/v1/teams/other/channels/room/bots/bot9/versions/1/approve']]);

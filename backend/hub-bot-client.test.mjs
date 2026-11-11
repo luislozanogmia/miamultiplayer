@@ -15,7 +15,7 @@ function fixture(t,localOwner=owner,bundleSkills=()=>[]) {
   let memberEmail=owner, active=true, fail=false;
   let identity={email:owner,subject:'user_owner',issuer:'https://clerk.miamultiplayer.com'};
   const bot={id:'local-private-id',name:'Helper',instructions:'Private instructions stay local',owner};
-  let versionAnswer=null;
+  let versionAnswer=null, definition=null;
   const client=createHubBotClient({db,dataDirectory,isOwnerActive:()=>active,bundleSkills,
     getAccountIdentity:()=>identity,
     getBot:(id,email)=>id===bot.id && email===localOwner?bot:null,listBots:email=>email===localOwner?[bot]:[],
@@ -23,11 +23,12 @@ function fixture(t,localOwner=owner,bundleSkills=()=>[]) {
       requests.push({url,options});
       if(url.endsWith('/v1/me')) return new Response(JSON.stringify({teams:[{teamId,membership:{clerk_user_id:'user_owner',email:memberEmail}}]}));
       if(fail) throw new Error('connection interrupted');
+      if(url.endsWith('/definition')) return new Response(JSON.stringify({definition}));
       const body=JSON.parse(options.body);
       if(url.endsWith('/versions')) return versionAnswer?versionAnswer():new Response(JSON.stringify({proposal:{version:1}}));
       return new Response(JSON.stringify({bot:{...body,owner_id:'user_owner'}}));
     }});
-  return {client,requests,setVersionAnswer:value=>versionAnswer=value,input:{teamId,channelId,localBotId:bot.id},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
+  return {client,requests,bot,setDefinition:value=>definition=value,setVersionAnswer:value=>versionAnswer=value,input:{teamId,channelId,localBotId:bot.id},setIdentity:value=>identity=value,setEmail:value=>memberEmail=value,setActive:value=>active=value,setFail:value=>fail=value};
 }
 
 test('sharing binds the same local and Hub account, publishes explicitly shared instructions without local identifiers, and retries one registration',async t=>{
@@ -53,6 +54,24 @@ test('sharing always forks and sends only the instructions, even when asked for 
   assert.deepEqual(Object.keys(version[0]).sort(),['instructions','mode','source']);
   assert.equal(version[0].mode,'fork');
   assert.equal(typeof f.client.sync,'undefined');
+});
+
+test('an edit made inside the company gives its copy a new version, and only when something changed',async t=>{
+  const skill={name:'Review',description:'',body:'Use the scorer.'};
+  const f=fixture(t,owner,()=>[skill]);
+  const versions=()=>f.requests.filter(r=>r.options.method==='POST' && r.url.endsWith('/versions')).map(r=>JSON.parse(r.options.body));
+  assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[]},'a bot never shared here has no copy to update');
+  assert.equal(f.requests.length,0);
+  const shared=await f.client.share(owner,f.input,'fixture.token');
+  f.setDefinition({version:1,instructions:f.bot.instructions,skills:[skill]});
+  assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[]});
+  assert.equal(versions().length,1,'the same instructions and skills are not sent again');
+  f.bot.instructions='Answer in one line';
+  f.setVersionAnswer(()=>new Response(JSON.stringify({proposal:{version:2}})));
+  assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[{channelId,botId:shared.bot.id,version:2}]});
+  assert.deepEqual(versions()[1],{mode:'fork',instructions:'Answer in one line',source:'manual',skills:[skill]});
+  assert.match(f.requests.at(-1).url,new RegExp('/channels/'+channelId+'/bots/'+shared.bot.id+'/versions$'));
+  assert.deepEqual(await f.client.update(owner,{teamId:'b'.repeat(32),localBotId:f.bot.id},'fixture.token'),{updated:[]},'another company keeps its own copy');
 });
 
 test('a copy from another company shares the skills its owner reviewed, not the library ones',async t=>{

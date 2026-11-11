@@ -376,6 +376,27 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
         .catch(error=>{throw error.code!=='bot_storage_limit' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
       return {bot:result.bot,proposal:proposed.proposal};
     },
+    // An edit made inside a company reaches that company's copy of the bot:
+    // each copy gets a new version, unless it already says the same. An edit
+    // made in Solo never calls this, so the company copy stays as shared.
+    async update(owner,input,token) {
+      owner=String(owner||'').trim().toLowerCase();
+      const updated=[];
+      for(const row of journal.copies(owner,String(input&&input.teamId||''),String(input&&input.localBotId||''))) {
+        const scope=await context(owner,{teamId:row.team_id,channelId:row.channel_id},token);
+        if(row.origin!==scope.origin || row.subject!==scope.subject) continue;
+        const bot=getBot(row.local_bot_id,scope.owner);
+        if(!bot) throw failure(404,'bot_not_found');
+        const instructions=bot.instructions || bot.role || bot.output || '',skills=sharedSkills(bundleSkills(bot));
+        const path=base(scope)+'/bots/'+row.registration_id;
+        const current=(await requestHub(scope.origin,token,'GET',path+'/definition',undefined,fetcher)).definition;
+        if(current && current.instructions===instructions && JSON.stringify(sharedSkills(current.skills))===JSON.stringify(skills)) continue;
+        const proposed=await requestHub(scope.origin,token,'POST',path+'/versions',
+          {mode:'fork',instructions,source:'manual',...(skills.length?{skills}:{})},fetcher);
+        updated.push({channelId:row.channel_id,botId:row.registration_id,version:proposed.proposal && proposed.proposal.version});
+      }
+      return {updated};
+    },
   };
 }
 function createHubBotRouter(options) {
@@ -389,6 +410,7 @@ function createHubBotRouter(options) {
   router.post('/token',handle(req=>client.refresh(req.userEmail,req.get('x-hub-token'))));
   router.post('/run',handle(req=>client.run(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
+  router.post('/update',handle(req=>client.update(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
 module.exports={stoppedReply,hubStopReason,sharedRunTimeoutMs,SHARED_RUN_HISTORY,sharedSkills,materializeSharedSkills,createHubBotClient,createHubBotRouter,requestHub,fitReply,REPLY_BYTES,runLabel,withRunLabel,withoutRunLabel};

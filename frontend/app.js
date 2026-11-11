@@ -4383,7 +4383,7 @@
     if(!styledEditOpen) body.model = model;
     if(skillsLibrary) body.skills = (editState.skills || []).filter(function(id){ return skillsLibrary.skills.some(function(skill){ return skill.id === id; }); });
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
-      if(res.status === 200) reopenAndClose();
+      if(res.status === 200){ reopenAndClose(); publishCompanyBotEdit(targetId); }
       else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
     }).catch(function(){});
   }
@@ -5547,9 +5547,27 @@
       if(role !== 'admin' || !version || !bot) return false;
       // A copy is already in the other company once shared; if approving
       // fails, an admin there approves it as for anyone's bot.
-      return hubCall('POST', '/v1/teams/' + teamId + '/channels/' + channelId + '/bots/' + bot.id + '/versions/' + version + '/approve', {}).then(function(){ refreshCompanyBots(); return true; },
+      return approveHubBotVersion(teamId, channelId, bot.id, version).then(function(){ refreshCompanyBots(); return true; },
         function(error){ if(copy) return false; throw error; });
     });
+  }
+  function approveHubBotVersion(teamId, channelId, botId, version){
+    return hubCall('POST', '/v1/teams/' + teamId + '/channels/' + channelId + '/bots/' + botId + '/versions/' + version + '/approve', {});
+  }
+  // An edit made inside a company updates that company's copy of the bot for
+  // everyone who uses it. The same edit made in Solo leaves the copy alone.
+  function publishCompanyBotEdit(localBotId){
+    if(activeWorkspaceKey.indexOf('hub_') !== 0 || !window.MiaHubChat) return Promise.resolve();
+    var teamId = activeWorkspaceKey.slice(4), admin = hubChat.membership && hubChat.membership.role === 'admin';
+    return window.MiaHubChat.localCall('POST', '/update', {teamId: teamId, localBotId: String(localBotId)}).then(function(result){
+      var updated = (result && result.updated || []).filter(function(copy){ return copy.version; });
+      if(!updated.length) return;
+      if(!admin){ showBenchToast('Saved. A company admin must approve the change before everyone gets it.'); return; }
+      return Promise.all(updated.map(function(copy){ return approveHubBotVersion(teamId, copy.channelId, copy.botId, copy.version); })).then(function(){
+        refreshCompanyBots();
+        showBenchToast('Saved and updated for everyone in the company');
+      });
+    }).catch(function(){ showBenchToast('Saved on this computer, but the company copy didn’t update. Save again to retry.'); });
   }
   function hubBotJoinedMessage(name, label, published){
     return published ? name + ' joined ' + label + '. Mention @' + name + ' to use it.'
@@ -12480,6 +12498,7 @@
       if(res.status === 200 && res.data && res.data.event){
         delete instructionCardStates[eventId];
         applyNativeEvent(res.data.event);
+        if(decision === 'accept') publishCompanyBotEdit(proposal.botId);
         return;
       }
       if(res.status === 409){
