@@ -5439,9 +5439,14 @@
     return names[0] || 'Former colleague';
   }
   // Team rows use the same 40px mark column as solo rows: a # tile for a
-  // channel, the teammate's avatar for a direct message, initials for a group.
+  // channel (its picture once it has one), the teammate's avatar for a
+  // direct message, initials for a group.
   function hubChannelMark(channel){
-    if(!hubPrivateConversation(channel))return '<span class="chat-row-mark channel" aria-hidden="true">#</span>';
+    if(!hubPrivateConversation(channel)){
+      var picture=channel.picture_at && hubChannelPictureSrc(channel);
+      return picture ? '<span class="chat-row-mark tile" aria-hidden="true"><img alt="" src="'+esc(picture)+'" /></span>'
+        : '<span class="chat-row-mark channel" aria-hidden="true">#</span>';
+    }
     if(channel.kind==='bot'){
       var bot=channel.bot||{};
       return '<span class="chat-row-mark tile" aria-hidden="true">'+agentAvatarHtml(bot.name||'Bot',String(bot.source_bot_id||bot.id||channel.id),40,null,normalizeAgentAvatarColor(bot.avatar_color),true)+'</span>';
@@ -5449,6 +5454,21 @@
     var others=hubOtherMemberIds(channel).map(hubPersonEmail).filter(Boolean);
     if(channel.kind==='dm' && others.length===1)return '<span class="chat-row-mark tile human" aria-hidden="true">'+humanAvatarContent(others[0])+'</span>';
     return '<span class="chat-row-mark tile human" aria-hidden="true">'+esc(benchMark(hubChannelTitle(channel)))+'</span>';
+  }
+  // The channel list only says when a picture was set (picture_at); the
+  // picture is its own Hub call. Fetched once per channel and picture_at,
+  // then the sidebar draws again. -> data URL, or null until it arrives
+  var hubChannelPictures={};
+  function hubChannelPictureSrc(channel){
+    var key=channel.id+':'+channel.picture_at;
+    if(key in hubChannelPictures) return hubChannelPictures[key];
+    hubChannelPictures[key]=null;
+    hubCall('GET',hubPath()+'/channels/'+channel.id+'/picture').then(function(res){
+      if(!res || !res.data) return;
+      hubChannelPictures[key]='data:'+res.mime+';base64,'+res.data;
+      renderChatSidebar();
+    }).catch(function(){});
+    return null;
   }
   function hubChannelLabel(channel){ return !channel ? '' : hubPrivateConversation(channel) ? hubChannelTitle(channel) : '# '+channel.name; }
   function hubRoom(channel){ var title=hubChannelTitle(channel); return {id:channel.id,roomId:channel.id,conversationId:channel.id,kind:'group',roomType:'group',name:title,roomName:title,members:[]}; }

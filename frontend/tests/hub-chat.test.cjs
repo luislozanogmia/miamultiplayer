@@ -675,6 +675,23 @@ test('a channel picture must be an image',async()=>{
   await assert.rejects(make({type:'application/pdf'}),/PNG, JPEG or WebP/);
   await assert.rejects(make(null),/PNG, JPEG or WebP/);
 });
+test('a channel row shows its picture once the Hub has one, fetched once per change',async()=>{
+  const calls=[];let renders=0;
+  const env={hubChannelPictures:{},hubPath:()=>'/t',renderChatSidebar:()=>{renders++;},
+    hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({mime:'image/webp',data:'AAAA'});}};
+  const src=appFunction('hubChannelPictureSrc',env);
+  const mark=appFunction('hubChannelMark',{hubPrivateConversation:()=>false,hubChannelPictureSrc:src,esc:s=>s});
+  assert.match(mark({id:'c',name:'feedback'}),/chat-row-mark channel[^>]*>#</);
+  assert.equal(calls.length,0,'no picture set, nothing fetched');
+  const channel={id:'c',name:'feedback',picture_at:100};
+  assert.match(mark(channel),/>#</,'the # tile stays until the picture arrives');
+  await new Promise(r=>setImmediate(r));
+  assert.equal(renders,1);
+  assert.match(mark(channel),/<img alt="" src="data:image\/webp;base64,AAAA" \/>/);
+  assert.equal(JSON.stringify(calls),JSON.stringify([['GET','/t/channels/c/picture']]));
+  channel.picture_at=200; mark(channel);
+  assert.equal(calls.length,2,'a new picture is fetched again');
+});
 test('the one-line prompt box submits on Enter',()=>{
   const body=source.slice(source.indexOf('  function appPrompt('),source.indexOf('\n  }\n',source.indexOf('  function appPrompt(')));
   assert.match(body,/document\.createElement\(options\.singleLine \? 'input' : 'textarea'\)/);
