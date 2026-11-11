@@ -17,9 +17,9 @@ test('Your apps shows each app with its logo, status, and a password field only 
   const oauth = ui.rowHtml({ id: 'attio', name: 'Attio', auth: 'oauth', status: 'needs_sign_in', where: 'mcp.attio.test' }, { esc });
   assert.doesNotMatch(oauth, /type="password"/);
   assert.match(oauth, /Needs sign-in/);
-  assert.match(oauth, /<button type="button" data-mcp-sign-in="attio">Sign in<\/button>/);
+  assert.match(oauth, /<button type="button" class="mcp-app-action is-primary" data-mcp-sign-in="attio">Sign in<\/button>/);
   const signingIn = ui.rowHtml({ id: 'attio', name: 'Attio', auth: 'oauth', status: 'signing_in', where: 'x' }, { esc });
-  assert.match(signingIn, /Open sign-in again<\/button><span>Finish signing in in your browser\.</);
+  assert.match(signingIn, /Finish signing in in your browser\.<[\s\S]*data-mcp-sign-in="attio">Open it again<\/button>/);
   assert.match(ui.rowHtml({ id: 'attio', name: 'Attio', auth: 'oauth', status: 'signed_in', where: 'x' }, { esc }), /Signed in<\/span>[\s\S]*Sign in again</);
   assert.match(ui.rowHtml({ id: 'attio', name: 'Attio', auth: 'oauth', status: 'needs_sign_in', signInFailed: true, where: 'x' }, { esc }), /role="alert">The sign-in didn’t finish\. Try again\.</);
   assert.doesNotMatch(needsKey, /data-mcp-sign-in/);

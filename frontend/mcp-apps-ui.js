@@ -8,7 +8,7 @@
 
   var opts = null, watching = null;
   var STATUS = {needs_key: 'Needs its key', needs_sign_in: 'Needs sign-in', signing_in: 'Signing in…', signed_in: 'Signed in'};
-  var SIGN_IN = {needs_sign_in: 'Sign in', signing_in: 'Open sign-in again', signed_in: 'Sign in again'};
+  var SIGN_IN = {needs_sign_in: 'Sign in', signing_in: 'Open it again', signed_in: 'Sign in again'};
 
   function esc(value){ return opts.esc(value == null ? '' : String(value)); }
 
@@ -18,16 +18,17 @@
 
   function rowHtml(app){
     var logo = app.logo ? '<img src="' + esc(app.logo) + '" alt="" />' : '<span class="mcp-app-initial">' + esc(app.name.charAt(0).toUpperCase()) + '</span>';
+    var signIn = '<button type="button" class="mcp-app-action' + (app.status === 'needs_sign_in' ? ' is-primary' : '') + '" data-mcp-sign-in="' + esc(app.id) + '">' + esc(SIGN_IN[app.status] || 'Sign in') + '</button>';
     return '<div class="mcp-app" data-mcp-app="' + esc(app.id) + '">'
-      + '<span class="mcp-app-logo" aria-hidden="true">' + logo + '</span>'
-      + '<div class="mcp-app-copy"><div class="mcp-app-name">' + esc(app.name) + '<span class="mcp-app-status is-' + esc(app.status) + '">' + esc(statusLabel(app)) + '</span></div>'
+      + '<div class="mcp-app-head"><span class="mcp-app-logo" aria-hidden="true">' + logo + '</span>'
+      + '<div class="mcp-app-title"><span class="mcp-app-name">' + esc(app.name) + '</span><span class="mcp-app-status is-' + esc(app.status) + '">' + esc(statusLabel(app)) + '</span></div></div>'
       + (app.description ? '<div class="mcp-app-desc">' + esc(app.description) + '</div>' : '')
       + '<div class="mcp-app-where">' + esc(app.where) + (app.docsUrl ? ' · <a href="' + esc(app.docsUrl) + '" target="_blank" rel="noopener noreferrer">Vendor page</a>' : '') + '</div>'
-      + (app.auth === 'key' ? '<form class="mcp-app-key" data-mcp-key="' + esc(app.id) + '"><input type="password" autocomplete="off" spellcheck="false" aria-label="' + esc(app.name + ' key') + '" placeholder="' + (app.status === 'needs_key' ? 'Paste its key' : 'Paste a new key to replace it') + '" /><button type="submit">Save key</button></form>' : '')
-      + (app.auth === 'oauth' ? '<div class="mcp-app-sign-in"><button type="button" data-mcp-sign-in="' + esc(app.id) + '">' + esc(SIGN_IN[app.status] || 'Sign in') + '</button>'
-        + (app.status === 'signing_in' ? '<span>Finish signing in in your browser.</span>' : '') + '</div>' : '')
-      + '<div class="mcp-app-error" role="alert">' + (app.signInFailed ? 'The sign-in didn’t finish. Try again.' : '') + '</div></div>'
-      + '<button type="button" class="mcp-app-remove" data-mcp-remove="' + esc(app.id) + '" aria-label="' + esc('Remove ' + app.name) + '">Remove</button></div>';
+      + (app.auth === 'key' ? '<form class="mcp-app-key" data-mcp-key="' + esc(app.id) + '"><input type="password" autocomplete="off" spellcheck="false" aria-label="' + esc(app.name + ' key') + '" placeholder="' + (app.status === 'needs_key' ? 'Paste its key' : 'Paste a new key to replace it') + '" /><button type="submit" class="mcp-app-action' + (app.status === 'needs_key' ? ' is-primary' : '') + '">Save key</button></form>' : '')
+      + (app.status === 'signing_in' ? '<div class="mcp-app-hint">Finish signing in in your browser.</div>' : '')
+      + '<div class="mcp-app-error" role="alert">' + (app.signInFailed ? 'The sign-in didn’t finish. Try again.' : '') + '</div>'
+      + '<div class="mcp-app-foot">' + (app.auth === 'oauth' ? signIn : '')
+      + '<button type="button" class="mcp-app-remove" data-mcp-remove="' + esc(app.id) + '" aria-label="' + esc('Remove ' + app.name) + '">Remove</button></div></div>';
   }
 
   function render(apps){
