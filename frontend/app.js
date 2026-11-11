@@ -7409,8 +7409,11 @@
     var roomId = String(event.conversationId);
     // A reply in a chat you aren't looking at still ends that bot's task, so
     // its running dot and its hold on browser tabs clear when it answers.
+    // Its local "thinking…" row goes too, as applyNativeEvent does for the
+    // open chat: left on, it came back as a stale bubble on the next open.
     if(roomId !== chatWs.activeRoomId){
       syncNativeDispatchFromEvent(event);
+      if(chatRoomState(roomId).thinking) stopChatThinking(roomId);
       renderComposerTaskControl();
     }
     if(message && message.askBeforeDo) scheduleNeedsYouRender();
@@ -16588,6 +16591,13 @@
       }
       state.historyInitialized = true;
       state.sidebarPreviewLoaded = true;
+      // The local thinking row only bridges a send to the first worker event.
+      // One that came while this chat was closed and the watch socket was
+      // down (asleep; it replays no history) is only in this page, and the
+      // chat socket below subscribes after it, so retire the row here.
+      if(state.thinking && rawEvents.some(function(event){
+        return (event.senderType === 'agent' || event.senderType === 'bot') && (Date.parse(event.createdAt) || 0) >= Number(state.thinkingSince || 0);
+      })) stopChatThinking(roomId);
       connectNativeChatSocket(roomId);
       renderChatSidebar();
       if(chatWs.activeRoomId === roomId) renderChatThread();
