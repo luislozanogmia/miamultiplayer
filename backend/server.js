@@ -8029,12 +8029,16 @@ function nativeDispatchWasStopped(dispatch) {
 // sidebar preview. Soft-delete the row and tell live clients about it.
 function removeNativeDispatchProgressEvent(dispatch) {
   askBeforeDoGate?.cancelConversation(dispatch.conversationId);
+  removeNativeDispatchEvent(dispatch, `native-dispatch-progress-${dispatch.id}`);
+}
+
+function removeNativeDispatchEvent(dispatch, clientIdempotencyKey) {
   try {
     const row = conn.prepare(
       `SELECT id FROM events
         WHERE company_id = ? AND conversation_id = ? AND client_idempotency_key = ?
           AND deleted_at IS NULL`
-    ).get(dispatch.companyId, dispatch.conversationId, `native-dispatch-progress-${dispatch.id}`);
+    ).get(dispatch.companyId, dispatch.conversationId, clientIdempotencyKey);
     if (!row) return;
     const event = nativeConversationRepository.deleteEvent({
       companyId: dispatch.companyId,
@@ -9120,7 +9124,12 @@ function recoverNativeConversationDispatches() {
     companyId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
   }));
   interruptedWork.record('chat', dispatches.map(interruptedChatEntry));
-  for (const dispatch of dispatches) removeNativeDispatchProgressEvent(dispatch);
+  for (const dispatch of dispatches) {
+    removeNativeDispatchProgressEvent(dispatch);
+    nativeConversationService.postStopNotice({
+      companyId: dispatch.companyId, conversationId: dispatch.conversationId, stoppedDispatch: dispatch, reason: 'app-closed',
+    });
+  }
   if (dispatches.length) console.log(`native dispatch recovery: held ${dispatches.length} interrupted dispatch(es)`);
 }
 
@@ -9183,9 +9192,14 @@ interruptedWork.handle('chat', {
     const dispatch = nativeConversationRepository.requeueHeldDispatch({
       companyId: ref.companyId, id: ref.dispatchId, error: interruptedWorkModule.HELD_DISPATCH_ERROR,
     });
-    nativeConversationRepository.releaseDeletedEventKey({
-      companyId: dispatch.companyId, conversationId: dispatch.conversationId, clientIdempotencyKey: `native-dispatch-progress-${dispatch.id}`,
-    });
+    // It runs again, so the chat's "Stopped when Mia closed" line goes; both
+    // keys are freed in case this run is cut off by a close too.
+    removeNativeDispatchEvent(dispatch, `native-dispatch-stop-${dispatch.id}`);
+    for (const key of ['progress', 'stop']) {
+      nativeConversationRepository.releaseDeletedEventKey({
+        companyId: dispatch.companyId, conversationId: dispatch.conversationId, clientIdempotencyKey: `native-dispatch-${key}-${dispatch.id}`,
+      });
+    }
     setImmediate(() => scheduleNativeConversationDispatch(dispatch).catch(() => {}));
   },
 });

@@ -451,6 +451,11 @@ const CRON_GUARD_SCRIPT = [
   'g and t.update({"shell_init_files":[g],"auto_source_bashrc":False})',
   // Long runs compress at the same point as chat (hermes-bot-profile.js).
   'cfg.setdefault("compression",{}).update({"enabled":True,"threshold_tokens":int(sys.argv[2]),"protect_last_n":20,"min_tail_user_messages":3})',
+  // Work cut off by a close waits for the person (interrupted-work.js).
+  // Hermes reads this switch from the main home when a chat's session
+  // reopens, whichever profile the chat runs in, so the profile line in
+  // hermes-bot-profile.js alone did not stop its own resume.
+  'cfg.setdefault("desktop",{}).setdefault("auto_continue",{})["enabled"]=False',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
