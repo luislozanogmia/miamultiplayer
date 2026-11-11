@@ -475,7 +475,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       if(row && (row.origin!==scope.origin || row.subject!==scope.subject)) return {updated:[]};
       const path='/v1/teams/'+teamId+'/market/bots/'+botId;
       const current=await requestHub(scope.origin,token,'GET',path,undefined,fetcher).catch(error=>{if(error.status===404) return null;throw error;});
-      if(!current || !current.bot || !current.bot.is_owner || !current.definition) return {updated:[]};
+      if(!current || !current.bot || !current.bot.can_publish || !current.definition) return {updated:[]};
       const instructions=bot.instructions || bot.role || bot.output || '',skills=sharedSkills(bundleSkills(bot));
       const was=current.definition;
       if(was.name===bot.name && was.instructions===instructions && JSON.stringify(sharedSkills(was.skills))===JSON.stringify(skills)) return {updated:[]};
