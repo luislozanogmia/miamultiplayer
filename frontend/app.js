@@ -8789,7 +8789,8 @@
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running'
       : row.status === 'needs' ? 'Review' : '';
     return '<button type="button" class="automations-row" data-status="' + esc(row.status) + '" data-automations-bot="' + esc(row.botId) + '" data-automations-id="' + esc(row.automationId) + '">' +
-      '<span class="automations-row-avatar">' + agentAvatarHtml(row.botName, row.botId, 24, 'static', row.color) + '</span>' +
+      '<span class="automations-row-avatar">' + agentAvatarHtml(row.botName, row.botId, 24, 'static', row.color) +
+        (row.status === 'needs' ? '<span class="automations-row-blocked">Blocked</span>' : '') + '</span>' +
       '<span><div class="automations-row-name">' + esc(automationsPage.group === 'bot' ? row.name : row.botName + ' · ' + row.name) + '</div>' +
       '<div class="automations-row-detail">' + esc(row.detail || '') + '</div></span>' +
       '<span class="automations-row-side">' + side + '</span></button>';

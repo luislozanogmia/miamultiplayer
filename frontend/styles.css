@@ -2942,8 +2942,11 @@
   .automations-row[data-status="paused"] .automations-row-avatar{opacity:.5;}
   .automations-row-name{font-size:14px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .automations-row-detail{margin-top:2px;font-size:12px;color:var(--sand-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  /* A row that needs the person says why in light red under its name. */
-  .automations-row[data-status="needs"] .automations-row-detail{color:color-mix(in srgb,var(--sand-text-danger) 80%,transparent);}
+  /* A row that needs the person has a light red Blocked tag under its bot. */
+  .automations-row[data-status="needs"]{grid-template-columns:50px minmax(0,1fr) auto;}
+  .automations-row[data-status="needs"] .automations-row-avatar{display:flex;flex-direction:column;align-items:center;gap:4px;width:auto;height:auto;}
+  .automations-row[data-status="needs"] .automations-row-avatar>img{width:26px;height:auto;flex:none;}
+  .automations-row-blocked{padding:3px 6px;border-radius:999px;font-size:11px;line-height:1;background:color-mix(in srgb,var(--sand-text-danger) 10%,transparent);color:var(--sand-text-danger);}
   .automations-row-side{font-size:12px;color:var(--sand-text-tertiary);white-space:nowrap;}
   .automations-row[data-status="running"] .automations-row-side{color:var(--sand-text-primary);}
   .automations-live{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#1d9e75;vertical-align:1px;animation:automations-live 1.6s ease-in-out infinite;}
