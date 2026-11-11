@@ -18,11 +18,12 @@ function createHubBotJournal(db) {
   const where = 'origin=? AND owner=? AND subject=? AND team_id=? AND channel_id=?';
   const getRun = (s,jobId) => db.prepare(`SELECT * FROM hub_bot_runs WHERE ${where} AND job_id=?`).get(...scope(s),jobId);
   return {
-    bind(s,bot) {
+    // `known` is the id this bot already has in the company's marketplace.
+    bind(s,bot,known) {
       return db.transaction(() => {
         const previous=db.prepare(`SELECT * FROM hub_bot_bindings WHERE ${where} AND local_bot_id=?`).get(...scope(s),String(bot.id));
         if (previous) return previous;
-        const id=randomBytes(16).toString('hex');
+        const id=known || randomBytes(16).toString('hex');
         db.prepare('INSERT INTO hub_bot_bindings VALUES (?,?,?,?,?,?,?,?)').run(...scope(s),String(bot.id),id,bot.name);
         return db.prepare(`SELECT * FROM hub_bot_bindings WHERE ${where} AND local_bot_id=?`).get(...scope(s),String(bot.id));
       })();
@@ -43,6 +44,11 @@ function createHubBotJournal(db) {
         db.prepare('INSERT INTO hub_bot_runs VALUES (?,?,?,?,?,?,?,?,\'prepared\',NULL)').run(...scope(s),job.id,job.bot_id,randomBytes(16).toString('hex'));
         return getRun(s,job.id);
       })();
+    },
+    // A marketplace bot's reply, written while this computer works on it. It
+    // has no Hub claim: the row only says a reply was left as "working".
+    marketRun(s,replyId,botId) {
+      db.prepare("INSERT OR IGNORE INTO hub_bot_runs VALUES (?,?,?,?,?,?,?,'market','prepared',NULL)").run(...scope(s),replyId,botId);
     },
     start(s,jobId) {
       return db.prepare(`UPDATE hub_bot_runs SET state='started' WHERE ${where} AND job_id=? AND state='prepared'`).run(...scope(s),jobId).changes===1;

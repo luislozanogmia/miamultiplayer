@@ -6,7 +6,9 @@ const path=require('node:path');
 const moduleSource=fs.readFileSync(path.join(__dirname,'../hub-chat.js'),'utf8');
 const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
 function transport(extra={}){const root={crypto:require('node:crypto').webcrypto,...extra};const context={window:root,TextEncoder};vm.runInNewContext(moduleSource,context);return root.MiaHubChat;}
-function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);return env[name];}
+// Helpers a function calls, loaded with it unless the test supplies its own.
+const NEEDS={refreshHubBotState:['hubChannelBots'],applyHubRows:['settleHubMarketReplies'],deliverHubMessage:['hubMentionedMarketBot'],loadCompanyBots:['updateMarketBotCopies']};
+function appFunction(name,env){if(env.hubWorkspace&&!('inHubRoom' in env))env.inHubRoom=()=>env.hubWorkspace();const start=source.indexOf('  function '+name+'(');assert.ok(start>=0,name);const first=source.slice(start,source.indexOf('\n',start));const end=/}\s*$/.test(first)?start+first.length:source.indexOf('\n  }\n',start)+4;assert.ok(end>start,name);vm.runInNewContext(source.slice(start,end),env);for(const need of NEEDS[name]||[])if(!(need in env))appFunction(need,env);return env[name];}
 test('a downloaded company bot updates only after a fresh authorized version and keeps the local revision guard',async()=>{
   const teamId='a'.repeat(32),botId='b'.repeat(32),copy={id:'local',instructions:'Old',instructionsRevision:'rev-1',marketSource:{teamId,botId,version:1}};
   const writes=[];
@@ -147,8 +149,8 @@ test('mention typing respects roster throttle and cannot trigger execution polli
   env.refreshHubBotState=appFunction('refreshHubBotState',env);
   const load=appFunction('loadMentionRoster',env);
   for(let n=0;n<20;n++)await load('channel');
-  // Channel bots, channel members and the whole team, once.
-  assert.equal(reads,3);assert.equal(executes,0);
+  // Channel bots (the two lists), channel members and the whole team, once.
+  assert.equal(reads,4);assert.equal(executes,0);
 });
 
 test('revoked roster response cannot repopulate bot identities',async()=>{
@@ -178,18 +180,18 @@ test('unshared Hub bot selection requires sharing confirmation instead of insert
 
 test('sharing a bot always gives the team its own copy, with no linked choice',async()=>{
  const shared=[];
- const env={Promise,Number,Object,chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1},chatMention:{confirmEntry:{kind:'agent',id:'local',label:'Helper'}},activeWorkspaceKey:'hub_a',hubWorkspace:()=>true,renderMentionPopover:()=>{},shareBotToHubChannel:async(...args)=>{shared.push(args);return false;},refreshHubBotState:async()=>{},insertMentionText:()=>{},closeMentionPopover:()=>{},cancelMentionConfirm:()=>{},showBenchToast:()=>{},hubBotJoinedMessage:()=>''};
+ const env={Promise,Number,Object,chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1},chatMention:{confirmEntry:{kind:'agent',id:'local',label:'Helper'}},activeWorkspaceKey:'hub_a',hubWorkspace:()=>true,renderMentionPopover:()=>{},shareBotToHubChannel:async(...args)=>{shared.push(args);return true;},refreshHubBotState:async()=>{},insertMentionText:()=>{},closeMentionPopover:()=>{},cancelMentionConfirm:()=>{},showBenchToast:()=>{},hubBotJoinedMessage:()=>''};
  appFunction('confirmMentionAdd',env)();await new Promise(r=>setImmediate(r));
- assert.deepEqual(shared,[['a','room','local']]);
+ assert.deepEqual(shared,[['a','room','local',null]]);
  const notice=appFunction('hubShareNotice',{})('Coder','Company A');
- assert.match(notice,/Company A gets|with Company A\?/);assert.match(notice,/no longer linked to your Solo Coder/);assert.match(notice,/Skills, automations and memories stay with you/);
+ assert.match(notice,/bringing Coder to Company A/);assert.match(notice,/sees its instructions and skills/);assert.match(notice,/Automations and memories stay with you/);
 });
 
 test('shared roster refreshes on the next four-second poll after another participant adds a bot',async()=>{
   const state={hubBotsAt:Date.now()-4001};let requests=0;
-  const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{requests++;return path.endsWith('/bots')?{bots:[{id:'one',name:'One'},{id:'two',name:'Two'}]}:{members:[]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
+  const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>({bots:[]})}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{requests++;return path.endsWith('/bots')?{bots:[{id:'one',name:'One',published:1},{id:'two',name:'Two',published:1}]}:{members:[]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
   await appFunction('refreshHubBotState',env)('channel',false);
-  assert.equal(requests,3);assert.equal(state.hubBots.length,2);
+  assert.equal(requests,4);assert.equal(state.hubBots.length,2);
 });
 test('server system notices render as inert system rows',()=>{
   const row=transport().message({id:'joined',sequence:9,author_type:'system',author_id:'system:bot-joined',author_email:'',body:'Helper joined the chat.',created_at:100});
@@ -200,7 +202,7 @@ test('frequent roster refresh reuses the membership directory to preserve reques
  const state={hubBotsAt:Date.now()-4001,hubDirectoryAt:Date.now(),hubMembers:[{email:'member@example.test'}],hubAvailableBots:[]};const paths=[];
  const env={Promise,Date,Number,window:{MiaHubChat:{localCall:async()=>{throw Error('directory must be cached');}}},hubWorkspace:()=>true,activeWorkspaceKey:'hub_a',chatWs:{configured:true,activeRoomId:'channel',navigationGeneration:1},chatRoomState:()=>state,hubPath:()=>'/team',hubCall:async(method,path)=>{paths.push(path);return {bots:[{id:'two',name:'Two'}]};},chatMention:{open:false},hubChat:{},chatInfo:{},hubMentionHumans:appFunction('hubMentionHumans',{mergeUserProfile:()=>{}}),renderChatHeaderBar:()=>{},renderChatThread:()=>{},renderMentionPopover:()=>{}};
  await appFunction('refreshHubBotState',env)('channel',false);
- assert.deepEqual(paths,['/team/channels/channel/bots']);assert.equal(state.mentionRoster.humans[0].email,'member@example.test');
+ assert.deepEqual(paths,['/team/channels/channel/bots','/team/channels/channel/market-bots']);assert.equal(state.mentionRoster.humans[0].email,'member@example.test');
 });
 
 // The header only counts live bots; its chip opens People and bots, the one
@@ -225,21 +227,6 @@ test('history skips pages holding only hidden shared-session messages',async()=>
  assert.deepEqual(asked,[30,20,10]);assert.equal(state.messages.length,1);assert.equal(state.historyCursor,5);assert.equal(state.historyLoading,false);
 });
 
-test('administrator approval button is visible without expanding instruction details',async()=>{
- class Element{constructor(tag){this.tag=tag;this.children=[];this.style={};this.isConnected=true;}append(n){this.children.push(n);n.parent=this;}setAttribute(){}replaceChildren(){this.children=[];}showModal(){}remove(){this.isConnected=false;}close(){}}
- const document={querySelector:()=>null,createElement:tag=>new Element(tag),body:new Element('body')};
- const window={MiaHubChat:{localCall:async()=>({pending:[]}),call:async(method,path)=>{
-   if(path.endsWith('/bots'))return {bots:[{id:'bot',name:'Pod'}]};
-   if(path.endsWith('/definition'))return {mode:'linked',definition:null,isAdmin:true};
-   if(path.endsWith('/versions'))return {versions:[{version:1,instructions:'Shared instruction'}]};
-   return {members:[]};
- }}};
- vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../hub-bot-manager.js'),'utf8'),{window,document});
- await window.MiaHubBots.open({teamId:'team',channelId:'channel',refresh:async()=>{}});
- const all=[];function visit(n){all.push(n);n.children.forEach(visit);}visit(document.body);
- const button=all.find(n=>n.tag==='button' && n.textContent==='Approve version 1');
- assert.ok(button);assert.equal(button.parent.tag,'section');
-});
 
 // Shared environment for the live-feed client functions.
 function hubEnv(overrides={}){
@@ -478,7 +465,7 @@ test('the team People and bots panel shows the channel, not Solo, data',()=>{
   const render=role=>{
     const pane={innerHTML:'',attrs:{},classList:{add(){},remove(){}},setAttribute(k,v){this.attrs[k]=v;}};
     const state={hubMembers:[{clerk_user_id:'user_other',email:'ana@example.test',role:'member'},{clerk_user_id:'user_self',email:'self@example.test',role}],
-      hubBots:[{id:'b1',name:'Helper',owner_id:'user_self',published:true},{id:'b2',name:'Writer',owner_id:'user_other',published:false,admission:{status:'pending'}}],
+      hubBots:[{id:'b1',name:'Helper',owner_id:'user_self',published:true},{id:'b2',name:'Writer',owner_id:'user_other',published:true,market:true}],
       hubAvailableBots:[{id:'l1',name:'Helper'},{id:'l2',name:'Scheduler'}]};
     const env={chatWs:{activeRoomId:'room'},hubChat:{membership:{clerk_user_id:'user_self',role}},chatRoomState:()=>state,hubChannel:()=>({name:'general'}),
       workspaceLabel:()=>'Acme',displayNameForEmail:e=>e.split('@')[0],humanAvatarInitialsHtml:()=>'',agentAvatarHtml:()=>'',String,
@@ -489,11 +476,11 @@ test('the team People and bots panel shows the channel, not Solo, data',()=>{
   assert.equal(admin.attrs['aria-label'],'People and bots');
   assert.match(member,/Acme · #general/);assert.match(member,/People in this channel/);
   assert.ok(member.indexOf('self (you)')<member.indexOf('ana<'),'you are listed first');
-  assert.match(member,/by you · live/);assert.match(member,/by ana · waiting for approval/);
+  assert.match(member,/by you</);assert.match(member,/by ana</);assert.doesNotMatch(member,/live|waiting for approval/);
   assert.equal((member.match(/data-hub-panel-remove=/g)||[]).length,1,'members remove only their own bot');
   assert.doesNotMatch(member,/data-hub-panel-review|hubPanelInvite/);
   assert.equal((admin.innerHTML.match(/data-hub-panel-remove=/g)||[]).length,2);
-  assert.match(admin.innerHTML,/data-hub-panel-review/);assert.match(admin.innerHTML,/Invite people/);
+  assert.doesNotMatch(admin.innerHTML,/data-hub-panel-review/);assert.match(admin.innerHTML,/Invite people/);
   assert.match(member,/Your bots not in this channel/);assert.match(member,/data-hub-panel-add="l2"/);assert.doesNotMatch(member,/data-hub-panel-add="l1"/);
   assert.doesNotMatch(member,/Users|Agent<|Archived/);
 });
@@ -707,55 +694,41 @@ test('a group picker says when the team is too small for a group',async()=>{
   assert.match(source,/renderPrimary\(\); filter\.focus\(\); load\(\);/);
 });
 test('an edit made inside a company updates its copy for everyone, and an edit in Solo does not',async()=>{
-  const run=async(workspace,role,updated)=>{const calls=[],toasts=[];
-    const env={activeWorkspaceKey:workspace,hubChat:{membership:{role}},refreshCompanyBots(){},showBenchToast:text=>toasts.push(text),Promise,String,
-      window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return updated?Promise.resolve({updated}):Promise.reject(new Error('offline'));}}},
-      hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
-    appFunction('approveHubBotVersion',env);
+  const run=async(workspace,updated,code)=>{const calls=[],toasts=[];let refreshed=0;
+    const env={activeWorkspaceKey:workspace,refreshCompanyBots(){refreshed++;},showBenchToast:text=>toasts.push(text),Promise,String,
+      window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return updated?Promise.resolve({updated}):Promise.reject(Object.assign(new Error('offline'),{code}));}}}};
     await appFunction('publishCompanyBotEdit',env)('local7');
-    return {calls:JSON.parse(JSON.stringify(calls)),toasts};};
-  const copy=[{channelId:'chan',botId:'bot1',version:3}];
-  assert.deepEqual((await run('solo','admin',copy)).calls,[],'a Solo edit leaves the company copy alone');
-  const admin=await run('hub_t','admin',copy);
-  assert.deepEqual(admin.calls,[['POST','/update',{teamId:'t',localBotId:'local7'}],['POST','/v1/teams/t/channels/chan/bots/bot1/versions/3/approve']]);
-  assert.match(admin.toasts[0],/updated for everyone/);
-  const member=await run('hub_t','member',copy);
-  assert.equal(member.calls.length,1);assert.match(member.toasts[0],/admin must approve/);
-  const same=await run('hub_t','admin',[]);
+    return {calls:JSON.parse(JSON.stringify(calls)),toasts,refreshed};};
+  assert.deepEqual((await run('solo',[{botId:'bot1',version:3}])).calls,[],'a Solo edit leaves the company copy alone');
+  const edited=await run('hub_t',[{botId:'bot1',version:3}]);
+  assert.deepEqual(edited.calls,[['POST','/update',{teamId:'t',localBotId:'local7'}]],'no approval follows');
+  assert.match(edited.toasts[0],/updated for everyone/);assert.equal(edited.refreshed,1);
+  const same=await run('hub_t',[]);
   assert.equal(same.calls.length,1);assert.deepEqual(same.toasts,[]);
-  assert.match((await run('hub_t','admin',null)).toasts[0],/didn’t update/);
+  assert.match((await run('hub_t',null)).toasts[0],/didn’t update/);
+  assert.match((await run('hub_t',null,'bot_name_taken')).toasts[0],/already has a bot with that name/);
   const source=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
   for(const caller of ['function saveEditCinema(','function answerInstructionCard(']){
     const start=source.indexOf(caller);assert.match(source.slice(start,start+3200),/publishCompanyBotEdit\(/);
   }
 });
-// Adding an existing bot and creating a new one share one path: an admin's
-// bot is published at once, anyone else's waits for an admin.
-test('adding a bot to a channel publishes it only when you are an admin',async()=>{
-  const run=async role=>{const calls=[];
-    const env={hubChat:{membership:{role}},hubPath:()=>'/v1/teams/t',refreshCompanyBots(){},
-      window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot1'},proposal:{version:2}});}}},
-      hubCall:(m,p)=>{calls.push([m,p]);return Promise.resolve({});}};
-    appFunction('approveHubBotVersion',env);
-    const published=await appFunction('shareBotToHubChannel',env)('t','chan','local7');
-    return {published,calls};};
-  const admin=await run('admin');
-  assert.equal(admin.published,true);
-  assert.deepEqual(JSON.parse(JSON.stringify(admin.calls)),[['POST','/share',{teamId:'t',channelId:'chan',localBotId:'local7'}],
-    ['POST','/v1/teams/t/channels/chan/bots/bot1/versions/2/approve']]);
-  const member=await run('member');
-  assert.equal(member.published,false);assert.equal(member.calls.length,1);
-  // A copy for another company uses your role there, not in the team on screen.
-  const copyEnv={hubChat:{membership:{role:'member'}},refreshCompanyBots(){},calls:[],
-    window:{MiaHubChat:{localCall:(m,p,b)=>{copyEnv.calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot9'},proposal:{version:1}});}}},
-    hubCall:(m,p)=>{copyEnv.calls.push([m,p]);return Promise.resolve({});}};
-  const skills=[{name:'Report',description:'',body:'Write it.'}];
-  appFunction('approveHubBotVersion',copyEnv);
-  assert.equal(await appFunction('shareBotToHubChannel',copyEnv)('other','room','local8',{skills,role:'admin'}),true);
-  assert.deepEqual(JSON.parse(JSON.stringify(copyEnv.calls)),[['POST','/share',{teamId:'other',channelId:'room',localBotId:'local8',skills}],
-    ['POST','/v1/teams/other/channels/room/bots/bot9/versions/1/approve']]);
+// Adding an existing bot and creating a new one share one path, and anyone
+// in the company can do it: the bot is live at once, with no approval.
+test('adding a bot to a channel puts it live for any member',async()=>{
+  const run=async(args)=>{const calls=[];let refreshed=0;
+    const env={refreshCompanyBots(){refreshed++;},
+      window:{MiaHubChat:{localCall:(m,p,b)=>{calls.push([m,p,b]);return Promise.resolve({bot:{id:'bot1'}});}}}};
+    const live=await appFunction('shareBotToHubChannel',env)(...args);
+    return {live,refreshed,calls:JSON.parse(JSON.stringify(calls))};};
+  const plain=await run(['t','chan','local7']);
+  assert.equal(plain.live,true);assert.equal(plain.refreshed,1);
+  assert.deepEqual(plain.calls,[['POST','/share',{teamId:'t',channelId:'chan',localBotId:'local7'}]]);
+  // What the person chose on the way in travels with the share.
+  const skills=[{name:'Report',description:'',body:'Write it.'}],access={kind:'teams',team_ids:['sales']};
+  assert.deepEqual((await run(['other','room','local8',{skills,access}])).calls,[['POST','/share',{teamId:'other',channelId:'room',localBotId:'local8',skills,access}]]);
   const source=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
   assert.equal((source.match(/localCall\('POST', ?'\/share'/g)||[]).length,1,'only shareBotToHubChannel shares a bot');
+  assert.doesNotMatch(source,/\/approve'|approveHubBotVersion/);
   for(const caller of ['function addCreatedBotToTeam(','function confirmMentionAdd(']){
     const start=source.indexOf(caller);assert.match(source.slice(start,start+2500),/shareBotToHubChannel\(/);
   }
@@ -890,7 +863,7 @@ test('the company bot list refreshes once after a burst of bot changes, only for
 });
 test('an older company bot answer cannot overwrite a newer one',async()=>{
   const answers=[];let renders=0;
-  const env={activeWorkspaceKey:'hub_a',hubChat:{},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,sharedSoloBots:()=>({}),Promise,
+  const env={activeWorkspaceKey:'hub_a',hubChat:{},updateMarketBotCopies(){},renderChatSidebar(){renders+=1;},companyBotsFromChannels:(list)=>list,sharedSoloBots:()=>({}),Promise,
     window:{MiaHubChat:{teamBots:()=>new Promise((resolve)=>answers.push(resolve)),localCall:()=>Promise.resolve({bots:[]})}}};
   const load=appFunction('loadCompanyBots',env);
   const first=load(),second=load();
@@ -902,14 +875,11 @@ test('an older company bot answer cannot overwrite a newer one',async()=>{
 test('every bot change refreshes the company bot list',()=>{
   assert.match(source,/kind==='bots'\)\{\s*refreshCompanyBots\(\);/,'a channel event says the bots changed');
   const share=source.slice(source.indexOf('  function shareBotToHubChannel('),source.indexOf('  function hubBotJoinedMessage('));
-  assert.match(share,/refreshCompanyBots\(\)/,'adding a bot, and approving it');
+  assert.match(share,/refreshCompanyBots\(\)/,'adding a bot');
   const after=source.slice(source.indexOf('  function hubBotsChanged('));
   assert.match(after.slice(0,200),/refreshCompanyBots\(\);\s*return refreshHubBotState\(roomId,\s*true\)/);
-  assert.match(source,/data-hub-panel-remove'\)\)\s*\.then\(function\(\)\{ return hubBotsChanged\(roomId\); \}\)/,'removing a bot');
-  assert.doesNotMatch(source,/refresh:function\(\)\{\s*return refreshHubBotState\(/,'accepting, rejecting and approving go through the dialogs\' refresh');
-  assert.match(source,/chatWs\.activeRoomId===roomId\)return hubBotsChanged\(roomId\);/,'the admission card');
-  const manager=require('fs').readFileSync(require('path').join(__dirname,'..','hub-bot-manager.js'),'utf8');
-  assert.match(manager,/await scope\.refresh\(\)/,'the dialogs call the refresh they were given');
+  assert.match(source,/\(market \? '\/market-bots\/' : '\/bots\/'\) \+ id\)\s*\.then\(function\(\)\{ return hubBotsChanged\(roomId\); \}\)/,'removing a bot');
+  assert.match(source,/event\.kind==='market_bot_updated'\)\{\s*refreshCompanyBots\(\);/,'a new version of a company bot');
 });
 test('a version an admin\'s delete cleared reads plainly',async()=>{
   const source=require('fs').readFileSync(require('path').join(__dirname,'..','hub-chat.js'),'utf8');
@@ -929,7 +899,7 @@ test('a channel reopened during startup still gets its bot count from the reopen
   pending[0]({bots:[{id:'stale',name:'Stale',published:1}]});await first;
   assert.equal(state.hubBotRequest!==null&&state.hubBotRequest!==undefined,true,'the old request ending leaves the new one in place');
   pending[1]({bots:[{id:'deal-desk',name:'Deal Desk',published:1}]});await second;
-  assert.deepEqual(state.hubBots.map(bot=>bot.id),['deal-desk']);
+  assert.deepEqual(Array.from(state.hubBots,bot=>bot.id),['deal-desk']);
 });
 test('the @ menu names people, never an account id or email',()=>{
   const profiles={'me@example.test':{displayName:'Ana Ruiz'},'local-user@localhost':{displayName:'Local User'}};
@@ -1139,4 +1109,32 @@ test('while a team bot run is going, Mia sends a fresh sign-in token every 20 se
   assert.equal(tick,null,'no run left: it stops');
   assert.deepEqual(calls,[['POST','/token'],['POST','/token']]);
   assert.match(source,/state\.hubPendingRuns=result\.pending\|\|\[\];if\(result\.running\)keepHubRunTokensFresh\(\);/);
+});
+// A channel lists the company's bots placed in it. Bots from before the
+// marketplace stay only while they are live, and never twice.
+test('a channel lists marketplace bots first and keeps only live older bots',()=>{
+  const bots=appFunction('hubChannelBots',{Object})(
+    [{id:'old',name:'Old',published:1},{id:'waiting',name:'Waiting',published:0},{id:'m1',name:'Dup',published:1}],
+    [{id:'m1',name:'Market',shared_by:'user_a'}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(bots)),[{id:'m1',name:'Market',shared_by:'user_a',published:true,market:true,owner_id:'user_a'},{id:'old',name:'Old',published:1}]);
+  assert.deepEqual(Array.from(appFunction('hubChannelBots',{Object})(null,null)),[]);
+});
+// Everyone's copy of a company bot follows the company's latest version
+// without a click; your own edit is already on your computer.
+test('copies of company bots update themselves when the company has a newer version',async()=>{
+  const updates=[],paths=[];
+  const env={Promise,Number,chatWs:{botRecords:[
+      {id:'behind',marketSource:{teamId:'t',botId:'b1',version:1}},{id:'current',marketSource:{teamId:'t',botId:'b2',version:4}},
+      {id:'mine',marketSource:{teamId:'t',botId:'b3',version:1}},{id:'elsewhere',marketSource:{teamId:'other',botId:'b1',version:1}},{id:'solo'}]},
+    hubChat:{membership:{clerk_user_id:'me'}},
+    hubCall:async(method,path)=>{paths.push(method+' '+path);return {bots:[{id:'b1',latest_version:3,published_by:'ana'},{id:'b2',latest_version:4,published_by:'ana'},{id:'b3',latest_version:2,published_by:'me'}]};},
+    updateMarketBotCopy:async(teamId,latest,copy)=>{updates.push([teamId,latest.id,copy.id]);}};
+  const update=appFunction('updateMarketBotCopies',env);
+  await update('t');
+  assert.deepEqual(paths,['GET /v1/teams/t/market/bots']);
+  assert.deepEqual(updates,[['t','b1','behind']]);
+  await update('none');
+  assert.equal(paths.length,1,'no copies from that company, no request');
+  env.hubCall=async()=>{throw new Error('offline');};
+  await update('t');
 });

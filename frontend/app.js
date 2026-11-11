@@ -5136,6 +5136,49 @@
       });
     return state.hubExecutionRequest;
   }
+  // The bots of a channel: the company's bots placed in it, then any bot from
+  // before the company had its own list that is live. A bot is usable as soon
+  // as it is added; nothing waits for an admin.
+  function hubChannelBots(legacy,market){
+    var seen={};
+    var bots=(market||[]).map(function(bot){seen[bot.id]=true;return Object.assign({},bot,{published:true,market:true,owner_id:bot.shared_by});});
+    (legacy||[]).forEach(function(bot){if(bot.published && !seen[bot.id])bots.push(bot);});
+    return bots;
+  }
+  // The company bot a message asks: the first one it @mentions by name.
+  function hubMentionedMarketBot(bots,text){
+    var lower=String(text||'').toLowerCase(),found=null,at=-1;
+    (bots||[]).forEach(function(bot){
+      if(!bot.market || !bot.name)return;
+      var mention='@'+String(bot.name).toLowerCase(),index=lower.indexOf(mention);
+      while(index>=0 && /[a-z0-9_]/.test(lower.charAt(index+mention.length)))index=lower.indexOf(mention,index+1);
+      if(index>=0 && (at<0 || index<at || index===at && bot.name.length>found.name.length)){found=bot;at=index;}
+    });
+    return found;
+  }
+  // Your own Mia answers for a company bot you asked, with the company's
+  // latest version of it. The reply shows as working until it is done.
+  function askHubMarketBot(roomId,bot,sequence){
+    var replyId=window.MiaHubChat.id(),selection=chatModelSelectionMetadata(),me=hubChat.membership && hubChat.membership.clerk_user_id;
+    var job={id:replyId,channel_id:roomId,bot_name:bot.name,state:'claimed',market:true,requester_id:me,executor_id:me,created_at:Date.now()/1000};
+    trackHubDispatch(job);
+    // A reply the live feed never closes stops showing as working by itself.
+    setTimeout(function(){settleHubMarketReplies([{id:replyId,status:'failed'}]);},HUB_MARKET_RUN_MS);
+    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{}))
+      .then(function(){keepHubRunTokensFresh();})
+      .catch(function(error){
+        trackHubDispatch(Object.assign({},job,{state:'failed'}));
+        showBenchToast(bot.name+' couldn’t start: '+hubActionError(error,'try again.'));
+      });
+  }
+  var HUB_MARKET_RUN_MS=10*60*1000;
+  // A company bot's reply that is no longer "working" ends its run here.
+  function settleHubMarketReplies(rows){
+    (rows||[]).forEach(function(row){
+      var job=row && hubChat.dispatches && hubChat.dispatches[row.id];
+      if(job && job.market && row.status!=='working')trackHubDispatch(Object.assign({},job,{state:row.status==='failed'?'failed':'done'}));
+    });
+  }
   function refreshHubBotState(roomId,force){
     if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
@@ -5147,7 +5190,9 @@
     var refreshDirectory=force || !state.hubDirectoryAt || Date.now()-state.hubDirectoryAt>=60000;
     state.hubBotRequestGeneration=generation;
     var request=state.hubBotRequest=Promise.all([
-      hubCall('GET',hubPath()+'/channels/'+roomId+'/bots'),
+      Promise.all([hubCall('GET',hubPath()+'/channels/'+roomId+'/bots').catch(function(){return {bots:[]};}),
+        hubCall('GET',hubPath()+'/channels/'+roomId+'/market-bots').catch(function(){return {bots:[]};})])
+        .then(function(lists){return {bots:hubChannelBots(lists[0].bots,lists[1].bots)};}),
       // The channel's own members; a Hub without per-channel membership
       // answers 404 here, and then every team member is in every channel.
       refreshDirectory ? hubCall('GET',hubPath()+'/channels/'+roomId+'/members').catch(function(error){
@@ -5158,7 +5203,6 @@
       refreshDirectory ? hubCall('GET',hubPath()+'/members').catch(function(){return {members:hubChat.members||[]};}) : Promise.resolve({members:hubChat.members||[]})
     ]).then(function(results){
       if(workspace!==activeWorkspaceKey || roomId!==chatWs.activeRoomId || generation!==chatWs.navigationGeneration || chatWs.configured===false)return;
-      var previousAdmissions=JSON.stringify((state.hubBots||[]).map(function(b){return b.admission;}));
       state.hubBots=results[0].bots||[];
       // A channel with no member list of its own is open to the whole team.
       if(refreshDirectory && !(results[1].members||[]).length)results[1].members=results[3].members||[];
@@ -5167,7 +5211,7 @@
       state.mentionRoster={humans:hubMentionHumans(results[1].members||[],results[3].members||[]),
         agents:state.hubBots.filter(function(bot){return !!bot.published;}).map(function(bot){return {id:bot.id,name:bot.name,principalType:'bot',inChat:true};}),
         privateAgents:[],notInChatAgents:(results[2].bots||[]).filter(function(bot){return !names[bot.name.toLowerCase()];}),loading:false};
-      renderChatHeaderBar();if(previousAdmissions!==JSON.stringify(state.hubBots.map(function(b){return b.admission;})))renderChatThread();if(chatMention.open)renderMentionPopover();
+      renderChatHeaderBar();if(chatMention.open)renderMentionPopover();
       if(chatInfo.open && chatInfo.mode==='agents')renderChatInfoPane();
     }).catch(function(){/* Human transport reports its own access/connectivity state. */}).finally(function(){if(state.hubBotRequest===request)state.hubBotRequest=null;});
     return request;
@@ -5532,46 +5576,31 @@
     showBenchToast('Describe the bot for ' + target.label + '. It joins the channel when you activate it.');
   }
   // The one way a bot joins a shared channel, whether it already existed or
-  // was just created: it is shared into the channel and, when you are a team
-  // admin, published right away. Anyone else's bot waits for an admin.
-  // -> Promise<true when published>
-  // A copy for another company brings its
-  // reviewed skills and your role in that company.
+  // was just created: it goes into the company's bots and into the channel,
+  // live at once. `copy` carries what the person chose when adding it: who
+  // can use it, and for a copy to another company its reviewed skills.
+  // -> Promise<true>
   function shareBotToHubChannel(teamId, channelId, localBotId, copy){
     var body = {teamId: teamId, channelId: channelId, localBotId: String(localBotId)};
-    if(copy) body.skills = copy.skills;
-    return window.MiaHubChat.localCall('POST', '/share', body).then(function(result){
-      var version = result && result.proposal && result.proposal.version, bot = result && result.bot;
-      refreshCompanyBots();
-      var role = copy ? copy.role : hubChat.membership && hubChat.membership.role;
-      if(role !== 'admin' || !version || !bot) return false;
-      // A copy is already in the other company once shared; if approving
-      // fails, an admin there approves it as for anyone's bot.
-      return approveHubBotVersion(teamId, channelId, bot.id, version).then(function(){ refreshCompanyBots(); return true; },
-        function(error){ if(copy) return false; throw error; });
-    });
-  }
-  function approveHubBotVersion(teamId, channelId, botId, version){
-    return hubCall('POST', '/v1/teams/' + teamId + '/channels/' + channelId + '/bots/' + botId + '/versions/' + version + '/approve', {});
+    if(copy && copy.skills) body.skills = copy.skills;
+    if(copy && copy.access) body.access = copy.access;
+    return window.MiaHubChat.localCall('POST', '/share', body).then(function(){ refreshCompanyBots(); return true; });
   }
   // An edit made inside a company updates that company's copy of the bot for
-  // everyone who uses it. The same edit made in Solo leaves the copy alone.
+  // everyone who uses it, at once. The same edit made in Solo leaves the copy alone.
   function publishCompanyBotEdit(localBotId){
     if(activeWorkspaceKey.indexOf('hub_') !== 0 || !window.MiaHubChat) return Promise.resolve();
-    var teamId = activeWorkspaceKey.slice(4), admin = hubChat.membership && hubChat.membership.role === 'admin';
-    return window.MiaHubChat.localCall('POST', '/update', {teamId: teamId, localBotId: String(localBotId)}).then(function(result){
-      var updated = (result && result.updated || []).filter(function(copy){ return copy.version; });
-      if(!updated.length) return;
-      if(!admin){ showBenchToast('Saved. A company admin must approve the change before everyone gets it.'); return; }
-      return Promise.all(updated.map(function(copy){ return approveHubBotVersion(teamId, copy.channelId, copy.botId, copy.version); })).then(function(){
-        refreshCompanyBots();
-        showBenchToast('Saved and updated for everyone in the company');
-      });
-    }).catch(function(){ showBenchToast('Saved on this computer, but the company copy didn’t update. Save again to retry.'); });
+    return window.MiaHubChat.localCall('POST', '/update', {teamId: activeWorkspaceKey.slice(4), localBotId: String(localBotId)}).then(function(result){
+      if(!(result && result.updated || []).length) return;
+      refreshCompanyBots();
+      showBenchToast('Saved and updated for everyone in the company');
+    }).catch(function(error){
+      showBenchToast(error && error.code === 'bot_name_taken' ? 'Saved on this computer. The company already has a bot with that name, so its copy keeps the old one.'
+        : 'Saved on this computer, but the company copy didn’t update. Save again to retry.');
+    });
   }
-  function hubBotJoinedMessage(name, label, published){
-    return published ? name + ' joined ' + label + '. Mention @' + name + ' to use it.'
-      : name + ' was added to ' + label + '. A company admin must approve it in Bot versions & runs before it can reply.';
+  function hubBotJoinedMessage(name, label){
+    return name + ' joined ' + label + '. Mention @' + name + ' to use it.';
   }
   function addCreatedBotToTeam(created, conversation, target){
     var name = String(created.name || 'Bot');
@@ -5580,7 +5609,7 @@
       var channel = hubChannel(target.channelId);
       if(channel) openHubChannel(channel);
       refreshHubBotState(target.channelId, true);
-      showBenchToast(hubBotJoinedMessage(name, target.label, published));
+      showBenchToast(hubBotJoinedMessage(name, target.label));
     }).catch(function(error){
       showBenchToast(name + ' was created, but it could not join ' + target.label + ': ' + (error && error.message || 'add it from People and bots in the channel.'));
       loadChatRoom(conversation.id, 'agent', created.name);
@@ -5970,6 +5999,7 @@
   function loadCompanyBots(){
     var workspace=activeWorkspaceKey;
     var request=hubChat.companyBotsRequest=Number(hubChat.companyBotsRequest||0)+1;
+    updateMarketBotCopies(workspace.slice(4));
     return window.MiaHubChat.teamBots(workspace.slice(4)).then(function(results){
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
@@ -5978,7 +6008,7 @@
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
   }
-  // A bot was added, removed, accepted, approved or rejected. A burst of those
+  // A bot was added, removed or updated. A burst of those
   // is one request, and it is dropped if the team changes while it waits.
   function refreshCompanyBots(){
     if(!hubWorkspace())return;
@@ -6062,7 +6092,7 @@
       shareBotToHubChannel(target.teamId,room.id,bot.id,{role:target.role}).then(function(published){
         close();
         if(activeWorkspaceKey==='hub_'+target.teamId)refreshHubBotState(room.id,true);
-        showBenchToast(hubBotJoinedMessage(bot.name,target.name+' · #'+room.name,published));
+        showBenchToast(hubBotJoinedMessage(bot.name,target.name+' · #'+room.name));
       }).catch(function(error){
         if(!overlay.isConnected)return;
         state.phase='pick'; state.error='Couldn\'t share '+bot.name+': '+(error && error.message || 'try again.'); render();
@@ -6539,6 +6569,7 @@
     rows=(rows||[]).filter(function(row){return !(row && window.MiaHubChat.isSpaceControl(row.body));});
     var state=chatRoomState(roomId);
     state.messages=window.MiaHubChat.merge(state.messages,rows);
+    settleHubMarketReplies(rows);
     var people=rows.filter(function(row){return row && row.author_type!=='bot' && row.author_type!=='system';});
     hubRememberPeople(people.map(function(row){return {id:row.author_id,email:row.author_email};}));
     // A message keeps its author's name, so it also names someone since
@@ -6669,6 +6700,8 @@
       } else if(event.kind==='read'){
         if(channel){channel.last_read=Math.max(Number(channel.last_read||0),Number(event.last_read||0));
           if(channel.last_read>=Number(channel.latest_sequence||0))channel.unread=0;else refreshChannels=true;}
+      } else if(event.kind==='market_bot_updated'){
+        refreshCompanyBots();
       } else if(event.kind==='bots'){
         refreshCompanyBots();
         if(roomId===chatWs.activeRoomId)refreshHubBotState(roomId,true);
@@ -6809,7 +6842,7 @@
     return Promise.resolve({status:201});
   }
   function deliverHubMessage(roomId,local){
-    var workspace=activeWorkspaceKey, state=chatRoomState(roomId);
+    var workspace=activeWorkspaceKey, state=chatRoomState(roomId), asked=null;
     local.pending=true;local.sendFailed=false;local.sendError='';
     var threadRoot=local.threadRoot ? hubSequence(local.threadRoot) : null;
     var attachment=local.hubAttachmentId ? Promise.resolve(local.hubAttachmentId) : local.hubUpload
@@ -6818,6 +6851,8 @@
       : Promise.resolve(null);
     return attachment.then(function(attachmentId){
       var body={id:local.hubMessageId,text:local.body};
+      asked=hubMentionedMarketBot(state.hubBots,local.body);
+      if(asked)body.market_bot_id=asked.id;
       if(threadRoot)body.threadRoot=threadRoot;
       if(attachmentId)body.attachmentId=attachmentId;
       return hubCall('POST',hubPath()+'/channels/'+roomId+'/messages',body);
@@ -6832,6 +6867,7 @@
       }
       (result.dispatches||[]).forEach(function(job){trackHubDispatch({id:job.id,channel_id:roomId,bot_name:job.bot_name,state:'pending'});});
       if(result.dispatches && result.dispatches.length)pollHubBots(roomId,true);
+      if(asked)askHubMarketBot(roomId,asked,result.sequence);
       renderChatSidebar();if(chatWs.activeRoomId===roomId)renderChatThread();
       return {status:201};
     }).catch(function(error){
@@ -11351,7 +11387,10 @@
       if(chatTaskStopPending[taskId]) return Promise.resolve(false);
       chatTaskStopPending[taskId] = true;
       renderComposerTaskControl();
-      return hubCall('POST', hubPath() + '/channels/' + hubRun.roomId + '/bot-dispatches/' + taskId + '/cancel', {}).then(function(){
+      // A company bot you asked runs on this computer, so it stops here.
+      var stopping = hubChat.dispatches[taskId].market ? window.MiaHubChat.localCall('POST', '/stop', {replyId: taskId})
+        : hubCall('POST', hubPath() + '/channels/' + hubRun.roomId + '/bot-dispatches/' + taskId + '/cancel', {});
+      return stopping.then(function(){
         delete chatTaskStopPending[taskId];
         trackHubDispatch(Object.assign({}, hubChat.dispatches[taskId], {state: 'cancelled'}));
         renderComposerTaskControl();
@@ -13018,14 +13057,6 @@
   // only Delete applies (no thread-on-thread). opts.footerHtml: extra markup
   // (thread pill / thread box) appended inside the body column, below the
   // text — only ever passed for main-timeline rows.
-  document.addEventListener('click',function(event){
-    var button=event.target.closest('[data-hub-admission-action]');
-    if(!button || !hubWorkspace())return;
-    var roomId=chatWs.activeRoomId,workspace=activeWorkspaceKey;
-    window.MiaHubBots.decide({teamId:workspace.slice(4),channelId:roomId,
-      refresh:function(){if(activeWorkspaceKey===workspace && chatWs.activeRoomId===roomId)return hubBotsChanged(roomId);}},
-      button.getAttribute('data-bot-id'),Number(button.getAttribute('data-version')),button.getAttribute('data-hub-admission-action'),button);
-  });
   // The bots this room can @: a company channel's own bots, else Mia's bots.
   function roomMentionBots(){
     if(hubWorkspace()){
@@ -13064,15 +13095,9 @@
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
+      // A row from when bringing a bot was a request an admin answered.
       if(m.hubBotRequest && hubWorkspace()){
-        var request=m.hubBotRequest;
-        var roster=chatRoomState(chatWs.activeRoomId).hubBots;
-        if(Array.isArray(roster)){
-          var current=roster.find(function(bot){return bot.id===request.id;});
-          if(current && current.admission)request=current.admission;
-          else if(!current)return '<div class="chat-msg-system"><p>Bot sharing request removed.</p></div>';
-        }
-        return window.MiaHubBots.admissionHtml(request,displayNameForEmail(request.requester_email));
+        return '<div class="chat-msg-system"><p>' + esc(displayNameForEmail(m.hubBotRequest.requester_email)) + (m.hubBotRequest.status === 'accepted' ? ' added ' : ' asked to add ') + esc(m.hubBotRequest.name) + '.</p></div>';
       }
       if(m.hubWorkflowApproval && hubWorkspace() && window.MiaTeamWorkflowsUi){
         return '<div class="chat-msg-system twf-approval-row">' + window.MiaTeamWorkflowsUi.channelCardHtml(m.hubWorkflowApproval) + '</div>';
@@ -14748,7 +14773,7 @@
   }
 
   // A team channel lists what the Hub knows about the open channel: its
-  // people with their roles, its bots with owner and approval state, and your
+  // people with their roles, its bots with who shared them, and your
   // own bots that are not in it yet. Solo's local agent and archive stay out.
   function renderHubPeoplePane(pane){
     var roomId = chatWs.activeRoomId, state = roomId ? chatRoomState(roomId) : {};
@@ -14772,14 +14797,11 @@
         '<span class="manage-agent-description">' + esc(email) + '</span></span><span class="hub-people-role">' + (member.role === 'admin' ? 'Admin' : 'Member') + '</span></div>';
     });
     var botRows = bots.map(function(bot){
-      var rejected = bot.admission && bot.admission.status === 'rejected';
-      var status = bot.published ? 'live' : rejected ? 'rejected' : 'waiting for approval';
-      var canRemove = isTeamAdmin || bot.owner_id === me.clerk_user_id;
+      var canRemove = isTeamAdmin || bot.is_owner || bot.owner_id === me.clerk_user_id;
       return '<div class="manage-agent-row hub-bot-row"><button type="button" class="manage-agent-open" data-hub-panel-mention="' + esc(bot.id) + '">' +
         '<span class="manage-agent-avatar">' + agentAvatarHtml(bot.name, bot.id, 38, null, null, false) + '</span>' +
         '<span class="manage-agent-copy"><span class="manage-agent-name">' + esc(bot.name) + '</span>' +
-        '<span class="manage-agent-description' + (bot.published ? '' : ' hub-bot-pending') + '">by ' + esc(ownerName(bot.owner_id)) + ' · ' + status + '</span></span></button>' +
-        (!bot.published && !rejected && isTeamAdmin ? '<button type="button" class="manage-agent-section-link" data-hub-panel-review>Review</button>' : '') +
+        '<span class="manage-agent-description">by ' + esc(ownerName(bot.owner_id)) + '</span></span></button>' +
         (canRemove ? '<button type="button" class="manage-agent-section-link" data-hub-panel-remove="' + esc(bot.id) + '" aria-label="Remove ' + esc(bot.name) + ' from this channel">Remove</button>' : '') + '</div>';
     });
     var availableRows = available.map(function(bot){
@@ -14795,12 +14817,10 @@
       '<div class="manage-agents-body">' +
       (channel ? '<div class="hub-people-context">' + esc(workspaceLabel()) + ' · ' + esc(channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? hubChannelTitle(channel) : '#' + channel.name) + '</div>' : '<div class="hub-people-context">Open a channel to see its people and bots.</div>') +
       (channel ? section('People in this channel', members.length, people, isTeamAdmin ? '<button type="button" class="manage-agent-section-link" id="hubPanelInvite">Invite people</button>' : '') +
-        section('Bots in this channel', bots.length, botRows, '<button type="button" class="manage-agent-section-link" id="hubPanelVersions">Bot versions &amp; runs</button>') +
+        section('Bots in this channel', bots.length, botRows) +
         (availableRows.length ? section('Your bots not in this channel', available.length, availableRows) : '') : '') + '</div>';
     var close = el('#manageAgentsPaneClose', pane);
     if(close) close.addEventListener('click', closeManageAgentsPane);
-    var versions = el('#hubPanelVersions', pane);
-    if(versions) versions.addEventListener('click', function(){ window.MiaHubBots.open({teamId: activeWorkspaceKey.slice(4), channelId: roomId, refresh: function(){ return hubBotsChanged(roomId); }}); });
     var invite = el('#hubPanelInvite', pane);
     // Invitations, like every team membership change, live in the Admin Center.
     if(invite) invite.addEventListener('click', function(){ location.href = '/admin?workspace=' + encodeURIComponent(activeWorkspaceKey) + '#/invites'; });
@@ -14810,13 +14830,12 @@
         if(bot) insertHubMention(bot.name);
       });
     });
-    els('[data-hub-panel-review]', pane).forEach(function(button){
-      button.addEventListener('click', function(){ window.MiaHubBots.open({teamId:activeWorkspaceKey.slice(4), channelId:roomId, refresh:function(){ return hubBotsChanged(roomId); }}); });
-    });
     els('[data-hub-panel-remove]', pane).forEach(function(button){
       button.addEventListener('click', function(){
+        var id = button.getAttribute('data-hub-panel-remove');
+        var market = bots.some(function(item){ return item.id === id && item.market; });
         button.disabled = true;
-        hubCall('DELETE', hubPath() + '/channels/' + roomId + '/bots/' + button.getAttribute('data-hub-panel-remove'))
+        hubCall('DELETE', hubPath() + '/channels/' + roomId + (market ? '/market-bots/' : '/bots/') + id)
           .then(function(){ return hubBotsChanged(roomId); })
           .catch(function(){ button.disabled = false; showBenchToast('Couldn\'t remove this bot. Try again.'); });
       });
@@ -15121,7 +15140,7 @@
   // The Bot marketplace opens over the app like Settings (bot-marketplace.js).
   // Mia's shelf is the catalog (bots-catalog/ in the repo, GET /api/bots/catalog);
   // each company's shelf is the bots people brought into its channels. A bot
-  // you get is your bot everywhere (marketSource records its reviewed version).
+  // you get is your bot everywhere (marketSource records the version it has).
   function openBotStorePane(shelf){
     if(!STYLED_SKIN || !window.MiaBotMarketplace) return;
     // The native browser view covers HTML overlays, as for Settings.
@@ -15237,7 +15256,7 @@
   }
 
   // Getting a company's shared bot makes it your bot: its latest version
-  // becomes a bot of yours, with its source recorded for future reviewed updates.
+  // becomes a bot of yours, with its source recorded so it keeps up with the company.
   // -> Promise<created bot record>
   function getMarketBotCopy(teamId, bot){
     var model = selectedConnectedBotModel();
@@ -15265,9 +15284,23 @@
     });
   }
 
-  // A downloaded company bot stays at its reviewed version until its owner
-  // chooses Update. Fetch both sides again so a stale shelf cannot overwrite a
-  // newer local copy or apply an update after company access was removed.
+  // The bots you got from a company keep up with it by themselves: when the
+  // company's copy has a newer version, yours takes it. A version you
+  // published yourself is already what you have.
+  function updateMarketBotCopies(teamId){
+    var copies = (chatWs.botRecords || []).filter(function(bot){ return bot && bot.marketSource && bot.marketSource.teamId === teamId; });
+    if(!copies.length) return Promise.resolve();
+    var me = hubChat.membership && hubChat.membership.clerk_user_id;
+    return hubCall('GET', '/v1/teams/' + teamId + '/market/bots').then(function(result){
+      return copies.reduce(function(done, copy){
+        var latest = (result.bots || []).filter(function(bot){ return bot.id === copy.marketSource.botId; })[0];
+        if(!latest || latest.published_by === me || !(Number(latest.latest_version) > Number(copy.marketSource.version || 0))) return done;
+        return done.then(function(){ return updateMarketBotCopy(teamId, latest, copy); }).catch(function(){ /* The next change or company open retries. */ });
+      }, Promise.resolve());
+    }).catch(function(){ /* The next change or company open retries. */ });
+  }
+  // Fetch both sides again so a stale list cannot overwrite a newer local
+  // copy or apply an update after company access was removed.
   function updateMarketBotCopy(teamId, bot, copy){
     return hubCall('GET', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id)).then(function(result){
       var latest = result && (result.definition || result.latest) || {};
@@ -15563,7 +15596,7 @@
   }
 
   // A company bot chat's details: the same pane as a Solo bot chat, with what
-  // a member can see of someone else's bot (its approved instructions and
+  // a member can see of someone else's bot (its instructions and
   // skills, where it is) in place of the automations, which belong to its owner.
   var companyBotDefinitions = {};
   function companyBotForRoom(roomId){
@@ -15588,7 +15621,7 @@
     }
     var definition = loaded && loaded.definition;
     var about = loaded && loaded.loading ? '<div class="cip-section-empty">Loading…</div>'
-      : !definition ? '<div class="cip-section-empty">' + (loaded && loaded.failed ? 'Couldn\'t load this bot\'s instructions.' : 'An admin hasn\'t approved instructions for this bot yet.') + '</div>'
+      : !definition ? '<div class="cip-section-empty">' + (loaded && loaded.failed ? 'Couldn\'t load this bot\'s instructions.' : 'This bot has no instructions yet.') + '</div>'
       : '<details class="cip-bot-instructions"><summary>Instructions</summary><div class="cip-bot-text">' + mdLite(definition.instructions || '') + '</div></details>' +
         (definition.skills || []).map(function(skill){
           return '<details class="cip-bot-instructions"><summary>Skill: ' + esc(skill.name) + '</summary>' + (skill.description ? '<p>' + esc(skill.description) + '</p>' : '') + '<div class="cip-bot-text">' + mdLite(skill.body || '') + '</div></details>';
@@ -15601,7 +15634,7 @@
       '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
       '<div class="cip-details">' + detailsFilesHtml(fileRows) +
       '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">About this company bot</span></div>' +
-      '<div class="cip-section-empty">Runs on the requesting or approving participant\'s computer, using that participant\'s credentials' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
+      '<div class="cip-section-empty">Runs on the computer of whoever asks it, with that person\'s own apps and sign-ins' + (where ? ', in ' + where : '') + '.</div>' + about + '</section></div>';
     bindDetailsFiles(pane, fileRows);
     el('#chatInfoClose', pane).addEventListener('click', function(){
       chatInfo.open = false;
@@ -17315,6 +17348,21 @@
     } else if(inHubRoom()){
       var disclosure=el('.cmp-confirm-text',pop);
       if(disclosure)disclosure.textContent=hubShareNotice(entry.label,workspaceLabel());
+      // Who can use it: the people of this channel, or one of the company's teams.
+      var teams=hubCompanyTeams.key===activeWorkspaceKey ? hubCompanyTeams.teams : null;
+      if(!teams){
+        var key=activeWorkspaceKey;
+        hubCall('GET',hubPath()+'/company-teams').then(function(result){return result.teams||[];},function(){return [];}).then(function(list){
+          hubCompanyTeams={key:key,teams:list};
+          if(list.length && chatMention.confirmEntry===entry && key===activeWorkspaceKey)renderMentionConfirm();
+        });
+      } else if(teams.length && disclosure){
+        disclosure.insertAdjacentHTML('afterend','<label class="cmp-confirm-access">Who can use it<select data-mention-access>'
+          +'<option value="">Everyone in #'+esc(chatWs.activeLabel||'this channel')+'</option>'
+          +teams.map(function(team){return '<option value="'+esc(team.id)+'"'+(chatMention.confirmAccess===team.id?' selected':'')+'>Only the '+esc(team.name)+' team</option>';}).join('')
+          +'</select></label>');
+        el('[data-mention-access]',pop).addEventListener('change',function(event){chatMention.confirmAccess=event.target.value;});
+      }
     }
     var addBtn = el('[data-mention-confirm="add"]', pop);
     var cancelBtn = el('[data-mention-confirm="cancel"]', pop);
@@ -17322,11 +17370,13 @@
     if(cancelBtn) cancelBtn.addEventListener('mousedown', function(e){ e.preventDefault(); cancelMentionConfirm(); });
   }
 
-  // Sharing gives the team its own copy of the bot's instructions.
+  // What adding a bot to a company means, said before it happens.
   function hubShareNotice(name, team){
-    return 'Share ' + name + ' with ' + team + '? The company gets its own copy: everyone can see its instructions and use it, and it is no longer linked to your Solo ' + name + '. Skills, automations and memories stay with you. An admin approves it once.';
+    return 'You are bringing ' + name + ' to ' + team + '. Everyone who can use it sees its instructions and skills, so check they hold nothing personal. Automations and memories stay with you. Once shared, only a company admin can remove it.';
   }
+  var hubCompanyTeams={key:'',teams:null};
   function cancelMentionConfirm(){
+    chatMention.confirmAccess = '';
     chatMention.confirmEntry = null;
     chatMention.confirmBusy = false;
     renderMentionPopover();
@@ -17351,9 +17401,9 @@
       if(entry.kind!=='agent'){cancelMentionConfirm();return;}
       var workspace=activeWorkspaceKey,generation=chatWs.navigationGeneration;
       function currentHubShare(){return workspace===activeWorkspaceKey && roomId===chatWs.activeRoomId && generation===chatWs.navigationGeneration && chatWs.configured!==false;}
-      shareBotToHubChannel(workspace.slice(4),roomId,entry.id).then(function(published){
+      shareBotToHubChannel(workspace.slice(4),roomId,entry.id,chatMention.confirmAccess?{access:{kind:'teams',team_ids:[chatMention.confirmAccess]}}:null).then(function(published){
         if(!currentHubShare())return;
-        return refreshHubBotState(roomId,true).then(function(){if(!currentHubShare())return;insertMentionText(Object.assign({},entry,{inChat:true}));closeMentionPopover();showBenchToast(hubBotJoinedMessage(entry.label,chatWs.activeLabel||'this channel',published));});
+        return refreshHubBotState(roomId,true).then(function(){if(!currentHubShare())return;insertMentionText(Object.assign({},entry,{inChat:true}));closeMentionPopover();showBenchToast(hubBotJoinedMessage(entry.label,chatWs.activeLabel||'this channel'));});
       }).catch(function(error){if(currentHubShare()){showBenchToast(error.message);cancelMentionConfirm();}}).finally(function(){if(currentHubShare())chatMention.confirmBusy=false;});
       return;
     }
@@ -17638,7 +17688,7 @@
       closeMentionPopover();
       return;
     }
-    chatMention.confirmEntry = entry;
+    chatMention.confirmEntry = entry; chatMention.confirmAccess = "";
     chatMention.confirmBusy = false;
     renderMentionPopover();
   }

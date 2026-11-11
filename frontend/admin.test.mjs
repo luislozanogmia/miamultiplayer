@@ -216,36 +216,29 @@ test('team users table protects the owner and lets only the owner hand ownership
   assert.match(asAdmin, /Colleague · Owner/);
 });
 
-test('team bot roster lists every channel bot with its owner and where it lives', () => {
+test('team bot roster lists the company bots and live older bots, with owner and where each lives', () => {
   const agents = admin.teamRosterAgents([
-    {channel: {id: 'c1', name: 'ux-test', kind: 'channel'}, bots: [{id: 'b1', name: 'Astra', created_at: 1700000000,
-      admission: {requester_email: 'pat@example.com', status: 'pending'}}]},
-    {channel: {id: 'c2', name: 'dm:x:y', kind: 'dm'}, bots: [{id: 'b2', name: 'Helper', admission: {requester_email: 'member@example.test', status: 'accepted'}}]},
+    {channel: {id: 'c1', name: 'ux-test', kind: 'channel'}, bots: [{id: 'b1', name: 'Astra', created_at: 1700000000, published: 1,
+      admission: {requester_email: 'pat@example.com', status: 'accepted'}}]},
+    {channel: {id: 'c2', name: 'dm:x:y', kind: 'dm'}, bots: [{id: 'b2', name: 'Helper', owner_email: 'member@example.test', owner_display_name: 'Sam Sample', published: 1},
+      {id: 'b3', name: 'Never live', owner_email: 'member@example.test', published: null}, {id: 'm1', name: 'Twice', published: 1}]},
+  ], [
+    {id: 'm1', name: 'Scout', shared_by: 'user_member', shared_at: 1700000100, channel_ids: ['c1', 'c2', 'unknown']},
+    {id: 'm2', name: 'Retired', shared_by: 'user_member', archived_at: 1700000200},
+  ], TEAM_MEMBERS);
+  assert.deepEqual(agents.map(a => [a.name, a.owner, a.ownerName, a.status, a.departments.join(', ')]), [
+    ['Scout', 'pat@example.com', 'pat@example.com', 'Active', '#ux-test, Direct message'],
+    ['Astra', 'pat@example.com', 'pat@example.com', 'Active', '#ux-test'],
+    ['Helper', 'member@example.test', 'Sam Sample', 'Active', 'Direct message'],
   ]);
-  assert.deepEqual(agents.map(a => [a.name, a.owner, a.status, a.departments[0]]),
-    [['Astra', 'pat@example.com', 'Pending', '#ux-test'], ['Helper', 'member@example.test', 'Active', 'Direct message']]);
-  assert.equal(agents[0].createdAt, 1700000000 * 1000);
+  assert.equal(agents[0].createdAt, 1700000100 * 1000);
+  assert.equal(agents[1].createdAt, 1700000000 * 1000);
+  assert.doesNotMatch(admin.renderAgentsTable(agents), /data-agent-review|Pending/, 'nothing waits for an admin');
 });
 
-test('a bot waiting in a channel the admin is not in can be reviewed from the roster', () => {
-  // The company-wide bot list carries no admission, only whether a version is approved.
-  const agents = admin.teamRosterAgents([
-    {channel: {id: 'c3', name: 'quiet-room', kind: 'channel', visibility: 'private'}, bots: [
-      {id: 'b3', name: 'Counter', owner_email: 'member@example.test', owner_display_name: 'Sam Sample', published: null},
-      {id: 'b4', name: 'Greeter', owner_email: 'member@example.test', published: 1},
-    ]},
-  ]);
-  assert.deepEqual(agents.map(a => [a.name, a.ownerName, a.status, a.reviewChannelId]),
-    [['Counter', 'Sam Sample', 'Pending', 'c3'], ['Greeter', 'member@example.test', 'Active', '']]);
-  const html = admin.renderAgentsTable(agents);
-  assert.match(html, /<button type="button" class="btn small" data-agent-review data-bot-id="b3" data-channel-id="c3">Review<\/button>/);
-  assert.equal(html.match(/data-agent-review/g).length, 1, 'an approved bot has nothing to review');
-});
-
-test('the Admin Center loads the same bot review as channels', async () => {
+test('the Admin Center no longer loads a bot review', async () => {
   const html = await readFile(adminHtmlUrl, 'utf8');
-  assert.match(html, /<link rel="stylesheet" href="hub-bot-dialog.css" \/>/);
-  assert.ok(html.indexOf('hub-bot-manager.js') > html.indexOf('hub-chat.js') && html.indexOf('hub-bot-manager.js') < html.indexOf('admin.js'));
+  assert.doesNotMatch(html, /hub-bot-dialog\.css|hub-bot-manager\.js/);
 });
 
 test('team activity names actors and targets by email and readable actions', () => {

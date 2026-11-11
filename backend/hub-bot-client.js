@@ -39,15 +39,16 @@ function withoutRunLabel(body) {
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
 async function requestHub(origin,token,method,path,body,fetcher=fetch) {
   if(typeof token!=='string' || !/^[A-Za-z0-9_.-]+$/.test(token) || token.length>16384) throw failure(401,'hub_sign_in_required');
-  const definitionRoute=/(?:\/versions|\/definition|\/claim)$/.test(path);
+  const marketBot=/\/market\/bots(?:\/[a-f0-9]{32})?$/.test(path);
+  const definitionRoute=marketBot || /(?:\/versions|\/definition|\/claim)$/.test(path);
   const response=await fetcher(origin+path,{method,redirect:'error',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
     body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(definitionRoute?60000:15000)});
   const chunks=[];let length=0;
   const responseLimit = method==='GET' && /\/versions$/.test(path) ? 5*DEFINITION_RESPONSE_BYTES
-    : /\/(?:definition|claim)$/.test(path) ? DEFINITION_RESPONSE_BYTES : RESPONSE_BYTES;
+    : marketBot || /\/(?:definition|claim)$/.test(path) ? DEFINITION_RESPONSE_BYTES : RESPONSE_BYTES;
   for await(const chunk of response.body) {length+=chunk.length;if(length>responseLimit) throw failure(503,'hub_unavailable');chunks.push(Buffer.from(chunk));}
   const result=JSON.parse(Buffer.concat(chunks));
-  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','dispatch_cancelled','invalid_claim','bot_storage_limit'].includes(result.error)?result.error:'hub_request_failed');
+  if(!response.ok) throw failure(response.status,['not_found','reserved_bot_name','bot_name_conflict','bot_limit','idempotency_conflict','dispatch_claimed','dispatch_completed','dispatch_expired','dispatch_cancelled','invalid_claim','bot_storage_limit','bot_name_taken','bot_access_denied','reply_exists'].includes(result.error)?result.error:'hub_request_failed');
   return result;
 }
 function sharedSkills(value) {
@@ -97,7 +98,7 @@ function sharedRunTimeoutMs(runTimeoutMs, deadline, now = Date.now()) {
 }
 // Why a run stopped, as a short code in the log and a few words in the reply.
 // Neither ever carries a token or message text.
-const STOP_LABELS={time_limit:'time limit',sign_in_expired:'sign-in expired',claim_gone:'claim taken',owner_changed:'account changed',
+const STOP_LABELS={time_limit:'time limit',stopped:'stopped',sign_in_expired:'sign-in expired',claim_gone:'claim taken',owner_changed:'account changed',
   hub_unreachable:'company server unreachable',hub_refused:'company server refused it',invalid_trigger:'message not found',bot_failed:'the bot hit an error'};
 function stoppedReply(code) {
   return 'This bot could not complete the request ('+(STOP_LABELS[code]||STOP_LABELS.bot_failed)+'). Please send a new message to try again.';
@@ -110,6 +111,15 @@ function hubStopReason(error) {
   if(!status || status===429 || status>=500) return 'hub_unreachable';
   return 'hub_refused';
 }
+const INTERRUPTED_REPLY='This bot was interrupted before its reply was saved. Send a new message to try again.';
+const WORKING_REPLY='Working on it…', STOPPED_REPLY='Stopped.';
+// The Hub lets a marketplace reply change for ten minutes, so a run ends before that.
+const MARKET_RUN_MS=9*60*1000;
+// Who may use a shared bot: everyone in the channel it joins, or chosen teams.
+function shareAccess(value) {
+  const teams=value && value.kind==='teams' && Array.isArray(value.team_ids) ? value.team_ids.filter(id=>/^[a-f0-9]{32}$/.test(id||'')) : [];
+  return teams.length?{kind:'teams',team_ids:teams}:{kind:'channel'};
+}
 function stopError(code) {return Object.assign(new Error(code),{reason:code});}
 function logStop(event,code,jobId) {
   console.warn('[team-bot] '+event+': '+code+(jobId?' (run '+String(jobId).slice(0,8)+')':''));
@@ -120,7 +130,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
   // Sign-in tokens are the person's, not a channel's, and last about a minute:
   // every poll and every /token refresh replaces the account's one, and each
   // Hub call during a run reads the newest.
-  const inFlight=new Map(), runScopes=new Map(), freshTokens=new Map(), selections=new Map();
+  const inFlight=new Map(), runScopes=new Map(), freshTokens=new Map(), selections=new Map(), marketStops=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
   const accountKey=s=>JSON.stringify([s.origin,s.owner,s.subject]);
   const accountRunning=s=>[...runScopes.values()].some(other=>accountKey(other)===accountKey(s));
@@ -160,6 +170,20 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       return {unreadableFiles:[item.filename||'image']};
     }
   };
+  // The message a bot is answering and the channel's messages up to it.
+  async function asked(hub,s,triggerSequence) {
+    const triggerPage=await hub('GET',base(s)+'/messages/after/'+(triggerSequence-1));
+    const trigger=(triggerPage.messages||[]).find(row=>row.sequence===triggerSequence);
+    const history=[];let after=Math.max(0,triggerSequence-SHARED_RUN_HISTORY);
+    for(let page=0;page<6 && after<triggerSequence;page++) {
+      const result=await hub('GET',base(s)+'/messages/after/'+after);
+      history.push(...(result.messages||[]).filter(row=>row.sequence<=triggerSequence)
+        .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
+      if(!result.next || result.next<=after) break;
+      after=result.next;
+    }
+    return {trigger,history};
+  }
   function localIdentityValid(s) {
     const identity=getAccountIdentity(s.owner);
     return isOwnerActive(s.owner) && identity && identity.subject===s.subject
@@ -222,16 +246,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       finally {checking=false;}
     },checkIntervalMs);
     try {
-      const triggerPage=await hub('GET',base(s)+'/messages/after/'+(claim.triggerSequence-1));
-      const trigger=(triggerPage.messages||[]).find(row=>row.sequence===claim.triggerSequence);
-      const history=[];let after=Math.max(0,claim.triggerSequence-SHARED_RUN_HISTORY);
-      for(let page=0;page<6 && after<claim.triggerSequence;page++) {
-        const result=await hub('GET',base(s)+'/messages/after/'+after);
-        history.push(...(result.messages||[]).filter(row=>row.sequence<=claim.triggerSequence)
-          .map(row=>row.author_type==='bot'?{...row,body:withoutRunLabel(row.body)}:row));
-        if(!result.next || result.next<=after) break;
-        after=result.next;
-      }
+      const {trigger,history}=await asked(hub,s,claim.triggerSequence);
       if(controller.signal.aborted) throw controller.signal.reason;
       if(!trigger || trigger.author_type!=='user' || trigger.author_id!==claim.requesterId) throw stopError('invalid_trigger');
       // Recheck revocation immediately before invoking the existing runtime.
@@ -264,6 +279,55 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     } finally {clearTimeout(timeout);clearInterval(check);skillFilesCleanup();}
     await publish(s,journal.getRun(s,run.job_id),token());
   }
+  // A marketplace bot runs on the Mia of whoever asked, with the company's
+  // latest version of it: nobody approves a version. The reply is posted as
+  // "working" first, so the channel sees it started and the Hub refuses a
+  // second run for the same message, then changed to the answer.
+  async function answer(s,run,initialToken) {
+    const token=()=>freshTokens.get(accountKey(s))||initialToken;
+    const replies=base(s)+'/market-bots/'+run.botId+'/replies';
+    const controller=new AbortController();
+    const stopRun=code=>{if(!controller.signal.aborted) controller.abort(stopError(code));};
+    const hub=(method,route,body)=>withFreshToken(s,initialToken,used=>requestHub(s.origin,used,method,route,body,fetcher),controller.signal);
+    const timeout=setTimeout(()=>stopRun('time_limit'),Math.min(runTimeoutMs,MARKET_RUN_MS));
+    marketStops.set(run.replyId,()=>stopRun('stopped'));
+    let posted=false,text,status='done',skillFilesCleanup=()=>{};
+    try {
+      if(!localIdentityValid(s)) throw stopError('owner_changed');
+      const {bot,definition}=await hub('GET','/v1/teams/'+s.teamId+'/market/bots/'+run.botId);
+      if(!bot || !definition || !Number.isSafeInteger(definition.version) || typeof definition.instructions!=='string') throw stopError('hub_refused');
+      const {trigger,history}=await asked(hub,s,run.triggerSequence);
+      if(!trigger || trigger.author_type!=='user' || trigger.author_id!==s.subject) throw stopError('invalid_trigger');
+      journal.marketRun(s,run.replyId,run.botId);
+      await hub('POST',replies,{id:run.replyId,trigger_sequence:run.triggerSequence,body:WORKING_REPLY,status:'working'});
+      posted=true;
+      if(controller.signal.aborted) throw controller.signal.reason;
+      const preparedSkills=materializeSharedSkills(sharedSkills(definition.skills));
+      skillFilesCleanup=preparedSkills.cleanup;
+      const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills};
+      const attached=await triggerFile(s,trigger,token);
+      const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<run.triggerSequence),
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat:false},signal:controller.signal,modelSelection:run.selection||null,...attached});
+      if(controller.signal.aborted) throw controller.signal.reason;
+      text=withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName));
+      if(typeof text!=='string' || !text.trim()) throw stopError('bot_failed');
+    } catch(error) {
+      // Mia is closing: the journal keeps the reply, and the next poll closes it.
+      if(isClosing()) {log('run left for later','closing',run.replyId);return;}
+      const reason=controller.signal.aborted ? controller.signal.reason.reason : error && error.reason || 'bot_failed';
+      log('run stopped',reason,run.replyId);
+      if(!posted) return;
+      text=reason==='stopped'?STOPPED_REPLY:stoppedReply(reason);status='failed';
+    } finally {clearTimeout(timeout);marketStops.delete(run.replyId);skillFilesCleanup();}
+    await closeReply(s,run.replyId,run.botId,text,status,token());
+  }
+  // The Hub lets a reply change for ten minutes; after that it stays as it is.
+  async function closeReply(s,replyId,botId,text,status,token) {
+    try {
+      await withFreshToken(s,token,used=>requestHub(s.origin,used,'PATCH',base(s)+'/market-bots/'+botId+'/replies/'+replyId,{body:text,status},fetcher));
+    } catch(error) {log('reply not updated',error.reason||hubStopReason(error),replyId);}
+    journal.discard(s,replyId);
+  }
   function launch(s,run,token) {
     const key=runKey(s,run.job_id);
     if(inFlight.has(key) || inFlight.size>=2) return;
@@ -290,6 +354,14 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     return {origin,owner,teamId:input.teamId,teamName:String(team.name||''),channelId:input.channelId,subject:team.membership.clerk_user_id,
       memberName:team.membership.display_name||current.displayName||''};
   }
+  // The id this bot has in the company's marketplace: a bot downloaded from
+  // that company keeps the company's id, and one shared before keeps its own.
+  function marketId(s,bot) {
+    const source=bot.marketSource;
+    if(source && source.teamId===s.teamId && /^[a-f0-9]{32}$/.test(source.botId||'')) return source.botId;
+    const row=journal.copies(s.owner,s.teamId,String(bot.id))[0];
+    return row?row.registration_id:null;
+  }
   return {
     journal,
     async idle() {await Promise.all([...inFlight.values()]);},
@@ -301,11 +373,16 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       freshTokens.set(accountKey(scope),token);
       const allowed=new Set((roster.bots||[]).map(bot=>bot.id));
       for(const run of journal.unfinished(scope)) {
+        if(run.claim_id==='market') {
+          // Mia closed in the middle of this reply; it can't be picked up again.
+          if(!inFlight.has(runKey(scope,run.job_id))) await closeReply(scope,run.job_id,run.registration_id,INTERRUPTED_REPLY,'failed',token);
+          continue;
+        }
         if(!allowed.has(run.registration_id)) {journal.discard(scope,run.job_id);continue;}
         if(inFlight.has(runKey(scope,run.job_id))) continue;
         if(run.state==='started') {
           if(isHeld(run.job_id)) continue;
-          journal.saveReply(scope,run.job_id,'This bot was interrupted before its reply was saved. Send a new message to try again.');
+          journal.saveReply(scope,run.job_id,INTERRUPTED_REPLY);
           await publish(scope,journal.getRun(scope,run.job_id),token);
         } else if(run.state==='reply_ready') await publish(scope,run,token);
         else launch(scope,run,token);
@@ -355,47 +432,84 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       for(const row of journal.sharedCopies(owner)) (copies[row.local_bot_id]=copies[row.local_bot_id]||[]).push({teamId:row.team_id,registrationId:row.registration_id});
       return {bots:listBots(owner).map(bot=>({id:String(bot.id),name:bot.name,sharedAs:copies[String(bot.id)]||[]}))};
     },
-    // Sharing forks the bot: the team gets its own copy of the instructions
-    // and of its skills' text, no longer tied to the Solo bot or the library.
-    // Automations and memories stay in Solo.
+    // Adding a bot to a channel puts it in the company's marketplace, where it
+    // is live at once: nobody approves it. The company gets its own copy of
+    // the instructions and of its skills' text; automations and memories stay
+    // in Solo. A bot the company already has is only placed in the channel.
     async share(owner,input,token) {
       // Personal agents are private to their owner and never leave the machine.
       if(isPrivateAgent(String(input.localBotId||''))) throw failure(403,'agent_not_shareable');
       const scope=await context(owner,input,token);
       const bot=getBot(String(input.localBotId||''),scope.owner);
       if(!bot) throw failure(404,'bot_not_found');
-      const binding=journal.bind(scope,bot);
-      const result=await requestHub(scope.origin,token,'POST',`/v1/teams/${scope.teamId}/channels/${scope.channelId}/bots`,
-        {id:binding.registration_id,name:binding.public_name},fetcher);
-      if(!result.bot || result.bot.owner_id!==scope.subject || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
+      const known=marketId(scope,bot);
+      if(known) {
+        const placed=await requestHub(scope.origin,token,'PUT',base(scope)+'/market-bots/'+known,{},fetcher)
+          .catch(error=>{if(error.status===404) return null;throw error;});
+        if(placed) {journal.bind(scope,bot,known);return {bot:placed.bot||{id:known,name:bot.name},placed:true};}
+      }
+      const binding=journal.bind(scope,bot,known);
       // A copy from another company brings the skills its owner reviewed.
       const skills=sharedSkills(Array.isArray(input.skills)?input.skills:bundleSkills(bot));
-      // A Hub that has not been updated refuses skills and long instructions.
-      const proposed=await requestHub(scope.origin,token,'POST',base(scope)+'/bots/'+binding.registration_id+'/versions',
-        {mode:'fork',instructions:bot.instructions || bot.role || bot.output || '',source:'manual',...(skills.length?{skills}:{})},fetcher)
-        .catch(error=>{throw error.code!=='bot_storage_limit' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
-      return {bot:result.bot,proposal:proposed.proposal};
+      const result=await requestHub(scope.origin,token,'POST','/v1/teams/'+scope.teamId+'/market/bots',
+        {id:binding.registration_id,name:bot.name,avatar_color:bot.avatarColor||'',instructions:bot.instructions || bot.role || bot.output || '',
+          skills,tags:[],channel_id:scope.channelId,access:shareAccess(input.access)},fetcher)
+        .catch(error=>{throw error.code!=='bot_storage_limit' && error.code!=='bot_name_taken' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
+      if(!result.bot || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
+      return {bot:result.bot};
     },
-    // An edit made inside a company reaches that company's copy of the bot:
-    // each copy gets a new version, unless it already says the same. An edit
-    // made in Solo never calls this, so the company copy stays as shared.
+    // An edit made inside a company reaches that company's copy of the bot at
+    // once, for everyone, unless the copy already says the same. Only an owner
+    // of the company bot can change it. An edit made in Solo never calls this,
+    // so the company copy stays as shared.
     async update(owner,input,token) {
       owner=String(owner||'').trim().toLowerCase();
-      const updated=[];
-      for(const row of journal.copies(owner,String(input&&input.teamId||''),String(input&&input.localBotId||''))) {
-        const scope=await context(owner,{teamId:row.team_id,channelId:row.channel_id},token);
-        if(row.origin!==scope.origin || row.subject!==scope.subject) continue;
-        const bot=getBot(row.local_bot_id,scope.owner);
-        if(!bot) throw failure(404,'bot_not_found');
-        const instructions=bot.instructions || bot.role || bot.output || '',skills=sharedSkills(bundleSkills(bot));
-        const path=base(scope)+'/bots/'+row.registration_id;
-        const current=(await requestHub(scope.origin,token,'GET',path+'/definition',undefined,fetcher)).definition;
-        if(current && current.instructions===instructions && JSON.stringify(sharedSkills(current.skills))===JSON.stringify(skills)) continue;
-        const proposed=await requestHub(scope.origin,token,'POST',path+'/versions',
-          {mode:'fork',instructions,source:'manual',...(skills.length?{skills}:{})},fetcher);
-        updated.push({channelId:row.channel_id,botId:row.registration_id,version:proposed.proposal && proposed.proposal.version});
-      }
-      return {updated};
+      if(!owner || !isOwnerActive(owner)) throw failure(403,'account_unavailable');
+      const teamId=String(input&&input.teamId||''),bot=getBot(String(input&&input.localBotId||''),owner);
+      if(!bot) throw failure(404,'bot_not_found');
+      const row=journal.copies(owner,teamId,String(bot.id))[0];
+      const botId=marketId({owner,teamId},bot);
+      if(!botId) return {updated:[]};
+      // No channel is involved here; this only checks the person is in the company.
+      const scope=await context(owner,{teamId,channelId:row?row.channel_id:botId},token);
+      if(row && (row.origin!==scope.origin || row.subject!==scope.subject)) return {updated:[]};
+      const path='/v1/teams/'+teamId+'/market/bots/'+botId;
+      const current=await requestHub(scope.origin,token,'GET',path,undefined,fetcher).catch(error=>{if(error.status===404) return null;throw error;});
+      if(!current || !current.bot || !current.bot.is_owner || !current.definition) return {updated:[]};
+      const instructions=bot.instructions || bot.role || bot.output || '',skills=sharedSkills(bundleSkills(bot));
+      const was=current.definition;
+      if(was.name===bot.name && was.instructions===instructions && JSON.stringify(sharedSkills(was.skills))===JSON.stringify(skills)) return {updated:[]};
+      const published=await requestHub(scope.origin,token,'POST',path+'/versions',
+        {name:bot.name,avatar_color:bot.avatarColor||was.avatar_color||'',instructions,skills,tags:Array.isArray(was.tags)?was.tags:[]},fetcher);
+      return {updated:[{botId,version:published.version}]};
+    },
+    // The person asked a marketplace bot in a channel: their own Mia answers.
+    // -> {replyId}, the id the reply has in the channel.
+    async ask(owner,input,token) {
+      if(typeof runBot!=='function') throw failure(503,'bot_runtime_unavailable');
+      if(!/^[a-f0-9]{32}$/.test(input&&input.botId||'') || !/^[a-f0-9]{32}$/.test(input.replyId||'')
+        || !Number.isSafeInteger(input.triggerSequence) || input.triggerSequence<1) throw failure(400,'invalid_bot');
+      const scope=await context(owner,input,token),key=runKey(scope,input.replyId);
+      if(inFlight.has(key)) return {replyId:input.replyId};
+      if(inFlight.size>=2) throw failure(429,'bots_busy');
+      freshTokens.set(accountKey(scope),token);
+      const selection=input.modelSelection && typeof input.modelSelection==='object' ? {provider:String(input.modelSelection.provider||''),model:String(input.modelSelection.model||''),
+        reasoningEffort:input.modelSelection.reasoningEffort,speed:input.modelSelection.speed,fast:input.modelSelection.fast===true} : null;
+      const run={replyId:input.replyId,botId:input.botId,triggerSequence:input.triggerSequence,selection};
+      runScopes.set(key,scope);
+      inFlight.set(key,Promise.resolve().then(()=>answer(scope,run,token)).catch(error=>log('run failed',error && error.reason || 'unexpected',run.replyId)).finally(()=>{
+        inFlight.delete(key);runScopes.delete(key);
+        if(!accountRunning(scope)) freshTokens.delete(accountKey(scope));
+      }));
+      return {replyId:input.replyId};
+    },
+    // Stop on a marketplace bot's reply that this computer is working on.
+    stop(owner,input) {
+      owner=String(owner||'').trim().toLowerCase();
+      const key=[...runScopes.entries()].find(([key,s])=>s.owner===owner && key.endsWith(':'+String(input&&input.replyId||'')));
+      const stopRun=key && marketStops.get(input.replyId);
+      if(stopRun) stopRun();
+      return {stopped:!!stopRun};
     },
   };
 }
@@ -410,6 +524,8 @@ function createHubBotRouter(options) {
   router.post('/token',handle(req=>client.refresh(req.userEmail,req.get('x-hub-token'))));
   router.post('/run',handle(req=>client.run(req.userEmail,req.body,req.get('x-hub-token'))));
   router.post('/share',handle(req=>client.share(req.userEmail,req.body,req.get('x-hub-token'))));
+  router.post('/ask',handle(req=>client.ask(req.userEmail,req.body,req.get('x-hub-token'))));
+  router.post('/stop',handle(req=>client.stop(req.userEmail,req.body)));
   router.post('/update',handle(req=>client.update(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
