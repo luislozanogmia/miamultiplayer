@@ -18,11 +18,17 @@ function world() {
     const disk = {}, state = { revision: 0, files: {} };
     const api = async (url, opts = {}) => {
       const method = opts.method || 'GET', [pathPart, query] = url.split('?'), q = new URLSearchParams(query || '');
-      if (pathPart.endsWith('/shared-folder') && method === 'GET') return { status: 200, data: { files: Object.entries(disk).map(([p, t]) => ({ path: p, size: t.length, sha256: sha(t) })), state: JSON.parse(JSON.stringify(state)) } };
+      if (pathPart.endsWith('/shared-folder') && method === 'GET') return { status: 200, data: {
+        files: Object.entries(disk).filter(([p]) => /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(p)).map(([p, t]) => ({ path: p, size: t.length, sha256: sha(t) })),
+        skipped: Object.keys(disk).filter(p => !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(p)),
+        state: JSON.parse(JSON.stringify(state)) } };
       if (pathPart.endsWith('/shared-folder/state')) { Object.assign(state, opts.body); return { status: 200, data: { state } }; }
       if (pathPart.endsWith('/shared-folder/file')) {
         if (method === 'GET') return { status: 200, data: { contentBase64: b64(disk[q.get('path')]) } };
-        if (method === 'PUT') { disk[opts.body.path] = Buffer.from(opts.body.contentBase64, 'base64').toString(); return { status: 200, data: {} }; }
+        if (method === 'PUT') {
+          if (opts.body.exclusive && Object.hasOwn(disk, opts.body.path)) return { status: 409, data: { error: 'file_exists' } };
+          disk[opts.body.path] = Buffer.from(opts.body.contentBase64, 'base64').toString(); return { status: 200, data: {} };
+        }
         if (method === 'DELETE') { delete disk[q.get('path')]; return { status: 200, data: {} }; }
       }
       throw new Error('unexpected ' + method + ' ' + url);
@@ -33,6 +39,7 @@ function world() {
     if (url.endsWith('/folder') && method === 'GET') return { revision: hub.revision, enabled: hub.enabled, space_id: 's'.repeat(32), space_kind: 'bot',
       files: Object.entries(hub.files).map(([p, f]) => ({ path: p, ...f })) };
     if (url.endsWith('/folder/commit')) {
+      for (const file of body.put) assert.match(file.path, /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/, 'the Hub accepts every committed path');
       if (hub.raceOnCommit) { const race = hub.raceOnCommit; hub.raceOnCommit = null; race(); }
       const changedSince = body.put.map(f => f.path).filter(p => hub.files[p] && hub.files[p].revision > body.base_revision);
       if (changedSince.length) throw Object.assign(new Error('conflict'), { status: 409, code: 'folder_conflict', data: { error: 'folder_conflict', paths: changedSince } });
@@ -101,11 +108,19 @@ test('two runs changing the same file keep both: this run\'s becomes a copy, and
   ana.disk['ICP.md'] = 'v2 from Ana\'s run';
   w.hub.raceOnCommit = () => w.put('ICP.md', 'v2 from Ben\'s run');     // Ben's run lands first
   const result = await sync.push(bot);
-  assert.deepEqual(result.copies, ['ICP (Ana’s run).md']);
+  assert.equal(result.copies.length, 1);
+  assert.match(result.copies[0], /^ICP-Ana-run-[A-Za-z0-9_-]+\.md$/);
   assert.equal(ana.disk['ICP.md'], 'v2 from Ben\'s run', 'the company\'s version comes back');
-  assert.equal(ana.disk['ICP (Ana’s run).md'], 'v2 from Ana\'s run', 'nothing is overwritten');
-  assert.equal(w.hub.blobs[w.hub.files['ICP (Ana’s run).md'].file_id], 'v2 from Ana\'s run');
+  assert.equal(ana.disk[result.copies[0]], 'v2 from Ana\'s run', 'nothing is overwritten');
+  assert.equal(w.hub.blobs[w.hub.files[result.copies[0]].file_id], 'v2 from Ana\'s run');
   assert.equal(w.hub.blobs[w.hub.files['ICP.md'].file_id], 'v2 from Ben\'s run');
+  ana.disk['ICP.md'] = 'v3 from Ana';
+  w.hub.raceOnCommit = () => w.put('ICP.md', 'v3 from Ben');
+  const again = await sync.push(bot);
+  assert.equal(again.copies.length, 1);
+  assert.notEqual(again.copies[0], result.copies[0], 'a later conflict has its own copy name');
+  assert.equal(ana.disk[result.copies[0]], 'v2 from Ana\'s run', 'the first conflict copy survives');
+  assert.equal(w.hub.blobs[w.hub.files[again.copies[0]].file_id], 'v3 from Ana');
 });
 
 test('a bot without a shared folder, or with it off, syncs nothing', async () => {
@@ -116,8 +131,8 @@ test('a bot without a shared folder, or with it off, syncs nothing', async () =>
   w.hub.enabled = false; ana.disk['a.md'] = 'x';
   assert.deepEqual((await sync.pull(bot)).changed, []);
   assert.equal(await sync.push(bot), null);
-  assert.equal(conflictName('notes/plan.v2.md', 'Ben'), 'notes/plan.v2 (Ben’s run).md');
-  assert.equal(conflictName('README', ''), 'README (my run)');
+  assert.equal(conflictName('notes/plan.v2.md', 'Ben', 'abc'), 'notes/plan.v2-Ben-run-abc.md');
+  assert.equal(conflictName('README', '', 'abc'), 'README-my-run-abc');
 });
 
 test('the app pulls before a message reaches a shared-folder bot and pushes after its reply', async () => {
@@ -126,6 +141,41 @@ test('the app pulls before a message reaches a shared-folder bot and pushes afte
   assert.match(app, /var send = function\(\)\{ pullSharedFolderBeforeSend\(chatWs\.activeRoomId\)\.then\(reallySend\); \};/);
   assert.match(app, /if\(fromWorker && !isProgress\) pushSharedFolderAfterRun\(event\.conversationId\);/);
   assert.match(app, /return bot && bot\.marketSource && bot\.marketSource\.folder === true \? bot : null;/, 'only bots whose folder is on');
-  assert.match(app, /Promise\.race\(\[sync\.pull\(bot\), timeout\]\)\.catch/, 'a failed pull never blocks the message');
+  assert.match(app, /Promise\.race\(\[sync\.pull\(bot, controller\.signal\), timeout\]\)\.then/, 'a timed-out pull is aborted before the message');
+  assert.match(app, /controller\.abort\(\); resolve\(\)/);
   assert.match(html, /<script src="team-files\.js[^"]*"><\/script>\s*<script src="bot-folder-sync\.js/);
+});
+
+test('an oversized or late shared download never writes over the bot while it runs', async () => {
+  const w = world(), ana = w.computer();
+  w.put('large.bin', 'small fixture');
+  w.hub.files['large.bin'].size_bytes = 50 * 1024 * 1024 + 1;
+  const sync = createSync({ api: ana.api, hubCall: w.hubCall, teamFiles: w.teamFiles, fetch: w.fetch });
+  await assert.rejects(sync.pull(bot), /over the 50 MB limit/);
+  assert.equal(ana.disk['large.bin'], undefined);
+
+  w.hub.files['large.bin'].size_bytes = 0;
+  let release;
+  const slow = createSync({ api: ana.api, hubCall: w.hubCall, teamFiles: w.teamFiles,
+    fetch: () => new Promise(resolve => { release = resolve; }) });
+  const controller = new AbortController();
+  const pending = slow.pull(bot, controller.signal);
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  release({ ok: true, arrayBuffer: async () => new TextEncoder().encode('late bytes').buffer });
+  await assert.rejects(pending, /pull stopped/);
+  assert.equal(ana.disk['large.bin'], undefined, 'late data cannot replace the bot\'s local file');
+});
+
+test('unsupported local file names are reported while valid files still sync', async () => {
+  const w = world(), ana = w.computer();
+  ana.disk['meeting notes.md'] = 'private until renamed';
+  ana.disk['plan.md'] = 'shared';
+  const sync = createSync({ api: ana.api, hubCall: w.hubCall, teamFiles: w.teamFiles, fetch: w.fetch });
+  const result = await sync.push(bot);
+  assert.deepEqual(result.skipped, ['meeting notes.md']);
+  assert.equal(w.hub.blobs[w.hub.files['plan.md'].file_id], 'shared');
+  assert.equal(w.hub.files['meeting notes.md'], undefined);
+  const app = await import('node:fs').then(fs => fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8'));
+  assert.match(app, /result\.skipped\.length\) showBenchToast/, 'the app warns the person');
 });

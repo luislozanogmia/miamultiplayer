@@ -5702,15 +5702,19 @@
   function pullSharedFolderBeforeSend(roomId){
     var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
     if(!sync) return Promise.resolve();
-    var timeout = new Promise(function(resolve){ setTimeout(resolve, 60000); });
-    return Promise.race([sync.pull(bot), timeout]).catch(function(error){
+    var controller = new AbortController(), timer;
+    var timeout = new Promise(function(resolve){ timer = setTimeout(function(){ controller.abort(); resolve(); }, 60000); });
+    return Promise.race([sync.pull(bot, controller.signal), timeout]).then(function(result){
+      if(result && result.skipped && result.skipped.length) showBenchToast(bot.name + '\u2019s shared folder skipped files with unsupported names or sizes: ' + result.skipped.slice(0, 3).join(', ') + (result.skipped.length > 3 ? ' and more.' : '.'));
+    }).catch(function(error){
       showBenchToast('Couldn\u2019t get ' + bot.name + '\u2019s latest shared files: ' + (error && error.message || 'try again.') + ' It works from the ones on this computer.');
-    });
+    }).finally(function(){ clearTimeout(timer); });
   }
   function pushSharedFolderAfterRun(roomId){
     var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
     if(!sync || sharedFolderPushes[bot.id]) return;
     sharedFolderPushes[bot.id] = sync.push(bot).then(function(result){
+      if(result && result.skipped && result.skipped.length) showBenchToast(bot.name + '\u2019s shared folder skipped files with unsupported names or sizes: ' + result.skipped.slice(0, 3).join(', ') + (result.skipped.length > 3 ? ' and more.' : '.'));
       if(result && result.copies && result.copies.length) showBenchToast('Someone changed the same shared file meanwhile; ' + bot.name + ' kept both: ' + result.copies.join(', ') + '.');
     }, function(error){
       showBenchToast(bot.name + '\u2019s shared files didn\u2019t sync: ' + (error && error.message || 'try again.') + ' They stay on this computer and sync after the next run.');
