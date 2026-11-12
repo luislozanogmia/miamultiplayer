@@ -463,9 +463,19 @@
     input.value = focused ? url : displayUrl(url);
     input.classList.toggle('is-display-url', !focused && input.value !== url);
   }
+  // A click into the bar selects the whole address when the button comes up,
+  // not while it goes down: selecting on focus raced the click's own caret
+  // placement and left half the address selected. A drag keeps its selection.
+  var selectOnRelease = false;
+  input.addEventListener('mousedown', function () { selectOnRelease = document.activeElement !== input; });
+  input.addEventListener('mouseup', function () {
+    if (!selectOnRelease) return;
+    selectOnRelease = false;
+    if (input.selectionStart === input.selectionEnd) input.select();
+  });
   input.addEventListener('focus', function () {
     var tab = selected();
-    if (input.classList.contains('is-display-url') && tab && tab.url) { showUrl(tab.url); input.select(); }
+    if (input.classList.contains('is-display-url') && tab && tab.url) { showUrl(tab.url); if (!selectOnRelease) input.select(); }
   });
   input.addEventListener('blur', function () {
     var tab = selected();
