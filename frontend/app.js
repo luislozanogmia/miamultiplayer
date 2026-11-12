@@ -14064,13 +14064,88 @@
     var threadEvents = (state.messages || []).filter(function(rm){ return rm.threadRoot === rootId; });
     var replies = threadEvents.filter(function(rm){ return rm.system || isHumanSender(rm.sender) || displayBotBody(rm.body) || chatMessageHasAttachments(rm); });
     if(!replies.length && !(root && root.taskRoot) && !threadEvents.length) return '';
+    var pillAttrs = ' data-thread-toggle data-root-id="' + esc(rootId) + '" role="button" tabindex="0"';
     if(!replies.length){
-      return '<div class="chat-thread-pill" data-thread-toggle data-root-id="' + esc(rootId) + '">&#8618; Open thread</div>';
+      return '<div class="chat-thread-pill is-empty"' + pillAttrs + '>&#8618; Open thread</div>';
     }
     var last = replies[replies.length - 1];
-    return '<div class="chat-thread-pill" data-thread-toggle data-root-id="' + esc(rootId) + '">&#8618; ' +
-      replies.length + (replies.length === 1 ? ' reply' : ' replies') +
+    var unread = state.openThreadRoot !== rootId && chatThreadHasUnread(rootId, replies);
+    var countText = replies.length + (replies.length === 1 ? ' reply' : ' replies');
+    return '<div class="chat-thread-pill' + (unread ? ' is-unread' : '') + '"' + pillAttrs +
+      ' aria-label="' + esc(countText + (unread ? ', new replies' : '') + ', open thread') + '">&#8618; ' +
+      (unread ? '<strong>' + countText + '</strong>' : countText) +
       ' &middot; last ' + esc(chatRelTime(last.ts)) + '</div>';
+  }
+
+  // When this user last looked at each thread, keyed by root message id and
+  // kept per account and workspace like the sidebar's unread marks. A thread
+  // is unread when someone else replied after that time; your own replies
+  // never make a thread unread. Only the most recent threads are kept.
+  var CHAT_THREAD_READS_LIMIT = 500;
+  var chatThreadReads = null, chatThreadReadsKey = '';
+  function chatThreadReadsStorageKey(){
+    return 'miaChatThreadReads:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
+  }
+  function loadChatThreadReads(){
+    var key = chatThreadReadsStorageKey();
+    if(chatThreadReads && chatThreadReadsKey === key) return chatThreadReads;
+    chatThreadReadsKey = key;
+    try {
+      var raw = localStorage.getItem(key);
+      var parsed = raw ? JSON.parse(raw) : {};
+      chatThreadReads = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch(err){ chatThreadReads = {}; }
+    return chatThreadReads;
+  }
+  function saveChatThreadReads(){
+    var reads = loadChatThreadReads();
+    var ids = Object.keys(reads);
+    if(ids.length > CHAT_THREAD_READS_LIMIT){
+      ids.sort(function(a, b){ return (Number(reads[a]) || 0) - (Number(reads[b]) || 0); });
+      ids.slice(0, ids.length - CHAT_THREAD_READS_LIMIT).forEach(function(id){ delete reads[id]; });
+    }
+    try { localStorage.setItem(chatThreadReadsKey, JSON.stringify(reads)); } catch(err) {}
+  }
+  // Moves a thread's "last seen" forward (never back) and saves when it changed.
+  function markChatThreadRead(rootId, ts){
+    if(!rootId) return false;
+    var reads = loadChatThreadReads();
+    var when = Number(ts) || 0;
+    if(when <= (Number(reads[rootId]) || 0)) return false;
+    reads[rootId] = when;
+    saveChatThreadReads();
+    return true;
+  }
+  function chatMessageIsOwn(m){
+    if(!m || m.system) return false;
+    if(m.hubMessage) return hubOwnMessage(m);
+    if(m.pending || m.sendFailed) return true;
+    if(!isHumanSender(m.sender)) return false;
+    var email = parseSignedHumanBody(m.body).agent;
+    return !email || email.toLowerCase() === String(currentUser || '').toLowerCase();
+  }
+  function chatThreadHasUnread(rootId, replies){
+    var seen = Number(loadChatThreadReads()[rootId]) || 0;
+    return (replies || []).some(function(reply){
+      return !reply.system && !chatMessageIsOwn(reply) && (Number(reply.ts) || 0) > seen;
+    });
+  }
+  function newestChatThreadReplyTs(state, rootId){
+    return (state.messages || []).reduce(function(newest, m){
+      return m.threadRoot === rootId ? Math.max(newest, Number(m.ts) || 0) : newest;
+    }, 0);
+  }
+  // Re-renders just one root's pill in the main timeline, e.g. so it drops
+  // its unread look the moment its thread opens.
+  function refreshChatThreadPill(roomId, rootId){
+    var thread = el('#chatThread');
+    if(!thread || !roomId || roomId !== chatWs.activeRoomId) return;
+    var state = chatRoomState(roomId);
+    els('[data-thread-toggle]', thread).forEach(function(pill){
+      if(pill.getAttribute('data-root-id') !== rootId) return;
+      var html = chatThreadFooterHtml(state, rootId);
+      if(html) pill.outerHTML = html;
+    });
   }
 
   // Keeps the docked #chatThreadPanel in sync with the active room's
@@ -14173,6 +14248,8 @@
     panel.hidden = false;
     placeChatComposer(roomId, rootId);
     syncRightPanelSlot();
+    // Replies that arrive while the thread is open are seen as they land.
+    markChatThreadRead(rootId, newestChatThreadReplyTs(state, rootId));
     el('#ctpRoomName').textContent = chatWs.activeLabel || '';
     el('#ctpRoot').innerHTML = chatMsgHtml(root, false, {inThread: true});
     var replies = state.messages.filter(function(rm){ return rm.threadRoot === rootId && (rm.system || isHumanSender(rm.sender) || displayBotBody(rm.body) || chatMessageHasAttachments(rm)); });
@@ -14203,8 +14280,11 @@
     if(!roomId || !rootId) return;
     closeChatTasksPanel();
     closeChatUtilityPane();
-    chatRoomState(roomId).openThreadRoot = rootId;
+    var state = chatRoomState(roomId);
+    state.openThreadRoot = rootId;
+    markChatThreadRead(rootId, Math.max(Date.now(), newestChatThreadReplyTs(state, rootId)));
     syncChatThreadPanel();
+    refreshChatThreadPill(roomId, rootId);
     var input = el('#ccInput');
     if(input) input.focus();
   }
@@ -14215,8 +14295,10 @@
     var roomId = chatWs.activeRoomId;
     var state = roomId && chatRoomState(roomId);
     if(!state || !state.openThreadRoot) return false;
+    var rootId = state.openThreadRoot;
     state.openThreadRoot = null;
     syncChatThreadPanel();
+    refreshChatThreadPill(roomId, rootId);
     return true;
   }
 
@@ -20620,6 +20702,13 @@
     thread.addEventListener('click', function(e){
       var pill = e.target.closest('[data-thread-toggle]');
       if(pill) openChatThread(pill.getAttribute('data-root-id'));
+    });
+    thread.addEventListener('keydown', function(e){
+      if(e.key !== 'Enter' && e.key !== ' ') return;
+      var pill = e.target.closest && e.target.closest('[data-thread-toggle]');
+      if(!pill) return;
+      e.preventDefault();
+      openChatThread(pill.getAttribute('data-root-id'));
     });
   })();
 

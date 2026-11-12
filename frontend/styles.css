@@ -1028,8 +1028,20 @@
   .chat-sidebar-ctx-item-danger{color:var(--sand-text-danger);}
   .chat-sidebar-ctx-item-danger:hover{background:#ff263c17;color:var(--sand-text-danger);}
 
-  .chat-thread-pill{font-family:var(--styled-sans);font-size:12px;color:var(--sand-text-secondary);cursor:pointer;width:fit-content;}
-  .chat-thread-pill:hover{color:var(--sand-text-accent);text-decoration:underline;}
+  /* The thread line under a message is an always-tinted pill; unread
+     replies fill it with the accent. An empty thread stays a quiet outline
+     so only reply counts stand out. --sand-text-on-primary is the text color
+     made for accent fills in both themes (light text on the light theme's
+     blue, dark text on the developer theme's amber). */
+  .chat-thread-pill{font-family:var(--styled-sans);font-size:12px;line-height:16px;font-weight:600;color:var(--sand-text-accent);background:color-mix(in srgb,var(--sand-text-accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--sand-text-accent) 30%,transparent);border-radius:999px;padding:3px 10px;margin-top:4px;cursor:pointer;width:fit-content;}
+  .chat-thread-pill:hover{background:color-mix(in srgb,var(--sand-text-accent) 20%,transparent);text-decoration:none;}
+  .chat-thread-pill:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:2px;}
+  .chat-thread-pill.is-unread{color:var(--sand-text-on-primary);background:var(--sand-text-accent);border-color:transparent;}
+  .chat-thread-pill.is-unread:hover{background:color-mix(in srgb,var(--sand-text-accent) 88%,var(--sand-text-primary));}
+  .chat-thread-pill.is-unread::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:middle;}
+  .chat-thread-pill.is-unread strong{font-weight:700;}
+  .chat-thread-pill.is-empty{font-weight:500;color:var(--sand-text-secondary);background:transparent;border-color:var(--sand-border-default);}
+  .chat-thread-pill.is-empty:hover{color:var(--sand-text-primary);background:var(--sand-fill-ghost-hover);}
   /* 40px rounded-square mark, per component #5's avatar slot rule: an
      <img src="agent.avatar"> when the agent record carries one, else a
      flat --sand-supplementary5 (#ff309b-family) tile with initials —
@@ -2555,7 +2567,7 @@
      so a bubble keeps the whole line however small the window or pane gets. */
   body.styled-skin .chat-msg-row.is-direct.is-you{padding-left:clamp(0px,calc((100% - 420px) * .5),28%);}
   body.styled-skin .chat-msg-row.is-direct:not(.is-you){padding-right:clamp(0px,calc((100% - 420px) * .5),28%);}
-  body.styled-skin .chat-msg-row.is-direct .chat-thread-pill{font-size:12px;margin:2px 12px 0;}
+  body.styled-skin .chat-msg-row.is-direct .chat-thread-pill{font-size:12px;margin:4px 12px 0;}
   body.styled-skin .chat-date-divider{padding:8px 0 12px;font-size:12px;}
   body.styled-skin .chat-empty-hero{padding:32px 24px;}
   body.styled-skin .chat-empty-hero-mote{width:132px;}
