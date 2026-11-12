@@ -18910,6 +18910,10 @@
     // already uses for agent/bot conversations, so it doesn't need the full
     // layout back — closing the browser here would kill browser mode for no
     // reason. Every other tools-menu action still needs the full layout.
+    // Apps, Automations and Files are tabs of the browser's own strip when it
+    // is mixed: going to one is a tab switch, so the page keeps playing.
+    if(window.miaNativeBrowser && window.miaNativeBrowser.keepPlayingWhenHidden) window.miaNativeBrowser.keepPlayingWhenHidden(
+      window.MiaTabStrip.mix.on() && (action === 'apps' || action === 'automations' || action === 'artifacts'));
     if(localBrowserState.open && action !== 'web-browser' && action !== 'new-bot' && action !== 'bot-store' && action !== 'skills') closeLocalBrowser();
     if(automationsPage.open && action !== 'automations' && action !== 'new-bot' && action !== 'bot-store') closeAutomationsPage();
     if(artifactsPage.open && action !== 'artifacts' && action !== 'new-bot' && action !== 'bot-store') closeArtifactsPage();

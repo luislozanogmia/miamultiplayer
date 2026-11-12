@@ -3625,9 +3625,11 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
         // A menu or dialog over the page hides the view only for a while; the
         // page keeps playing and stays in fullscreen. Hiding it for real (the
-        // panel closes, even under a dialog) pauses it.
+        // panel closes, even under a dialog) pauses it, unless the person only
+        // moved to another tab of the same strip (Apps, Automations, Files):
+        // then it keeps playing, as a background tab does.
         coveredForMenu = wasShowing && !visible && command.menu === true;
-        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
+        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); if (command.keepPlaying !== true) holdAllMediaPausedWhileHidden(); }
         layout(); return;
       }
       if (command.action === "snapshot") {

@@ -258,6 +258,18 @@ test("a menu over a page still hides the view without pausing its media", async 
   assert.equal(h.views[0].visible, true);
 });
 
+test("moving to another tab of the strip hides the page without pausing its media", () => {
+  const h = harness();
+  h.command("new");
+  h.command("navigate", { value: "https://example.com/music" });
+  const box = { x: 0, y: 100, width: 700, height: 600 };
+  h.command("layout", { visible: true, bounds: box });
+  const scripts = h.views[0].webContents.scripts.length;
+  h.command("layout", { visible: false, panelOpen: false, keepPlaying: true, bounds: { x: 0, y: 0, width: 0, height: 0 } });
+  assert.equal(h.views[0].visible, false);
+  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs");
+});
+
 test("closing the panel while a dialog covers the page still pauses its media", () => {
   const h = harness();
   h.command("new");
