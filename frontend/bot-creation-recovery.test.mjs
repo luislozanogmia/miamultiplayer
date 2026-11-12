@@ -118,3 +118,70 @@ test('creation timeout retains its request identity and offers recovery', async 
   assert.match(flow.error, /Check creation/);
   assert.doesNotMatch(flow.error, /Nothing was created|cancelled/i);
 });
+
+// A bot made while its chat cannot open in the view on screen (a company that
+// does not hold the chat) used to leave the card on "Activating…" for good.
+function setupHarness(chatOpens){
+  const opened = [], answered = [];
+  const ctx = harness({
+    AbortController, AGENT_SETUP_TIMEOUT_MS: 100,
+    setTimeout: () => 1, clearTimeout: () => {},
+    agentSetupCreatePayload: () => ({ payload: { name: 'Fixture' } }),
+    api: async () => ({ status: 201, data: { bot: { id: 'bot-made', name: 'Fixture' } } }),
+    createNativeAgentConversation: async () => ({ id: 'chat-made', type: 'bot', metadata: { botId: 'bot-made' } }),
+    adoptCreatedBot: () => {},
+    nativeConversationInView: () => true,
+    inHubRoom: () => !chatOpens,
+    loadChatRoom: (id) => { opened.push(id); },
+    chatRoomState: () => ({}),
+    agentSetupAutomationRequest: () => '',
+    buildAgentSetupWelcomeMessage: () => ({}),
+    handOffAgentSetupAutomation: () => false,
+    answerMiaBotSetupRequest: (_room, _flow, decision) => { answered.push(decision); },
+    renderChatThread: () => {}, renderDeptAgentSelector: () => {}, renderMiaBotDraftRoom: () => {},
+    chatWs: { activeRoomId: '__bot_setup__', activeKind: 'agent-setup' },
+    AGENT_SETUP_ROOM_ID: '__bot_setup__',
+  });
+  for (const name of ['activateAgentSetup', 'clearAgentSetupRequest', 'agentSetupOnScreen', 'finishAgentSetupFailure', 'createdBotChatOpens', 'clearMiaBotDraftRequest']) {
+    const start = source.indexOf(`  function ${name}(`);
+    vm.runInContext(source.slice(start, source.indexOf('\n  function ', start + 1)), ctx);
+  }
+  return { ctx, opened, answered };
+}
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test('New bot setup opens the new chat, or offers Open bot chat when it cannot open', async () => {
+  for (const chatOpens of [true, false]) {
+    const { ctx, opened } = setupHarness(chatOpens);
+    ctx.agentSetup = { phase: 'review', draft: { name: 'Fixture' }, intent: 'fixture', requestId: 0 };
+    ctx.activateAgentSetup();
+    await settle();
+    if (chatOpens) {
+      assert.deepEqual(opened, ['chat-made']);
+      assert.equal(ctx.agentSetup.phase, 'idle');
+    } else {
+      assert.deepEqual(opened, []);
+      assert.equal(ctx.agentSetup.phase, 'review', 'the card is not left on Activating');
+      assert.match(ctx.agentSetup.error, /Open bot chat/);
+      assert.equal(ctx.agentSetup.creation.bot.id, 'bot-made');
+    }
+  }
+});
+
+test('Mia\'s bot card offers Open bot chat instead of a dead Open button when the chat cannot open', async () => {
+  for (const chatOpens of [true, false]) {
+    const { ctx, answered } = setupHarness(chatOpens);
+    const flow = { phase: 'review', draft: { name: 'Fixture' }, intent: 'fixture', requestId: 0 };
+    ctx.chatRoomState = () => ({ botDraft: flow });
+    ctx.activateMiaBotDraft('mia-room');
+    await settle();
+    if (chatOpens) {
+      assert.equal(flow.phase, 'created');
+      assert.deepEqual(answered, ['accepted']);
+    } else {
+      assert.equal(flow.phase, 'review');
+      assert.match(flow.error, /Open bot chat/);
+      assert.deepEqual(answered, [], 'the request is answered once the chat opens');
+    }
+  }
+});

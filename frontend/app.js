@@ -5637,12 +5637,9 @@
       || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
-    return window.MiaHubChat.sessionToken().then(function(token){
-      return api('/api/conversations?workspace=solo',{method:'POST',headers:{'x-hub-token':token},body:{type:'bot',name:bot.name,
-        metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}});
-    }).then(function(res){
-      var conversation=res.data && res.data.conversation;
-      if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team bot chat');
+    // Same chat bot setup makes (createNativeAgentConversation), so a bot
+    // never ends up with two.
+    return createNativeAgentConversation(bot).then(function(conversation){
       if(activeWorkspaceKey!==workspace)return;
       if(!(chatWs.nativeConversations||[]).some(function(item){return item.id===conversation.id;}))chatWs.nativeConversations.push(conversation);
       applyNativeConversationList(chatWs.nativeConversations);
@@ -13655,24 +13652,39 @@
   }
 
   function createNativeAgentConversation(agent, requestOptions){
-    // POST /api/bots provisions this native conversation on the server.
-    // Refresh before creating anything so the client never races that hook
-    // and creates a duplicate room for the same bot.
-    return loadNativeConversations(requestOptions).then(function(conversations){
+    // Only the abort signal is passed on: api() writes headers into the
+    // options it is given, and one request's workspace must not leak into
+    // the next.
+    var signal = requestOptions && requestOptions.signal;
+    function options(extra){ return Object.assign(signal ? {signal:signal} : {}, extra || {}); }
+    var workspace = activeWorkspaceKey, team = hubWorkspace();
+    return loadNativeConversations(options()).then(function(conversations){
+  // The one way to get a bot's main chat in the view on screen, used by bot
+  // setup and by opening a bot from My Bots in a company. In Solo,
+  // POST /api/bots already provisions it on the server. In a company it is
+  // your private chat with the bot, stored in Solo and tagged with the
+  // company (the server-provisioned chat sits outside the company's view).
+  // Refresh before creating anything so the client never races that hook
+  // and creates a duplicate room for the same bot.
       var existing = (conversations || []).filter(function(conversation){
         var metadata = conversation.metadata || {};
-        return conversation.type === 'bot' && metadata.botId === agent.id && nativeConversationInView(conversation);
+        return conversation.type === 'bot' && metadata.botId === agent.id && metadata.conversationMode !== 'fresh' && nativeConversationInView(conversation);
       })[0];
       if(existing) return existing;
-      return api('/api/conversations', Object.assign({}, requestOptions || {}, {method:'POST', body:{
-        type: 'bot',
-        name: agent.name,
-        metadata: {
-          botId: agent.id,
-          departments: Array.isArray(agent.departments) ? agent.departments : [],
-          source: 'bot-setup'
-        }
-      }})).then(function(res){
+      var metadata = {botId: agent.id, departments: Array.isArray(agent.departments) ? agent.departments : [], source: 'bot-setup'};
+      var made;
+      if(!team){
+        made = api('/api/conversations', options({method:'POST', body:{type:'bot', name:agent.name, metadata:metadata}}));
+      } else {
+        // The server lets a bot answer a chat outside its own workspace only
+        // when the chat says it is a team bot chat.
+        metadata.teamWorkspace = workspace;
+        metadata.source = 'team-bot-chat';
+        made = window.MiaHubChat.sessionToken().then(function(token){
+          return api('/api/conversations?workspace=solo', options({method:'POST', headers:{'x-hub-token':token}, body:{type:'bot', name:agent.name, metadata:metadata}}));
+        });
+      }
+      return made.then(function(res){
         if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
           throw new Error(res.data && (res.data.message || res.data.error) || 'native bot conversation could not be created');
         }
@@ -13686,6 +13698,13 @@
   // user must fix is missing.
   function agentSetupCreatePayload(flow, intent){
     if(flow.creation) return {payload: flow.creation.payload};
+  // A new bot's chat opens only when it belongs to the view on screen (a
+  // company shows only chats tagged with it); otherwise loadChatRoom would
+  // quietly do nothing.
+  function createdBotChatOpens(conversation){
+    return !!conversation && nativeConversationInView(conversation) && !inHubRoom(conversation.id);
+  }
+
     captureAgentSetupDraft(flow);
     var draft = flow.draft;
     if(!draft.name || !draft.instructions) return {error: 'Name and instructions are required.'};
@@ -13750,7 +13769,8 @@
     });
     createdBotRecords.push(created);
     syncChatBotRecords(createdBotRecords);
-    chatWs.nativeConversations.push(conversation);
+    // "Open bot chat" after a failed open adopts the same chat again.
+    if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })) chatWs.nativeConversations.push(conversation);
     applyNativeConversationList(chatWs.nativeConversations);
     renderChatSidebar();
     renderChatHeaderBar();
@@ -13786,11 +13806,19 @@
       agentSetup.teamTarget = null;
       clearAgentSetupRequest(false);
       agentSetup.created = created;
-      agentSetup.liveRoomId = conversation.id;
-      agentSetup.phase = 'idle';
       adoptCreatedBot(created, conversation);
       if(onCreated) try { onCreated({botId:String(created.id), name:String(created.name || '')}); } catch(_){}
-      if(teamTarget) return addCreatedBotToTeam(created, conversation, teamTarget);
+      if(teamTarget){
+        agentSetup.liveRoomId = conversation.id;
+        agentSetup.phase = 'idle';
+        return addCreatedBotToTeam(created, conversation, teamTarget);
+      }
+      // The bot exists but its chat cannot open here (say, another workspace
+      // was opened meanwhile): show the card's "Open bot chat" recovery
+      // rather than a button stuck on Activating.
+      if(!createdBotChatOpens(conversation)) return finishAgentSetupFailure(attempt, 'activating', false);
+      agentSetup.liveRoomId = conversation.id;
+      agentSetup.phase = 'idle';
       if(!agentSetupAutomationRequest(draft)) chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
       loadChatRoom(conversation.id, 'agent', created.name);
       handOffAgentSetupAutomation(conversation.id, draft);
@@ -17044,7 +17072,6 @@
       flow.conversation = result.conversation;
       flow.phase = 'created';
       answerMiaBotSetupRequest(roomId, flow, 'accepted', result.created && result.created.id);
-      adoptCreatedBot(result.created, result.conversation);
       flow.automationHandedOff = handOffAgentSetupAutomation(result.conversation.id, flow.draft);
       if(!flow.automationHandedOff) chatRoomState(result.conversation.id).localWelcome = buildAgentSetupWelcomeMessage(result.conversation.id, result.created, flow.draft);
       renderMiaBotDraftRoom(roomId);
@@ -17057,6 +17084,10 @@
   function cancelMiaBotDraft(roomId){
     var state = chatRoomState(roomId);
     var flow = state.botDraft;
+      adoptCreatedBot(result.created, result.conversation);
+      // The bot exists but its chat cannot open here: offer "Open bot chat"
+      // again instead of an Open button that does nothing.
+      if(!createdBotChatOpens(result.conversation)) return fail(botCreationRecoveryMessage(flow));
     if(!flow) return;
     if(flow.phase === 'activating' || flow.creation) return;
     clearMiaBotDraftRequest(flow, true);
@@ -17115,7 +17146,10 @@
     }
     var open = el('[data-mia-bot-open]', thread);
     if(open && flow.conversation && flow.created){
-      open.addEventListener('click', function(){ loadChatRoom(flow.conversation.id, 'agent', flow.created.name); });
+      open.addEventListener('click', function(){
+        if(!createdBotChatOpens(flow.conversation)) return showBenchToast('Couldn’t open ' + (flow.created.name || 'the bot') + '’s chat here. Open it from My Bots.');
+        loadChatRoom(flow.conversation.id, 'agent', flow.created.name);
+      });
     }
   }
 
