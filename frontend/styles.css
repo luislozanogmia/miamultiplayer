@@ -3521,8 +3521,39 @@
   body.styled-skin .automation-proposal-card{margin-top:10px;max-width:680px;}
   body.styled-skin .automation-proposal-card .agent-setup-schedule-row{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));}
   body.styled-skin .automation-proposal-card .agent-setup-schedule-row>*{width:100%;min-width:0;padding:10px 11px;border:1px solid var(--sand-border-default);border-radius:10px;background:var(--sand-bg-base);color:var(--sand-text-primary);font:inherit;box-sizing:border-box;}
-  body.styled-skin .automation-proposal-card .agent-setup-field.is-changed>span{color:var(--sand-text-primary);font-weight:600;}
+  body.styled-skin .automation-proposal-card .agent-setup-field.is-changed>span:first-child{color:var(--sand-text-primary);font-weight:600;}
   body.styled-skin .automation-proposal-was{font-size:12px;color:var(--sand-text-secondary);text-transform:none;letter-spacing:0;white-space:pre-line;}
+  /* Compact layout: label beside its field, 13px type, one closing row, so
+     the whole card fits in the chat panel without scrolling. */
+  body.styled-skin .automation-proposal-card{container-type:inline-size;gap:8px;padding:12px 14px;border-radius:14px;font-size:13px;}
+  body.styled-skin .automation-proposal-head{display:flex;align-items:center;gap:9px;margin-bottom:2px;}
+  body.styled-skin .automation-proposal-icon{display:flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;border-radius:8px;background:var(--sand-bg-base);border:1px solid var(--sand-border-default);color:var(--sand-text-primary);}
+  body.styled-skin .automation-proposal-title{font-size:13px;font-weight:600;line-height:1.25;color:var(--sand-text-primary);}
+  body.styled-skin .automation-proposal-card .agent-setup-card-intro{font-size:12px;line-height:1.3;color:var(--sand-text-secondary);}
+  body.styled-skin .automation-proposal-card .agent-setup-field{display:grid;grid-template-columns:58px minmax(0,1fr);column-gap:10px;row-gap:3px;align-items:start;}
+  body.styled-skin .automation-proposal-card .agent-setup-field>span:first-child{padding-top:7px;font-size:10px;letter-spacing:.05em;}
+  body.styled-skin .automation-proposal-card .agent-setup-field>span:first-child i{display:block;margin-top:2px;font-style:normal;text-transform:none;letter-spacing:0;color:var(--sand-text-tertiary);}
+  body.styled-skin .automation-proposal-card .agent-setup-field>:not(span:first-child){grid-column:2;}
+  body.styled-skin .automation-proposal-card .agent-setup-field input,
+  body.styled-skin .automation-proposal-card .agent-setup-field textarea,
+  body.styled-skin .automation-proposal-card .agent-setup-field select{padding:5px 8px;border-radius:8px;font-size:13px;line-height:1.35;}
+  body.styled-skin .automation-proposal-card .agent-setup-field textarea{min-height:0;max-height:118px;resize:none;field-sizing:content;}
+  body.styled-skin .automation-proposal-card .agent-setup-schedule-row{grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px;}
+  body.styled-skin .automation-proposal-card .agent-setup-schedule-row>*{height:30px;padding:0 8px;border-radius:8px;font-size:13px;}
+  body.styled-skin .automation-proposal-card .agent-setup-field>.automation-proposal-was{font-size:11px;line-height:1.3;font-weight:400;text-transform:none;letter-spacing:0;color:var(--sand-text-secondary);}
+  body.styled-skin .automation-proposal-card .agent-setup-field.is-changed>span:first-child i{font-weight:400;}
+  body.styled-skin .automation-proposal-card .agent-setup-error{font-size:12px;}
+  body.styled-skin .automation-proposal-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:2px;padding-top:9px;border-top:1px solid var(--sand-border-default);}
+  body.styled-skin .automation-proposal-foot .agent-setup-confirm-copy{font-size:13px;line-height:1.25;}
+  body.styled-skin .automation-proposal-foot .agent-setup-safety{margin-top:1px;font-size:11px;line-height:1.3;}
+  body.styled-skin .automation-proposal-foot .agent-setup-actions{flex-wrap:nowrap;margin-left:auto;}
+  body.styled-skin .automation-proposal-foot .agent-setup-actions button{min-height:30px;padding:0 12px;border-radius:8px;font-size:13px;white-space:nowrap;}
+  @container (max-width:300px){
+    body.styled-skin .automation-proposal-card .agent-setup-field{grid-template-columns:minmax(0,1fr);}
+    body.styled-skin .automation-proposal-card .agent-setup-field>:not(span:first-child){grid-column:1;}
+    body.styled-skin .automation-proposal-card .agent-setup-field>span:first-child{padding-top:0;}
+    body.styled-skin .automation-proposal-card .agent-setup-field>span:first-child i{display:inline;margin:0 0 0 4px;}
+  }
   body.styled-skin .automation-proposal-answered,
   body.styled-skin .automation-run-note{margin-top:8px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-fill-secondary);font-size:13px;line-height:1.45;color:var(--sand-text-primary);}
   body.styled-skin .automation-proposal-open{margin-left:6px;padding:0;border:0;background:none;color:var(--sand-text-primary);font:inherit;text-decoration:underline;cursor:pointer;}
