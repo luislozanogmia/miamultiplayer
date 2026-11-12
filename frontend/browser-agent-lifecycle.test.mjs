@@ -37,7 +37,7 @@ function navigationHarness() {
   };
   vm.createContext(ctx);
   vm.runInContext("var browserFollowKey='', browserFollowState=null; var chatTextDrafts={}; var chatTabStaysClosed=false; function reopenChatTab(){} function syncChatThreadPanel(){} function placeChatComposer(){}\n" +
-    "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true}, FIRST_BOT_COLORS=['#3478d4'];\n" +
+    "var agentSetupResume={}, AGENT_SETUP_UNFINISHED={intent:true, interpreting:true, review:true, activating:true};\n" +
     ['browserBotRecord', 'activeConversationOwner', 'followBrowserTab', 'swapChatDraft', 'loadChatRoom', 'selectAgentRoom', 'navigateToAgentChat',
       'normalizeAgentAvatarColor', 'agentSetupKey', 'freshAgentSetup', 'agentSetupUnfinished', 'newSetupBotColor', 'agentSetupIdentity', 'parkAgentSetup', 'startAgentSetupChat'].map(sourceFunction).join('\n') +
     "\nvar agentSetup = freshAgentSetup(null); agentSetup.phase = 'idle';", ctx);

@@ -94,6 +94,7 @@ test('Mia review card offers one Accept action and no cancel button', () => {
     agentSetupAvatarHtml: () => '<svg></svg>',
     automationIntervalParts: () => ({ value: 5, unit: 'minutes' }),
     AGENT_SETUP_ROOM_ID: 'new-bot',
+    agentColorSwatchesHtml: () => '<button data-agent-color="#8957e5"></button>',
   });
   load(context, 'agentSetupReviewHtml');
   const html = context.agentSetupReviewHtml({

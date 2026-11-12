@@ -354,7 +354,7 @@ test('bot, request mapping, and package are rolled back together when mapping pe
   database.close();
 });
 
-test('new bots are blue, red, yellow, green, then a random color, and keep a chosen color', async (t) => {
+test('new bots get a random color and keep a chosen color', async (t) => {
   const data = fixture(t);
   const server = await startServer(data, t);
   const headers = { 'x-miaos-workspace': 'multiplayer_test' };
@@ -365,10 +365,8 @@ test('new bots are blue, red, yellow, green, then a random color, and keep a cho
     return (await response.json()).bot.avatarColor;
   };
   const colors = [];
-  for (const name of ['Color One', 'Color Two', 'Color Three', 'Color Four', 'Color Five']) colors.push(await create(name));
-  assert.deepEqual(colors.slice(0, 4), ['#3478d4', '#e5484d', '#f2c230', '#3fa34d']);
-  assert.match(colors[4], /^#[0-9a-f]{6}$/);
-  assert.equal(colors.slice(0, 4).includes(colors[4]), false);
+  for (const name of ['Color One', 'Color Two', 'Color Three']) colors.push(await create(name));
+  for (const color of colors) assert.match(color, /^#[0-9a-f]{6}$/);
   assert.equal(await create('Color Chosen', { avatarColor: '#8957e5' }), '#8957e5', 'a chosen color is kept');
   const stored = databaseSnapshot(data.dbPath).bots.map((bot) => bot.avatarColor).sort();
   assert.deepEqual(stored, [...colors, '#8957e5'].sort(), 'the color is saved with the bot, so it never changes');

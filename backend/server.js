@@ -6234,14 +6234,9 @@ app.get('/api/bots/catalog/:id', requireAuth, (req, res) => {
 });
 
 // Registered after fixed multi-segment /api/bots routes so :id cannot shadow them.
-// A new bot keeps the color it is given here: the first four bots in a
-// workspace are blue, red, yellow and green, and every bot after that gets a
-// random color.
-const FIRST_BOT_COLORS = ['#3478d4', '#e5484d', '#f2c230', '#3fa34d'];
-function newBotColor(bots, random = Math.random) {
-  const taken = new Set(bots.map((bot) => normalizeAgentAvatarColor(bot.avatarColor)));
-  const next = FIRST_BOT_COLORS.find((color) => !taken.has(color));
-  if (bots.length < FIRST_BOT_COLORS.length && next) return next;
+// A new bot keeps the color it is given here: a random one when the request
+// does not send a color.
+function newBotColor(random = Math.random) {
   return colorFromHue(Math.floor(random() * 360));
 }
 
@@ -6285,7 +6280,7 @@ registerResource({
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
     record.owner = String(req.userEmail || '').toLowerCase();
     record.workspaceId = workspaceIdFromRequest(req);
-    if (!record.avatarColor) record.avatarColor = newBotColor(existing.filter((bot) => botVisibleInWorkspace(bot, req)));
+    if (!record.avatarColor) record.avatarColor = newBotColor();
     stampBotModelProvider(record, req.userEmail);
     cronSync.migrateBotAutomations(record);
   },

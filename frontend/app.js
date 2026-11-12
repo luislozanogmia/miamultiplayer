@@ -4393,10 +4393,10 @@
   // Shared swatch-grid markup for the Edit-agent cinema and compact Manage
   // Agents menu. The palette and data attributes stay identical so both
   // surfaces use the same validated color values.
-  function agentColorSwatchesHtml(currentColor, colorInputId, classPrefix){
+  function agentColorSwatchesHtml(currentColor, colorInputId, classPrefix, noAutomatic){
     classPrefix = classPrefix || 'bench-agent-color';
     var current = normalizeAgentAvatarColor(currentColor);
-    var html = '<button type="button" class="' + classPrefix + '-swatch automatic' + (!current ? ' selected' : '') + '" data-agent-color="" aria-label="Use automatic color" aria-pressed="' + (!current ? 'true' : 'false') + '" title="Automatic color">' +
+    var html = noAutomatic ? '' : '<button type="button" class="' + classPrefix + '-swatch automatic' + (!current ? ' selected' : '') + '" data-agent-color="" aria-label="Use automatic color" aria-pressed="' + (!current ? 'true' : 'false') + '" title="Automatic color">' +
       '<span class="' + classPrefix + '-auto-mark">A</span></button>';
     html += AGENT_COLOR_OPTIONS.map(function(option){
       var selected = current === option.value;
@@ -7661,22 +7661,17 @@
   function freshAgentSetup(template){
     return {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null, requestId:0, requestController:null, requestTimeoutTimer:null, requestTimedOut:false,
       key: agentSetupKey(template), templateName: template && template.name ? String(template.name) : '',
-      avatarColor: normalizeAgentAvatarColor(template && template.avatarColor) || newSetupBotColor((typeof chatWs !== 'undefined' && chatWs && chatWs.botRecords) || []),
+      avatarColor: normalizeAgentAvatarColor(template && template.avatarColor) || newSetupBotColor(),
       composer: template && template.prompt ? String(template.prompt) : ''};
   }
   function agentSetupUnfinished(flow){
     return !!flow && !!AGENT_SETUP_UNFINISHED[flow.phase] && (flow.phase !== 'intent' || !!flow.intent || !!flow.error || !!String(flow.composer || '').trim());
   }
   // A bot's color is settled when its setup starts, so the setup chat, its
-  // browser group and the finished bot all show the same mote. It follows the
-  // rule the server applies when no color is sent (newBotColor in
-  // backend/server.js): blue, red, yellow, green, then a random color.
-  var FIRST_BOT_COLORS = ['#3478d4', '#e5484d', '#f2c230', '#3fa34d'];
-  function newSetupBotColor(bots, random){
-    var taken = {};
-    (bots || []).forEach(function(bot){ taken[normalizeAgentAvatarColor(bot && bot.avatarColor)] = true; });
-    var next = FIRST_BOT_COLORS.filter(function(color){ return !taken[color]; })[0];
-    if((bots || []).length < FIRST_BOT_COLORS.length && next) return next;
+  // browser group and the finished bot all show the same mote. A plain New
+  // Bot gets a random color, the rule the server applies when no color is
+  // sent (newBotColor in backend/server.js); the setup card can change it.
+  function newSetupBotColor(random){
     var hue = Math.floor((random || Math.random)() * 360), sat = 0.72, light = 0.52;
     function channel(n){
       var k = (n + hue / 30) % 12;
@@ -13422,7 +13417,8 @@
     return '<div class="chat-msg-row is-direct agent-setup-review-row"><span class="chat-msg-mark agent' + (view.markClass ? ' ' + view.markClass : '') + '">' + (view.avatarHtml || agentSetupAvatarHtml(28)) + '</span>' +
       '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(view.name || draft.name || 'New Bot') + '</span><span class="chat-msg-tag">' + esc(view.tag || 'Bot') + '</span><span class="chat-msg-time">just now</span></div>' +
       '<div class="agent-setup-card">' +
-        '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
+        '<div class="agent-setup-card-head"><div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
+          '<div class="agent-setup-colors" role="group" aria-label="Bot color">' + agentColorSwatchesHtml(flow.avatarColor, 'agentSetupColorInput', 'agent-setup-color', true) + '</div></div>' +
         '<label class="agent-setup-field"><span>Name</span><input id="agentSetupName" type="text" maxlength="40" value="' + esc(draft.name || '') + '"></label>' +
         '<label class="agent-setup-field"><span>Instructions</span><textarea id="agentSetupInstructions" rows="10" maxlength="' + MAX_BOT_BRIEF_CHARS + '">' + esc(agentSetupDraftInstructions(draft)) + '</textarea></label>' +
         '<div class="agent-setup-field"><span>Skills</span>' + skillPickerHtml('agentSetupSkills', draft.skills) + '</div>' +
@@ -13447,11 +13443,45 @@
     if(automationWanted) flow.draft.automationWanted = !!automationWanted.checked;
   }
 
+  // The color picked on the setup card is the one the bot is created with.
+  // The New Bot chat shows it at once on the bot's icon, in place, so the
+  // card (and an open color panel) is not rebuilt under the person.
+  function setAgentSetupColor(flow, color, thread){
+    color = normalizeAgentAvatarColor(color);
+    if(!color || flow.creation || flow.phase === 'activating') return;
+    flow.avatarColor = color;
+    if(flow !== agentSetup) return;
+    var name = agentSetupIdentity(flow).name;
+    thread.querySelectorAll('.chat-msg-mark.agent .mote-avatar-img').forEach(function(img){ img.style.filter = moteColorFilterFor(name, color); });
+    renderChatSidebar();
+    renderChatHeaderBar();
+  }
+
   function wireAgentSetupReview(thread, flow, actions){
     flow = flow || agentSetup;
     actions = actions || {activate: activateAgentSetup, later: cancelAgentSetupFlow};
     if(flow.creation || flow.phase === 'activating'){
-      thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select').forEach(function(field){ field.disabled = true; });
+      thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select, .agent-setup-colors button').forEach(function(field){ field.disabled = true; });
+    }
+    var colors = el('.agent-setup-colors', thread);
+    if(colors){
+      colors.addEventListener('click', function(e){
+        var button = e.target.closest('[data-agent-color]');
+        if(!button || button.disabled) return;
+        els('[data-agent-color]', colors).forEach(function(other){
+          other.classList.toggle('selected', other === button);
+          other.setAttribute('aria-pressed', other === button ? 'true' : 'false');
+        });
+        var custom = el('.agent-setup-color-custom', colors);
+        if(custom) custom.classList.remove('selected');
+        setAgentSetupColor(flow, button.getAttribute('data-agent-color'), thread);
+      });
+      // `input`, not `change`: a Mac color panel sends `change` only when it closes.
+      colors.addEventListener('input', function(e){
+        if(e.target.type !== 'color') return;
+        markCustomAgentColor(e.target);
+        setAgentSetupColor(flow, e.target.value, thread);
+      });
     }
     // Edits are kept as they are typed, so leaving the chat does not lose them.
     thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea').forEach(function(field){

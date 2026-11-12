@@ -66,7 +66,7 @@ test('the compact Mote profile editor renders and persists the agent color picke
     /function styledAgentEditMarkup\(a\)\{[\s\S]{0,2000}agentColorSwatchesHtml\(editState\.avatarColor, 'styledAgentEditColorInput', 'styled-agent-color'\)/,
     'the compact editor paints the swatch picker for the open bot'
   );
-  assert.match(source, /function agentColorSwatchesHtml\(currentColor, colorInputId, classPrefix\)/);
+  assert.match(source, /function agentColorSwatchesHtml\(currentColor, colorInputId, classPrefix, noAutomatic\)/);
   assert.match(source, /id="styledAgentEditColorOptions"/);
   assert.doesNotMatch(html, /id="benchDetailColorOptions"/);
   // Saves through the compact editor's existing bot update endpoint without

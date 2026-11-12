@@ -3493,6 +3493,20 @@
   body.styled-skin .agent-setup-review-row .chat-msg-body{flex:1 1 auto;width:100%;max-width:680px;}
   body.styled-skin .agent-setup-card{display:flex;flex-direction:column;gap:14px;width:100%;padding:18px;border:1px solid var(--sand-border-default);border-radius:16px;background:var(--sand-fill-secondary);box-sizing:border-box;}
   body.styled-skin .agent-setup-card-intro{font-size:14px;line-height:1.45;color:var(--sand-text-primary);}
+  body.styled-skin .agent-setup-card-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;}
+  body.styled-skin .agent-setup-card-head .agent-setup-card-intro{flex:1 1 220px;min-width:0;}
+  body.styled-skin .agent-setup-colors{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+  body.styled-skin .agent-setup-color-swatch{appearance:none;width:18px;height:18px;flex:0 0 18px;padding:0;border:2px solid transparent;border-radius:50%;background:var(--agent-color);box-shadow:inset 0 0 0 1px #0003;cursor:pointer;}
+  body.styled-skin .agent-setup-color-swatch:hover{transform:scale(1.1);}
+  body.styled-skin .agent-setup-color-swatch:disabled{cursor:default;opacity:.5;transform:none;}
+  body.styled-skin .agent-setup-color-swatch.selected{border-color:var(--sand-text-primary);box-shadow:0 0 0 1px var(--sand-fill-secondary),inset 0 0 0 1px #0003;}
+  body.styled-skin .agent-setup-color-custom{position:relative;display:flex;align-items:center;width:18px;height:18px;flex:0 0 18px;font-size:0;}
+  body.styled-skin .agent-setup-color-custom span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);}
+  body.styled-skin .agent-setup-colors .agent-setup-color-custom input{appearance:none;width:18px;height:18px;flex:0 0 18px;padding:0;border:2px solid var(--sand-fill-secondary);border-radius:50%;background:var(--agent-color-rainbow) border-box;overflow:hidden;cursor:pointer;}
+  body.styled-skin .agent-setup-colors .agent-setup-color-custom input:disabled{cursor:default;opacity:.5;}
+  body.styled-skin .agent-setup-color-custom input::-webkit-color-swatch-wrapper{padding:0;}
+  body.styled-skin .agent-setup-color-custom input::-webkit-color-swatch{border:0;border-radius:50%;opacity:0;}
+  body.styled-skin .agent-setup-color-custom.selected input{box-shadow:0 0 0 1px var(--sand-text-primary);}
   body.styled-skin .agent-setup-field{display:flex;flex-direction:column;gap:6px;min-width:0;}
   body.styled-skin .agent-setup-field>span{font-size:11px;line-height:1.2;color:var(--sand-text-secondary);text-transform:uppercase;letter-spacing:.045em;}
   body.styled-skin .agent-setup-field input,
