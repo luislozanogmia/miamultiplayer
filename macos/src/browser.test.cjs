@@ -2335,7 +2335,7 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   page.executeJavaScript = script => { page.emit("focus"); return original(script); }; // The page focuses a box.
   const before = app.focusCalls || 0;
   await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250)); // Past the wait for a late press.
   assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
 
   // A press into the page is the person's own: focus stays there.
@@ -2344,7 +2344,7 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   page.executeJavaScript = script => { page.emit("focus"); return original(script); };
   const afterPress = app.focusCalls;
   await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
 });
 
@@ -2368,8 +2368,17 @@ test("a click from the chat into the page in front keeps the focus it gives the 
   app.emit("focus");
   await pause();
   page.emit("focus");
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250)); // Past the wait for a late press.
   assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
+
+  // A press that lands a little after the focus still counts as the person's.
+  app.emit("focus");
+  await pause();
+  page.emit("focus");
+  await new Promise(resolve => setTimeout(resolve, 60));
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 400, y: 600 });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(app.focusCalls, before + 1, "the late press keeps the focus in the page");
 });
 
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {

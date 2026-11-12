@@ -1178,6 +1178,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // A focus this soon after the person pressed in a page is theirs.
   const PERSON_FOCUS_MS = 1000;
   const PERSON_LOAD_MS = 10000;
+  // How long a focus waits for the press that caused it before it counts as
+  // the page's own.
+  const PERSON_PRESS_WAIT_MS = 150;
   function giveFocusBack(target = userFocus || window.webContents) {
     if (disposed || !target || target.isDestroyed()) return;
     if (target.isFocused && target.isFocused()) return;
@@ -2747,16 +2750,24 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     // (the window focuses the clicked view first, then hands it the mouse
     // down), so the decision waits one turn, for that press to arrive.
     // Deciding at once gave the focus of every click from the chat back to
-    // the chat: the click did nothing.
+    // the chat: the click did nothing. The press can also land a little
+    // after that turn (a busy page, a frame from another site), so with the
+    // person's focus in Mia and no bot at work the decision waits a moment
+    // more for it before giving focus back.
     wc.on("focus", () => {
       if (borrowingTabId === tab.id) return;
-      setImmediate(() => {
+      const decide = (waited) => {
         if (disposed || wc.isDestroyed() || tab.view.webContents !== wc) return;
         const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
-        const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
-        if (tab.id === activeId && !taken) userFocus = wc;
-        else giveFocusBack();
-      });
+        const botAtWork = (tab.botWork || 0) > 0;
+        const inFront = tab.id === activeId;
+        if (inFront && (theirs || (!botAtWork && userFocus !== window.webContents))) { userFocus = wc; return; }
+        if (inFront && !botAtWork && !waited) { setTimeout(() => decide(true), PERSON_PRESS_WAIT_MS); return; }
+        // The person moved on while this waited: nothing to give back.
+        if (waited && wc.isFocused && !wc.isFocused()) return;
+        giveFocusBack();
+      };
+      setImmediate(() => decide(false));
     });
     wc.on("found-in-page", (_event, result) => {
       if (tab.id === activeId) window.webContents.send("miaos-browser-find-result", {
