@@ -4323,14 +4323,13 @@
   function openEditCinema(id){
     var a = findBenchAgent(id);
     if(!a) return;
-    var text = a.instructions || (a.isBuiltin ? a.brief : '') || '';
-    text = String(text).replace(/\n?\s*Automation:\s*[^\n]*$/i, '').trim();
+    var text = editInstructionsText(a.instructions || (a.isBuiltin ? a.brief : '') || '');
     var modelIx = BENCH_MODELS.indexOf(a.model);
     var k = matchBenchKind(text) || BENCH_FALLBACK_KIND;
     var currentDepts = agentDepartments(a);
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, loadedInstructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -4338,6 +4337,7 @@
     };
     editState.testRuns.push(buildTestRun(k, k.sample.task, editState.testScopes));
     cinema.mode = 'edit';
+    refreshEditCinemaInstructions();
     if(styledAgentEditPaneAvailable()){
       prepareChatUtilityPane('agent-edit');
       renderChatInfoPane();
@@ -4355,7 +4355,50 @@
     el('#benchEditTextarea').focus();
   }
 
+  // The editor shows a bot's instructions without the old trailing
+  // "Automation:" line; automations are edited on their own.
+  function editInstructionsText(value){
+    return String(value || '').replace(/\n?\s*Automation:\s*[^\n]*$/i, '').trim();
+  }
+  function editInstructionsChanged(){
+    return typeof editState.loadedInstructions !== 'string'
+      || String(editState.instructions || '').trim() !== editState.loadedInstructions.trim();
+  }
+  // A bot's instructions can change on disk while the bot list still holds an
+  // older copy: the bot rewrites its own when its owner accepts the change in
+  // chat, and Mia can rewrite them too. Read the bot again so the editor holds
+  // the current text and revision. Text the person already edited is left as
+  // it is; saving it then meets the conflict resolveEditInstructionsConflict handles.
+  // -> the bot as read, or null
+  function refreshEditCinemaInstructions(){
+    var agentId = editState.agentId;
+    var a = findBenchAgent(agentId);
+    var targetId = a && (a.isBuiltin ? a.agentId : a.id);
+    if(!targetId) return Promise.resolve(null);
+    return api('/api/bots/' + encodeURIComponent(targetId)).then(function(res){
+      var bot = res.status === 200 && res.data && res.data.bot;
+      if(!bot || cinema.mode !== 'edit' || editState.agentId !== agentId) return null;
+      if(!editInstructionsChanged() && bot.instructionsRevision){
+        var text = editInstructionsText(bot.instructions);
+        editState.instructions = text;
+        editState.loadedInstructions = text;
+        editState.instructionsRevision = bot.instructionsRevision;
+        var field = el('#styledAgentEditInstructions') || el('#benchEditTextarea');
+        if(field && field.value !== text) field.value = text;
+      }
+      return bot;
+    }).catch(function(){ return null; });
+  }
+  // A bot's files changed (the bot list was read again): keep an open editor current.
+  if(typeof window !== 'undefined' && window.addEventListener) window.addEventListener('mia-bots-changed', function(){
+    if(cinema.mode === 'edit' && editState.agentId) refreshEditCinemaInstructions();
+  });
+
   function saveEditCinema(){
+    submitEditCinema(false);
+  }
+  // retried: this is the one automatic second try after a revision conflict.
+  function submitEditCinema(retried){
     var a = findBenchAgent(editState.agentId);
     if(!a) return;
     var instructions = editState.instructions.trim();
@@ -4380,14 +4423,40 @@
     // Profile edits leave model selection to chat. Omit it so a stale editor
     // cannot overwrite the current model or require a connected provider.
     var body = {name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, avatarColor: editState.avatarColor || null};
+    // Instructions the person left alone are not sent, so a newer copy on
+    // disk stays as it is and only the other fields save.
+    if(!editInstructionsChanged()){ delete body.instructions; delete body.expectedInstructionsRevision; }
     if(!styledEditOpen) body.model = model;
     if(skillsLibrary) body.skills = (editState.skills || []).filter(function(id){ return skillsLibrary.skills.some(function(skill){ return skill.id === id; }); });
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200){ reopenAndClose(); publishCompanyBotEdit(targetId); }
-      else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
+      else if(res.status === 409) resolveEditInstructionsConflict(!retried);
       // Any other answer leaves the editor open, so say the save failed.
       else showBenchToast((res.data && res.data.message) || 'That didn’t save. Try again.');
     }).catch(function(){ showBenchToast('That didn’t save. Try again.'); });
+  }
+  // The save named an older revision of the instructions than the one on
+  // disk. The check is there so an editor opened earlier never silently
+  // replaces a newer version, such as one the bot wrote after its owner
+  // accepted it in chat. Read the bot again, then:
+  // - nothing on disk is lost by saving (the file still holds what the person
+  //   opened, or already holds their text): save again at once;
+  // - the file holds other new text: say so, and save the person's version
+  //   with one click (or with Save, which now names the current revision).
+  // autoRetry is false after the one automatic retry, so this never loops.
+  function resolveEditInstructionsConflict(autoRetry){
+    var opened = String(editState.loadedInstructions || '').trim();
+    var agentId = editState.agentId;
+    return refreshEditCinemaInstructions().then(function(bot){
+      if(editState.agentId !== agentId) return;
+      if(!bot || !bot.instructionsRevision){ showBenchToast('That didn’t save. Try again.'); return; }
+      var latest = editInstructionsText(bot.instructions);
+      var mine = String(editState.instructions || '').trim();
+      editState.instructionsRevision = bot.instructionsRevision;
+      editState.loadedInstructions = latest;
+      if(autoRetry && (latest === opened || latest === mine)){ submitEditCinema(true); return; }
+      showBenchToast('These instructions changed while you were editing. Click to save yours instead.', function(){ submitEditCinema(true); });
+    });
   }
 
   // Shared swatch-grid markup for the Edit-agent cinema and compact Manage
