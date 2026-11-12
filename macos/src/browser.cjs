@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
@@ -383,7 +383,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
   }
   // Microphone/camera requests from HTTPS pages surface a native Allow/Block
-  // dialog, remembered per origin next to the browser state file. Every other
+  // dialog, remembered per origin next to the browser state file. Not Now
+  // (or Escape) turns down this one request and asks again next time. The
+  // page's right-click menu changes a remembered choice. Every other
   // permission stays denied.
   const permissionsPath = statePath ? `${statePath.replace(/\.json$/, "")}-permissions.json` : "";
   const mediaDecisions = new Map();
@@ -642,14 +644,54 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       .map(({ entry }) => ({ url: entry.url, title: entry.title, count: entry.count, lastVisit: entry.lastVisit,
         icon: historyIcons.get(historyHost(entry.url)) || "" }));
   }
-  async function ensureSystemMediaAccess() {
-    if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return;
-    try {
-      await systemPreferences.askForMediaAccess("microphone");
-      await systemPreferences.askForMediaAccess("camera");
-    } catch (error) {
-      log(`system media access request failed: ${error.message}`);
+  // macOS asks on its own whether Mia may use the camera and microphone.
+  // Check every time a site is allowed, not only at the first Allow: a
+  // rebuilt or reinstalled Mia starts with no system answer, and without one
+  // the page gets no picture or sound and Mia never shows up in the system's
+  // camera and microphone lists. When the answer is No, say where to change it.
+  let systemMediaNotice = null;
+  async function ensureSystemMediaAccess(kinds) {
+    if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return true;
+    const missing = [];
+    for (const kind of kinds) {
+      try {
+        if (!(await systemPreferences.askForMediaAccess(kind))) missing.push(kind);
+      } catch (error) {
+        log(`system media access request failed: ${error.message}`);
+        missing.push(kind);
+      }
     }
+    if (missing.length && !systemMediaNotice) {
+      const names = missing.map(kind => kind === "camera" ? "Camera" : "Microphone");
+      systemMediaNotice = dialog.showMessageBox(window, {
+        type: "warning",
+        title: names.join(" and "),
+        message: `Mia isn't allowed to use your ${names.join(" and ").toLowerCase()}`,
+        detail: `Turn on Mia in System Settings > Privacy & Security > ${names[0]}, then reload the page.`,
+        buttons: ["Open System Settings", "OK"],
+        defaultId: 0,
+        cancelId: 1,
+      }).then(result => {
+        const pane = missing[0] === "camera" ? "Privacy_Camera" : "Privacy_Microphone";
+        if (result && result.response === 0 && typeof shell.openExternal === "function") {
+          void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`).catch(() => {});
+        }
+      }).catch(() => {}).finally(() => { systemMediaNotice = null; });
+    }
+    return missing.length === 0;
+  }
+  // The kinds a camera/microphone request asks for, in macOS's names. Both
+  // when the request doesn't say.
+  function requestedMediaKinds(details) {
+    const types = Array.isArray(details && details.mediaTypes) ? details.mediaTypes : [];
+    const kinds = [];
+    if (types.includes("audio")) kinds.push("microphone");
+    if (types.includes("video")) kinds.push("camera");
+    return kinds.length ? kinds : ["microphone", "camera"];
+  }
+  function rememberMediaDecision(origin, allowed) {
+    mediaDecisions.set(origin, allowed);
+    persistMediaDecisions();
   }
   function decideMediaPermission(origin) {
     if (mediaDecisions.has(origin)) return Promise.resolve(mediaDecisions.get(origin));
@@ -658,23 +700,33 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       type: "question",
       title: "Microphone and camera",
       message: `Allow ${origin} to use your microphone and camera?`,
-      detail: "Mia remembers this choice for this site.",
-      buttons: ["Allow", "Block"],
+      detail: "Mia remembers Allow or Block for this site. You can change it later from the page's right-click menu.",
+      buttons: ["Allow", "Block", "Not Now"],
       defaultId: 0,
-      cancelId: 1,
-    }).then(async (result) => {
-      const allowed = result && result.response === 0;
-      mediaDecisions.set(origin, allowed);
-      persistMediaDecisions();
+      cancelId: 2,
+    }).then((result) => {
+      const response = result && result.response;
       mediaPrompts.delete(origin);
-      if (allowed) await ensureSystemMediaAccess();
-      return allowed;
+      if (response === 0 || response === 1) rememberMediaDecision(origin, response === 0);
+      return response === 0;
     }).catch(() => {
       mediaPrompts.delete(origin);
       return false;
     });
     mediaPrompts.set(origin, prompt);
     return prompt;
+  }
+  // The right-click menu item that changes a site's remembered choice. The
+  // page reloads so it asks again (after Allow) or lets go of the camera and
+  // microphone (after Block).
+  function mediaMenuItems(wc) {
+    const origin = mediaRequestOrigin(null, wc);
+    if (!origin || !mediaDecisions.has(origin)) return [];
+    const allowed = mediaDecisions.get(origin);
+    return [{
+      label: allowed ? "Block Camera and Microphone for This Site" : "Allow Camera and Microphone for This Site",
+      click: () => { rememberMediaDecision(origin, !allowed); if (!wc.isDestroyed()) wc.reload(); },
+    }];
   }
   function mediaRequestOrigin(details, contents) {
     const raw = (details && (details.securityOrigin || details.requestingUrl))
@@ -695,7 +747,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (permission !== "media") return callback(false);
     const origin = mediaRequestOrigin(details, contents);
     if (!origin) return callback(false);
-    decideMediaPermission(origin).then(callback).catch(() => callback(false));
+    // A screen share asks with no camera or microphone in it. The screen
+    // picker below is its prompt, so it doesn't need the camera choice too.
+    if (Array.isArray(details && details.mediaTypes) && details.mediaTypes.length === 0) return callback(true);
+    decideMediaPermission(origin)
+      .then(allowed => allowed && ensureSystemMediaAccess(requestedMediaKinds(details)))
+      .then(allowed => callback(allowed === true), () => callback(false));
   });
   profile.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
     if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return true;
@@ -714,8 +771,44 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   });
   profile.setDevicePermissionHandler(() => false);
 
-  profile.setDisplayMediaRequestHandler((_request, callback) => {
-    callback({});
+  // Screen sharing. macOS 15 and later show the system's own picker and
+  // never call this. Everywhere else Mia lists the screens and windows in a
+  // native dialog; the choice applies to this one request. Only HTTPS pages
+  // can ask.
+  let displayPrompt = null;
+  async function chooseDisplaySource(request) {
+    let frameUrl = "";
+    try { frameUrl = (request && request.frame && request.frame.url) || ""; } catch (_) { /* The frame is gone. */ }
+    const origin = mediaRequestOrigin({ securityOrigin: (request && request.securityOrigin) || frameUrl }, null);
+    if (!origin || displayPrompt || !desktopCapturer || typeof desktopCapturer.getSources !== "function") return {};
+    const sources = (await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 } }))
+      .filter(source => source && typeof source.id === "string");
+    const screens = sources.filter(source => source.id.startsWith("screen:"));
+    const choices = [...screens, ...sources.filter(source => !source.id.startsWith("screen:"))].slice(0, 6);
+    if (!choices.length) return {};
+    const labels = choices.map(source => source.id.startsWith("screen:")
+      ? (screens.length > 1 ? `Screen ${screens.indexOf(source) + 1}` : "Entire Screen")
+      : String(source.name || "Window").slice(0, 60));
+    displayPrompt = dialog.showMessageBox(window, {
+      type: "question",
+      title: "Share your screen",
+      message: `Share your screen with ${origin}?`,
+      detail: "Choose what to share.",
+      buttons: [...labels, "Cancel"],
+      defaultId: 0,
+      cancelId: labels.length,
+    }).finally(() => { displayPrompt = null; });
+    const result = await displayPrompt;
+    const source = result && choices[result.response];
+    if (!source) return {};
+    // Windows can also share the computer's sound; elsewhere it's picture only.
+    return { video: source, ...(request && request.audioRequested && process.platform === "win32" ? { audio: "loopback" } : {}) };
+  }
+  profile.setDisplayMediaRequestHandler((request, callback) => {
+    chooseDisplaySource(request).then(callback, (error) => {
+      log(`screen share request failed: ${error && error.message}`);
+      callback({});
+    });
   }, { useSystemPicker: true });
 
   function normalizeStoredTarget(value) {
@@ -2969,6 +3062,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       items.push({ label: "Back", enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
         { label: "Reload", click: () => wc.reload() },
+        ...mediaMenuItems(wc),
         { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });

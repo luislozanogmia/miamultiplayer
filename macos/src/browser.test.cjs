@@ -151,15 +151,17 @@ function harness(options = {}) {
       },
     },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve(dialogResponse.gate).then(() => ({ response: dialogResponse.value })); } },
-    systemPreferences: { askForMediaAccess: async () => true },
-    shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); } },
+    systemPreferences: options.systemPreferences || { askForMediaAccess: async () => true },
+    desktopCapturer: options.desktopCapturer,
+    shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); },
+      openExternal: target => { opened.push(target); return Promise.resolve(); } },
   };
   const context = {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate,
     setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout,
     setInterval, clearInterval,
-    AbortController, ReadableStream, process,
+    AbortController, ReadableStream, process: options.process || process,
     __dirname,
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
@@ -553,6 +555,100 @@ test("microphone/camera prompt once per HTTPS origin; insecure origins stay deni
   assert.deepEqual(results, [true, true, false, false]);
   assert.equal(h.dialogCalls.length, 2);
   assert.equal(h.profile.check(null, "media", "https://blocked.example"), false);
+});
+
+test("Not Now turns down one camera request and asks again next time", async () => {
+  const h = harness();
+  const results = [];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  h.dialogResponse.value = 2;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio", "video"] });
+  await flush();
+  assert.deepEqual(results, [false]);
+  assert.deepEqual([...h.dialogCalls[0][1].buttons], ["Allow", "Block", "Not Now"]);
+  assert.equal(h.dialogCalls[0][1].cancelId, 2, "Escape is Not Now, never a remembered Block");
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), true, "nothing was remembered");
+  h.dialogResponse.value = 0;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.deepEqual(results, [false, true]);
+  assert.equal(h.dialogCalls.length, 2, "the site asked again and got the prompt again");
+});
+
+test("a site's remembered camera choice changes from the page's right-click menu", async () => {
+  const h = harness();
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://meet.google.com/abc-defg-hij";
+  const menuItem = () => {
+    wc.emit("context-menu", null, { mediaType: "none", linkURL: "", isEditable: false, selectionText: "" });
+    return h.menuTemplates.at(-1).find(item => /Camera and Microphone/.test(item.label || ""));
+  };
+  assert.equal(menuItem(), undefined, "no item before the site has asked");
+  h.dialogResponse.value = 1;
+  h.profile.request(wc, "media", () => {}, { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), false);
+  const allow = menuItem();
+  assert.equal(allow.label, "Allow Camera and Microphone for This Site");
+  allow.click();
+  assert.equal(wc.reloaded, true, "the page reloads so it can ask again");
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), true);
+  const results = [];
+  h.profile.request(wc, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio"] });
+  await flush();
+  assert.deepEqual(results, [true]);
+  assert.equal(h.dialogCalls.length, 1, "the new choice is remembered");
+  assert.equal(menuItem().label, "Block Camera and Microphone for This Site");
+});
+
+test("on macOS an allowed site also asks the system for the kinds it wants, every time", async () => {
+  const asked = [];
+  const answers = { camera: true, microphone: true };
+  const h = harness({
+    process: Object.create(process, { platform: { value: "darwin" } }),
+    systemPreferences: { askForMediaAccess: async kind => { asked.push(kind); return answers[kind]; } },
+  });
+  const results = [];
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.deepEqual(asked, ["camera"], "only the camera was asked for");
+  // A remembered Allow still checks the system answer, which a reinstall clears.
+  answers.microphone = false;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio"] });
+  await flush();
+  assert.deepEqual(asked, ["camera", "microphone"]);
+  assert.deepEqual(results, [true, false]);
+  const notice = h.dialogCalls.at(-1)[1];
+  assert.match(notice.message, /isn't allowed to use your microphone/);
+  assert.match(notice.detail, /Privacy & Security > Microphone/);
+  await flush();
+  assert.deepEqual(h.opened, ["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"]);
+});
+
+test("screen sharing lists screens and windows; the choice is for this request only", async () => {
+  const sources = [
+    { id: "window:7:0", name: "Notes" },
+    { id: "screen:1:0", name: "Screen 1" },
+  ];
+  const h = harness({ desktopCapturer: { getSources: async () => sources } });
+  const results = [];
+  // The screen-share request carries no camera or microphone and needs no camera prompt.
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: [] });
+  assert.deepEqual(results, [true]);
+  assert.equal(h.dialogCalls.length, 0);
+  assert.equal(h.profile.displayMediaOpts.useSystemPicker, true, "macOS 15 and later keep the system picker");
+  const share = request => new Promise(resolve => h.profile.displayMedia(request, resolve));
+  h.dialogResponse.value = 1;
+  const chosen = await share({ securityOrigin: "https://meet.google.com", videoRequested: true, audioRequested: false });
+  assert.deepEqual([...h.dialogCalls[0][1].buttons], ["Entire Screen", "Notes", "Cancel"]);
+  assert.equal(chosen.video, sources[0], "the picked window is shared");
+  h.dialogResponse.value = 2;
+  assert.deepEqual(Object.keys(await share({ securityOrigin: "https://meet.google.com", videoRequested: true })), [], "Cancel shares nothing");
+  assert.deepEqual(Object.keys(await share({ securityOrigin: "http://insecure.example", videoRequested: true })), [], "insecure pages can't ask");
+  assert.equal(h.dialogCalls.length, 2);
 });
 
 test("Cmd+click opens a background tab next to its page; tabs can be moved", () => {
