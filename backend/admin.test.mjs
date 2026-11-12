@@ -441,6 +441,83 @@ inference.runInferenceViaHermesGateway = async () => ({ text: 'I changed it.\\n<
   }
 });
 
+// The same card route as above, for an automation: the bot is the owner's
+// Solo bot, opened from a company's My Bots, so the app names the company.
+test('a Solo bot\'s automation card can be accepted while a company is open', async () => {
+  const block = JSON.stringify({ schemaVersion: 1, action: 'create', automation: {
+    name: 'Weekly fixture review', goal: 'Review the fixture list', output: 'A short list in this chat',
+    schedule: { frequency: 'weekly', day: 'wednesday', time: '19:00', timezone: 'America/Monterrey' },
+    steps: ['Read the list', 'Post the summary'],
+  } });
+  const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async () => ({ text: 'Here it is.\\n<MIA_AUTOMATION>' + ${JSON.stringify(block)} + '</MIA_AUTOMATION>' });
+const cronSync = require(${JSON.stringify(path.join(BACKEND_DIR, 'cron-sync.js'))});
+cronSync.syncBotAutomation = async (bot) => ({
+  ...bot,
+  hermesCronJobIds: Object.fromEntries((bot.automations || []).map((automation) => [automation.id, 'fixture-job-' + automation.id])),
+});
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const company = `hub_${'b'.repeat(32)}`;
+    const solo = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const inCompany = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': company };
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: solo,
+      body: JSON.stringify({ name: 'Solo Automation Fixture', instructions: 'Original solo instructions.',
+        model: 'fixture-model', status: 'running', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    assert.equal(bot.workspaceId, 'solo');
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1")
+      .get(`%${bot.id}%`);
+    database.close();
+    assert.ok(chat);
+    const sent = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Review the list every Wednesday.' }, clientIdempotencyKey: 'automation-card-company-open' }),
+    });
+    assert.equal(sent.status, 201);
+    let proposalEvent;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, { headers: { cookie } });
+      const payload = await response.json();
+      proposalEvent = (payload.events || []).find((event) => event.metadata && event.metadata.automationProposal);
+      if (proposalEvent) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(proposalEvent, `the bot posted a pending automation card: ${server.logs.join('')}`);
+    assert.equal(proposalEvent.metadata.automationProposal.status, 'pending');
+
+    const route = `${server.origin}/api/bots/${bot.id}/automation-proposals/${proposalEvent.id}`;
+    // A card that is not in this bot's chat is refused with a reason, not a field error.
+    const missing = await fetch(`${server.origin}/api/bots/${bot.id}/automation-proposals/evt_missing`, {
+      method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(missing.status, 404);
+    assert.match((await missing.json()).message, /could not find this card/);
+
+    const accepted = await fetch(route, { method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const body = await accepted.json();
+    assert.equal(body.event.metadata.automationProposal.status, 'accepted');
+    assert.equal(body.event.metadata.automationProposal.schedule, 'scheduled', 'the scheduler was synced');
+    assert.equal(body.bot.workspaceId, 'solo', 'accepting does not move the bot into the company');
+    assert.equal(body.bot.automations.length, 1);
+    assert.equal(body.bot.automations[0].name, 'Weekly fixture review');
+    assert.ok(body.bot.hermesCronJobIds[body.bot.automations[0].id]);
+    assert.equal((await fetch(route, { method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) })).status, 409);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('a Solo bot\'s instruction card can be accepted while a company is open', async () => {
   const preloadScript = `
 const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});

@@ -6476,7 +6476,12 @@ app.get('/api/agents/gateway', requireAuth, (req, res) => {
 // scheduler sync as any automation edit; dismiss only records the answer.
 app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, async (req, res) => {
   const bot = db.loadOne(conn, 'bots', req.params.id);
-  if (!bot || !botVisibleInWorkspace(bot, req)) return res.status(404).json({ error: 'not_found' });
+  // A company's My Bots chat is stored in Solo, and the app then names the
+  // company: the owner's Solo bot is still reached (see botReachable).
+  if (!bot || !botReachable(bot, req)) {
+    console.error('automation proposal not answered: bot_not_found');
+    return res.status(404).json({ error: 'not_found', reason: 'bot_not_found', message: 'Mia could not find this bot here. Reload Mia and try again.' });
+  }
   if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
     return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can change its automations.' });
   }
@@ -6488,7 +6493,8 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
   const proposal = event && event.metadata && event.metadata.automationProposal;
   if (!event || event.senderId !== bot.id || !conversationIds.has(event.conversationId)
     || !proposal || proposal.botId !== bot.id) {
-    return res.status(404).json({ error: 'not_found' });
+    console.error('automation proposal not answered: card_not_found');
+    return res.status(404).json({ error: 'not_found', reason: 'card_not_found', message: 'Mia could not find this card in the bot\'s chat. Ask the bot to propose it again.' });
   }
   if (proposal.status !== 'pending') return res.status(409).json({ error: 'already_answered', proposal });
   const answer = (fields) => nativeConversationRepository.updateEvent({
@@ -6632,10 +6638,17 @@ app.post('/api/browser/shared-session', requireAuth, (req, res) => {
 
 app.post('/api/mia/bot-setup-requests/:eventId', requireAuth, (req, res) => {
   const owner = String(req.userEmail || '').toLowerCase();
-  const companyId = nativeCompanyId(workspaceIdFromRequest(req), owner);
   const decision = String((req.body || {}).decision || '');
   if (decision !== 'accepted' && decision !== 'dismissed') return res.status(400).json({ error: 'decision must be accepted or dismissed' });
-  const event = nativeConversationRepository.getEvent({ companyId, id: req.params.eventId, includeDeleted: false });
+  // Mia's chat is stored in Solo while a company is open, and the app then
+  // names the company: look in the named workspace, then in Solo.
+  let companyId = null;
+  let event = null;
+  for (const candidate of new Set([nativeCompanyId(workspaceIdFromRequest(req), owner), nativeCompanyId('solo', owner)])) {
+    event = nativeConversationRepository.getEvent({ companyId: candidate, id: req.params.eventId, includeDeleted: false });
+    companyId = candidate;
+    if (event) break;
+  }
   const request = event && event.metadata && event.metadata.botSetupRequest;
   const conversation = event && nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
   if (!request || !conversation || conversation.type !== 'agent'

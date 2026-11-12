@@ -153,7 +153,19 @@
     };
   }
 
-  var api = {html: html, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields};
+  // Why a card's answer was refused, in the server's words when it gave any.
+  // Only a rejected value (400) is about the fields.
+  function saveErrorText(status, data){
+    if(status === 409) return 'This card was already answered.';
+    if(data && data.message) return String(data.message);
+    if(status === 400) return 'That didn’t save. Check the fields and try again.';
+    if(status === 403) return 'Only the bot’s owner can answer this card.';
+    if(status === 404) return 'Mia could not find this bot or card. Reload Mia and try again.';
+    if(status === 401) return 'You are signed out. Sign in and try again.';
+    return 'That didn’t save. Try again.';
+  }
+
+  var api = {html: html, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields, saveErrorText: saveErrorText};
   if(typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MiaAutomationProposalCard = api;
 })(typeof window !== 'undefined' ? window : globalThis);

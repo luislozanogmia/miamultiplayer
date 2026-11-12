@@ -75,3 +75,14 @@ test('readFields turns the card back into the schema shape', () => {
     schedule: { frequency: 'weekly', time: '09:15', timezone: 'America/Mexico_City', day: 'Friday' },
   });
 });
+
+test('a refused answer says why, and only a rejected value blames the fields', () => {
+  assert.match(card.saveErrorText(404, { error: 'not_found' }), /could not find/);
+  assert.doesNotMatch(card.saveErrorText(404, { error: 'not_found' }), /fields/);
+  assert.equal(card.saveErrorText(404, { message: 'Mia could not find this bot here.' }), 'Mia could not find this bot here.');
+  assert.match(card.saveErrorText(403, {}), /owner/);
+  assert.match(card.saveErrorText(400, {}), /Check the fields/);
+  assert.equal(card.saveErrorText(400, { message: 'Add a time.' }), 'Add a time.');
+  assert.match(card.saveErrorText(409, { message: 'x' }), /already answered/);
+  assert.doesNotMatch(card.saveErrorText(500, null), /fields/);
+});

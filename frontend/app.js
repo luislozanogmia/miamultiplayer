@@ -12504,7 +12504,7 @@
     }).then(function(res){
       cardState.busy = false;
       if(res.status !== 200 || !res.data.event){
-        cardState.error = res.status === 409 ? 'This card was already answered.' : ((res.data && res.data.message) || 'That didn’t save. Check the fields and try again.');
+        cardState.error = window.MiaAutomationProposalCard.saveErrorText(res.status, res.data);
         if(res.status === 409 && res.data.proposal){
           var answered = Object.assign({}, message.nativeEvent, {metadata: Object.assign({}, message.nativeEvent.metadata, {automationProposal: res.data.proposal})});
           delete automationCardStates[eventId];
