@@ -384,18 +384,27 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
     onState({ key: pane.identity.key, status, error });
     apply();
   };
+  // A hidden view can still take the mouse on macOS, so an app that isn't
+  // shown also moves off the window, keeping its size so its page keeps its
+  // layout. Clicks then only reach what is in front. Same rule as browser tabs.
+  const OFFSCREEN_GAP = 10000;
+  const offWindow = (view, size) => view.setBounds({ x: -(size.width + OFFSCREEN_GAP), y: 0, width: size.width, height: size.height });
   function apply() {
     for (const [key, pane] of panes) {
       const show = key === shown && !!bounds && pane.status !== "error";
-      if (show) pane.view.setBounds(bounds);
+      if (show) {
+        pane.size = { width: bounds.width, height: bounds.height };
+        pane.view.setBounds(bounds);
+      }
       pane.view.setVisible(show);
+      if (!show) offWindow(pane.view, pane.size);
     }
   }
   function create(identity, root) {
     const view = new WebContentsView({ webPreferences: appWebPreferences(identity.partition) });
     view.setBackgroundColor("#ffffff");
     const contents = view.webContents;
-    const pane = { identity, view, root, status: "loading", error: "", notedAt: -Infinity };
+    const pane = { identity, view, root, status: "loading", error: "", notedAt: -Infinity, size: { width: 0, height: 0 } };
     configureAppContents(contents, {
       host: identity.host,
       openFromApp: gate,
@@ -414,6 +423,7 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
     contents.on("render-process-gone", () => { if (panes.get(identity.key) === pane) state(pane, "error", "This app stopped working."); });
     window.contentView.addChildView(view);
     view.setVisible(false);
+    offWindow(view, pane.size);
     panes.set(identity.key, pane);
     return pane;
   }

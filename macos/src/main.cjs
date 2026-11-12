@@ -1608,11 +1608,16 @@ async function syncArtifactSessionCookies(target, destinationSession = configure
   }
 }
 
+const ARTIFACT_OFFSCREEN_GAP = 10000;
+
 function layoutArtifactPanel() {
   if (!mainWindow || !artifactToolbarView || !artifactView) return;
   const [windowWidth, windowHeight] = mainWindow.getContentSize();
   const panelWidth = Math.min(windowWidth, Math.max(520, Math.min(760, Math.floor(windowWidth * 0.55))));
-  const panelX = windowWidth - panelWidth;
+  // A hidden view can still take the mouse on macOS, so the closed panel also
+  // sits off the window, keeping its size. Clicks then only reach what is in
+  // front. Same rule as browser tabs.
+  const panelX = artifactPanelVisible ? windowWidth - panelWidth : -(panelWidth + ARTIFACT_OFFSCREEN_GAP);
 
   artifactToolbarView.setBounds({
     x: panelX,
@@ -1633,10 +1638,8 @@ function setArtifactPanelVisible(visible) {
   if (!artifactToolbarView || !artifactView) return;
   artifactToolbarView.setVisible(artifactPanelVisible);
   artifactView.setVisible(artifactPanelVisible);
-  if (artifactPanelVisible) {
-    layoutArtifactPanel();
-    artifactToolbarView.webContents.focus();
-  }
+  layoutArtifactPanel();
+  if (artifactPanelVisible) artifactToolbarView.webContents.focus();
   sendArtifactState();
 }
 
@@ -1783,6 +1786,7 @@ function createArtifactPanel() {
   mainWindow.contentView.addChildView(artifactToolbarView);
   artifactView.setVisible(false);
   artifactToolbarView.setVisible(false);
+  layoutArtifactPanel();
   artifactView.webContents.loadFile(ARTIFACT_START_ENTRYPOINT).catch((error) => {
     artifactLastError = error.message;
     sendArtifactState();
