@@ -431,10 +431,38 @@ def _drive_media(content_base64: str, mime_type: str) -> tuple[bytes, str]:
     return content, mime_type
 
 
-def google_drive_create_file(name: str, content_base64: str, mime_type: str, parent_id: str = "") -> Any:
-    """Create a non-Google-native file from base64 content (up to 10 MiB). No host filesystem paths. Parent must be picked or created through Mia. Use dedicated editors to create Google Docs/Sheets/Slides."""
+# What Drive can turn into a Google file while it uploads. The result is
+# created through Mia, so the Docs, Sheets and Slides tools can edit it later.
+_DRIVE_CONVERSIONS = {
+    "document": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword", "application/rtf", "application/vnd.oasis.opendocument.text",
+        "text/html", "text/plain", "text/markdown",
+    },
+    "spreadsheet": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel", "application/vnd.oasis.opendocument.spreadsheet",
+        "text/csv", "text/tab-separated-values",
+    },
+    "presentation": {
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint", "application/vnd.oasis.opendocument.presentation",
+    },
+}
+
+
+def google_drive_create_file(name: str, content_base64: str, mime_type: str, parent_id: str = "", convert_to: str = "") -> Any:
+    """Upload a file from base64 content (up to 10 MiB). No host filesystem paths. Parent must be picked or created through Mia. mime_type is the type of the uploaded bytes. Set convert_to to "document", "spreadsheet" or "presentation" to have Drive convert the upload into a Google Doc, Sheet or Slides file (for example a .docx or HTML into a Doc, .xlsx or CSV into a Sheet, .pptx into Slides) that the Docs/Sheets/Slides tools can then edit; leave it empty to keep the file as uploaded."""
     content, mime_type = _drive_media(content_base64, mime_type)
-    body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": mime_type}
+    target = mime_type
+    if convert_to:
+        accepted = _DRIVE_CONVERSIONS.get(convert_to) if isinstance(convert_to, str) else None
+        if accepted is None:
+            raise ValueError('convert_to must be "document", "spreadsheet" or "presentation"')
+        if mime_type.lower() not in accepted:
+            raise ValueError(f"this file type cannot be converted to a Google {convert_to}")
+        target = f"application/vnd.google-apps.{convert_to}"
+    body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": target}
     if parent_id:
         body["parents"] = [_identifier(parent_id, "parent ID")]
     return _gws(("drive", "files", "create"), params={"supportsAllDrives": True, "fields": "id,name,mimeType,webViewLink"}, body=body, media=content, media_type=mime_type)

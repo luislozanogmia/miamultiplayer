@@ -220,6 +220,21 @@ for invalid in ('', 'not base64', '/etc/passwd', 'a' * 14_000_001):
 m['google_drive_create_file']('Fixture.txt', payload, 'text/plain')
 assert calls[-1][0] == ('drive', 'files', 'create')
 assert calls[-1][1]['body'] == {'name': 'Fixture.txt', 'mimeType': 'text/plain'}
+# An upload can become a Google file; the bytes keep their own type.
+docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+m['google_drive_create_file']('Report', payload, docx, convert_to='document')
+assert calls[-1][1]['body'] == {'name': 'Report', 'mimeType': 'application/vnd.google-apps.document'}
+assert calls[-1][1]['media_type'] == docx
+m['google_drive_create_file']('Numbers', payload, 'text/csv', convert_to='spreadsheet')
+assert calls[-1][1]['body']['mimeType'] == 'application/vnd.google-apps.spreadsheet'
+for bad in (('image/png', 'document'), (docx, 'spreadsheet'), ('text/plain', 'folder'), ('text/plain', 'script')):
+    before = len(calls)
+    try:
+        m['google_drive_create_file']('Bad', payload, bad[0], convert_to=bad[1])
+        raise AssertionError('unsafe conversion accepted')
+    except ValueError:
+        pass
+    assert len(calls) == before
 `], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 });
