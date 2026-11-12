@@ -44,6 +44,33 @@ assert len(paths) == 1
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('Drive list reads folders by parent and searches names without widening the query', () => {
+  const result = spawnSync('python3', ['-c', `
+import runpy
+m = runpy.run_path(${JSON.stringify(server)})
+calls = []
+m['google_drive_list'].__globals__['_gws'] = lambda op, **kwargs: calls.append((op, kwargs)) or {"files": []}
+folder = 'folder_fixture_123456'
+m['google_drive_list'](parent_id='https://drive.google.com/drive/folders/' + folder, name_contains="it's \\\\ x", page_token='next_fixture')
+op, kwargs = calls[-1]
+assert op == ('drive', 'files', 'list')
+params = kwargs['params']
+assert params['q'] == "(trashed = false) and '" + folder + "' in parents and name contains 'it\\\\'s \\\\\\\\ x'", params['q']
+assert params['includeItemsFromAllDrives'] is True and params['supportsAllDrives'] is True
+assert params['pageToken'] == 'next_fixture'
+assert params['fields'].startswith('nextPageToken,')
+m['google_drive_list'](query='')
+assert 'q' not in calls[-1][1]['params']
+for bad in ('https://drive.google.com.evil.example/drive/folders/' + folder, "x' or 'a' in parents"):
+    try:
+        m['google_drive_list'](parent_id=bad)
+        raise AssertionError('invalid parent accepted')
+    except ValueError:
+        pass
+`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('Google CLI failures never expose raw diagnostic credentials or response bodies', () => {
   const result = spawnSync('python3', ['-c', `
 import runpy

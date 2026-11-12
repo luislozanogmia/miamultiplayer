@@ -16,17 +16,23 @@ const GOOGLE_ACCESS_POLICY = Object.freeze({
   destructive: false,
 });
 
-// These are the narrowest useful read/write scopes supported by the official
-// gws browser login. Some Google write scopes also technically authorize a
-// delete method, so the command allowlist below is the enforceable boundary:
-// delete/trash/clear methods never reach gws.
-const GWS_OAUTH_SCOPES = Object.freeze([
+// A grant must hold these to count as connected. They are the narrowest
+// useful read/write scopes supported by the official gws browser login. Some
+// Google write scopes also technically authorize a delete method, so the
+// command allowlist below is the enforceable boundary: delete/trash/clear
+// methods never reach gws.
+const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+const GWS_REQUIRED_SCOPES = Object.freeze([
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/drive.file',
 ]);
+// New logins also ask to read the whole Drive so bots can list and read any
+// file or folder. Writing still rides on drive.file (files picked or created
+// through Mia). Older grants without it stay connected and work per file.
+const GWS_OAUTH_SCOPES = Object.freeze([...GWS_REQUIRED_SCOPES, DRIVE_READONLY_SCOPE]);
 
 // Exact Discovery-method prefixes. No raw gws command is accepted from the
 // UI or an agent. In particular, delete, trash, clear, batchClear, remove and
@@ -184,9 +190,16 @@ function authPayloadConfigured(payload) {
 function authPayloadHasRequiredScopes(payload) {
   if (!payload || !Array.isArray(payload.scopes)) return false;
   const granted = new Set(payload.scopes.map((scope) => String(scope || '').trim()).filter(Boolean));
-  // Old broad grants must not be mistaken for the new per-file policy.
-  if ([...granted].some((scope) => /^https:\/\/www\.googleapis\.com\/auth\/(?:drive(?:\.readonly|\.metadata(?:\.readonly)?)?|documents(?:\.readonly)?|spreadsheets(?:\.readonly)?|presentations(?:\.readonly)?)$/.test(scope))) return false;
-  return GWS_OAUTH_SCOPES.every((scope) => granted.has(scope));
+  // Read-only Drive is the one broad scope Mia asks for. Old grants that can
+  // write any file (full drive, documents, spreadsheets, presentations) must
+  // not be mistaken for the per-file write policy.
+  if ([...granted].some((scope) => /^https:\/\/www\.googleapis\.com\/auth\/(?:drive(?:\.metadata(?:\.readonly)?)?|documents(?:\.readonly)?|spreadsheets(?:\.readonly)?|presentations(?:\.readonly)?)$/.test(scope))) return false;
+  return GWS_REQUIRED_SCOPES.every((scope) => granted.has(scope));
+}
+
+function authPayloadReadsWholeDrive(payload) {
+  return Boolean(payload && Array.isArray(payload.scopes)
+    && payload.scopes.some((scope) => String(scope || '').trim() === DRIVE_READONLY_SCOPE));
 }
 
 function publicStatus(state) {
@@ -396,7 +409,9 @@ function createGoogleAccountConnector(options = {}) {
     const payload = parseJson(result.stdout);
     if (result.code === 0 && authPayloadConnected(payload)) {
       if (!authPayloadHasRequiredScopes(payload)) return publicStatus('needs_reconnect');
-      if (!binding) return publicStatus('connected');
+      // Tells callers whether bots can read any Drive file or only picked ones.
+      const wholeDriveRead = authPayloadReadsWholeDrive(payload);
+      if (!binding) return { ...publicStatus('connected'), wholeDriveRead };
       if (!owner || grant.owner !== owner) return publicStatus('needs_reconnect');
       // auth status proves the grant, while Gmail's current-profile endpoint
       // proves which account that same grant actually operates on.
@@ -413,7 +428,7 @@ function createGoogleAccountConnector(options = {}) {
         current = { owner, googleEmail, revision: current.googleEmail ? crypto.randomUUID() : (current.revision || crypto.randomUUID()) };
         changeBinding(current);
       }
-      return { ...publicStatus('connected'), googleEmail, connectionRevision: current.revision };
+      return { ...publicStatus('connected'), googleEmail, connectionRevision: current.revision, wholeDriveRead };
     }
     if (result.timedOut || (result.code !== 0 && result.code !== 2)) return publicStatus('connection_error');
     return publicStatus(authPayloadConfigured(payload) || hasNativeGoogleClient(env) ? 'not_connected' : 'setup_required');
@@ -646,6 +661,8 @@ module.exports = {
   CONNECTOR_NAME,
   GOOGLE_ACCESS_POLICY,
   GWS_OAUTH_SCOPES,
+  GWS_REQUIRED_SCOPES,
+  DRIVE_READONLY_SCOPE,
   ALLOWED_GWS_COMMANDS,
   MAX_DOC_BATCH_REQUESTS,
   MAX_DOC_TEXT_CHARS,
@@ -654,6 +671,7 @@ module.exports = {
   assertAllowedGwsOperation,
   authPayloadConnected,
   authPayloadHasRequiredScopes,
+  authPayloadReadsWholeDrive,
   publicStatus,
   resolveRuntime,
   createGoogleAccountConnector,

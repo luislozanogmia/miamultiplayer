@@ -84,7 +84,8 @@ test('cancellation during token exchange cannot resurrect disconnected credentia
 test('desktop Picker requests only drive.file and never overwrites Workspace credentials', async t => {
   let saves = 0;
   let selected;
-  const login = await startNativeGoogleLogin({ env, client, filePicker: true,
+  // The full login scope set is passed on purpose: the Picker must ignore it.
+  const login = await startNativeGoogleLogin({ env, client, filePicker: true, scopes: GWS_OAUTH_SCOPES,
     persist: () => saves++, onPicked: async ids => { selected = ids; return [{id:ids[0], name:'Fixture', canEdit:true}]; },
     fetchImpl: async () => ({ok:true, json:async () => ({access_token:'fixture-picker-access'})}) });
   t.after(() => login.child.kill());
@@ -198,6 +199,7 @@ test('production connector reaches native login without spawning gws auth login'
   const url = new URL(login.authorizationUrl);
   assert.equal(url.searchParams.get('client_id'), client.client_id);
   assert.equal(url.searchParams.get('scope'), GWS_OAUTH_SCOPES.join(' '));
+  assert.ok(url.searchParams.get('scope').split(' ').includes('https://www.googleapis.com/auth/drive.readonly'));
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   await connector.disconnect();
 });
