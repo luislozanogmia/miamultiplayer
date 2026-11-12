@@ -8131,14 +8131,58 @@ function postMidRunAnswer(activeGateway, agent, text) {
   const safeText = cleanBotReplyText(agent.name, stripAgentActionBlocks(redactHermesChatDetail(text))).text;
   if (!safeText) return false;
   activeGateway.midRunMessage = null;
+  // Stopped by the person: these words belong to the run, not to that message.
+  if (nativeDispatchWasStopped(pending.dispatch)) return false;
   Promise.resolve().then(() => createNativeDispatchReplyEvent(pending.dispatch, pending.trigger, {
     type: pending.dispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
     content: { text: safeText },
     parentEventId: nativeReplyParentEventId(pending.trigger),
     clientIdempotencyKey: `native-dispatch-${pending.dispatch.id}`,
     metadata: { runtime: 'hermes', dispatchId: pending.dispatch.id, agentName: agent.name },
-  })).catch(() => {});
+  })).then(
+    () => settleNativeFollowUp(pending, { answered: true }),
+    () => settleNativeFollowUp(pending, { answered: false })
+  );
   return true;
+}
+
+// A message sent mid-run keeps its own turn open, with its own working line,
+// until it is answered: by the model's next words, or by the run's own reply.
+// Hermes drops what the run was doing and answers the new message, so the
+// reply the run ends with is the answer to it.
+function postNativeFollowUpWorking(pending, agentName) {
+  Promise.resolve().then(() => createNativeDispatchReplyEvent(pending.dispatch, pending.trigger, {
+    type: pending.dispatch.targetType === 'gateway' ? 'agent_message' : 'bot_message',
+    content: { text: humanTaskStatus('running', 0) },
+    parentEventId: nativeReplyParentEventId(pending.trigger),
+    clientIdempotencyKey: `native-dispatch-progress-${pending.dispatch.id}`,
+    metadata: { runtime: 'hermes', dispatchId: pending.dispatch.id, status: 'working', progress: true, agentName },
+  })).catch(() => {});
+}
+
+function settleNativeFollowUp(pending, { answered }) {
+  if (!pending || pending.settled) return;
+  pending.settled = true;
+  const stopped = nativeDispatchWasStopped(pending.dispatch);
+  // Its own reply replaces the working line; without one the line is removed.
+  if (!answered || stopped) removeNativeDispatchEvent(pending.dispatch, `native-dispatch-progress-${pending.dispatch.id}`);
+  if (stopped || !pending.claimToken) return;
+  try {
+    nativeConversationRepository.completeDispatch({
+      companyId: pending.dispatch.companyId,
+      id: pending.dispatch.id,
+      claimToken: pending.claimToken,
+    });
+  } catch (_) { /* already settled another way */ }
+}
+
+// The run ended with a mid-run message not answered on its own: the reply
+// the run posts next covers it, so its working line goes and its turn closes.
+function settleNativeFollowUpAtRunEnd(activeGateway) {
+  const pending = activeGateway && activeGateway.midRunMessage;
+  if (!pending) return;
+  activeGateway.midRunMessage = null;
+  settleNativeFollowUp(pending, { answered: false });
 }
 
 async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
@@ -8177,16 +8221,22 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   connectedAppsForTurn(workspaceConnection, trigger.senderId, conversation, { id: activeGateway.agentId || GATEWAY_AGENT_ID });
   // Mia invoked in a channel can only post under a claimed dispatch, so there
   // the answer arrives with the final reply.
-  if (!appNote && (dispatch.targetType !== 'gateway' || conversation.type === 'agent')) {
-    activeGateway.midRunMessage = activeGateway.midRunMessage || { dispatch, trigger };
-    activeGateway.midRunNudged = false;
-  }
   const claimToken = `native-steer-${crypto.randomUUID()}`;
   const claimed = nativeConversationRepository.claimDispatch({
     companyId: dispatch.companyId,
     id: dispatch.id,
     claimToken,
   });
+  if (!appNote && (dispatch.targetType !== 'gateway' || conversation.type === 'agent')) {
+    activeGateway.midRunNudged = false;
+    // The first unanswered message stays open until it has its reply; one
+    // sent on top of it is answered along with it.
+    if (!activeGateway.midRunMessage && !claimed.idempotent) {
+      activeGateway.midRunMessage = { dispatch, trigger, claimToken };
+      postNativeFollowUpWorking(activeGateway.midRunMessage, activeGateway.agentName || (dispatch.targetType === 'gateway' ? 'Mia' : 'Bot'));
+      return true;
+    }
+  }
   if (!claimed.idempotent) {
     nativeConversationRepository.completeDispatch({
       companyId: dispatch.companyId,
@@ -8654,7 +8704,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
         bindAskBeforeDoTurn(session);
-        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision };
+        activeGatewayRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentName: agent.name };
         nativeActiveGatewaySessions.set(gatewayKey, activeGatewayRecord);
         if (ownsPrivateAgentConversation) {
           const browserTarget = {
@@ -8690,6 +8740,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
         if (goal !== undefined) gatewayResult.goal = goal;
       }
     } finally {
+      settleNativeFollowUpAtRunEnd(activeGatewayRecord);
       if (activeGatewayRecord && nativeActiveGatewaySessions.get(gatewayKey) === activeGatewayRecord) {
         expireBrowserRun(nativeGatewaySessionConversations.get(String(activeGatewayRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(gatewayKey);
@@ -8762,7 +8813,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
         throwIfNativeDispatchUserInactive(dispatch, trigger);
         bindAskBeforeDoTurn(session);
         bindNativeHermesSessionEvents();
-        activeBotRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentId: agent.id };
+        activeBotRecord = { dispatchId: dispatch.id, sessionId: session.sessionId, capabilityRevision: connectionInventory.revision, agentId: agent.id, agentName: agent.name };
         nativeActiveGatewaySessions.set(botGatewayKey, activeBotRecord);
         const browserTarget = {
           companyId: conversation.companyId,
@@ -8796,6 +8847,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
         })
         : await runInferenceViaHermesGateway({ ...botRunArgs, message: turnMessage });
     } finally {
+      settleNativeFollowUpAtRunEnd(activeBotRecord);
       if (activeBotRecord && nativeActiveGatewaySessions.get(botGatewayKey) === activeBotRecord) {
         expireBrowserRun(nativeGatewaySessionConversations.get(String(activeBotRecord.sessionId)), 'dispatch');
         nativeActiveGatewaySessions.delete(botGatewayKey);
