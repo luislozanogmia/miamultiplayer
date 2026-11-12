@@ -5907,7 +5907,9 @@
     // Your bots are your bots everywhere, shared or not; only the ones you
     // hid wait in the Hidden group.
     var hiddenBots=myBots.filter(function(bot){ return hubRowHidden('bot:mine:'+bot.id) && !botPinned('mine:'+bot.id); });
-    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
+    // The same order as Solo's bots: unread, working, latest message, new.
+    var orderedBots=orderSidebarBots(myBots,function(bot){ var chat=teamBotChat(bot); return chat && chat.id; },function(bot){ return bot.createdAt; });
+    orderedBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
     hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
       'Bots you hid. Right-click one to show it again.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
@@ -6135,14 +6137,13 @@
   }
   function teamBotRow(bot,pinned){
     var chat=teamBotChat(bot);
-    var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var button=document.createElement('button'); button.type='button';
     button.className='chat-recent-row hub-channel-row'+(active?' active':'');
     button.setAttribute('data-team-bot-id',bot.id);
     // The same row text as Solo: activity, unread, time and latest line.
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span>'
-      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,!!(state && state.thinking));
+      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,sidebarEntryHasActivity({roomId:chat ? chat.id : null}));
     var line=el('.row-line1',button);
     if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ openTeamBotChat(bot); });
@@ -8077,7 +8078,11 @@
   function chatNeedsAttention(roomId){
     return !!(roomId && chatAttentionRooms[roomId]);
   }
+  // Opening a chat clears its unread mark; My Bots keeps the row in its
+  // unread place while it stays open (see orderSidebarBots).
+  var sidebarUnreadHoldRoomId = null;
   function clearChatAttention(roomId){
+    sidebarUnreadHoldRoomId = roomId && chatAttentionRooms[roomId] ? roomId : null;
     if(!roomId || !chatAttentionRooms[roomId]) return;
     delete chatAttentionRooms[roomId];
     saveChatAttention();
@@ -13651,6 +13656,13 @@
     });
   }
 
+  // The one way to get a bot's main chat in the view on screen, used by bot
+  // setup and by opening a bot from My Bots in a company. In Solo,
+  // POST /api/bots already provisions it on the server. In a company it is
+  // your private chat with the bot, stored in Solo and tagged with the
+  // company (the server-provisioned chat sits outside the company's view).
+  // Refresh before creating anything so the client never races that hook
+  // and creates a duplicate room for the same bot.
   function createNativeAgentConversation(agent, requestOptions){
     // Only the abort signal is passed on: api() writes headers into the
     // options it is given, and one request's workspace must not leak into
@@ -13659,13 +13671,6 @@
     function options(extra){ return Object.assign(signal ? {signal:signal} : {}, extra || {}); }
     var workspace = activeWorkspaceKey, team = hubWorkspace();
     return loadNativeConversations(options()).then(function(conversations){
-  // The one way to get a bot's main chat in the view on screen, used by bot
-  // setup and by opening a bot from My Bots in a company. In Solo,
-  // POST /api/bots already provisions it on the server. In a company it is
-  // your private chat with the bot, stored in Solo and tagged with the
-  // company (the server-provisioned chat sits outside the company's view).
-  // Refresh before creating anything so the client never races that hook
-  // and creates a duplicate room for the same bot.
       var existing = (conversations || []).filter(function(conversation){
         var metadata = conversation.metadata || {};
         return conversation.type === 'bot' && metadata.botId === agent.id && metadata.conversationMode !== 'fresh' && nativeConversationInView(conversation);
@@ -13693,11 +13698,6 @@
     });
   }
 
-  // Checks a reviewed draft and builds the POST /api/bots body. Shared by the
-  // New Bot setup chat and Mia's chat; returns {error} when something the
-  // user must fix is missing.
-  function agentSetupCreatePayload(flow, intent){
-    if(flow.creation) return {payload: flow.creation.payload};
   // A new bot's chat opens only when it belongs to the view on screen (a
   // company shows only chats tagged with it); otherwise loadChatRoom would
   // quietly do nothing.
@@ -13705,6 +13705,11 @@
     return !!conversation && nativeConversationInView(conversation) && !inHubRoom(conversation.id);
   }
 
+  // Checks a reviewed draft and builds the POST /api/bots body. Shared by the
+  // New Bot setup chat and Mia's chat; returns {error} when something the
+  // user must fix is missing.
+  function agentSetupCreatePayload(flow, intent){
+    if(flow.creation) return {payload: flow.creation.payload};
     captureAgentSetupDraft(flow);
     var draft = flow.draft;
     if(!draft.name || !draft.instructions) return {error: 'Name and instructions are required.'};
@@ -16467,9 +16472,20 @@
     renderComposerTaskControl();
   }
 
+  // A reply starting or ending moves its bot between Working and the rest,
+  // so the sidebar repaints once after the change, not on every event.
+  var sidebarThinkingRenderTimer = null;
+  function scheduleSidebarThinkingRender(){
+    if(sidebarThinkingRenderTimer) return;
+    sidebarThinkingRenderTimer = setTimeout(function(){
+      sidebarThinkingRenderTimer = null;
+      renderChatSidebar();
+    }, 0);
+  }
   function stopChatThinking(roomId){
     var state = chatRoomState(roomId);
     if(state.thinkingTimer){ clearTimeout(state.thinkingTimer); state.thinkingTimer = null; }
+    if(state.thinking) scheduleSidebarThinkingRender();
     state.thinking = false;
     state.thinkingSince = null;
     state.thinkingAgentName = null;
@@ -16478,6 +16494,7 @@
   }
   function startChatThinking(roomId){
     var state = chatRoomState(roomId);
+    if(!state.thinking) scheduleSidebarThinkingRender();
     state.thinking = true;
     state.thinkingSince = Date.now();
     if(chatWs.activeRoomId === roomId){ renderChatHeaderBar(); renderChatThread(); }
@@ -17068,6 +17085,10 @@
     createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}, flow).then(function(result){
       if(stale()) return;
       clearMiaBotDraftRequest(flow, false);
+      adoptCreatedBot(result.created, result.conversation);
+      // The bot exists but its chat cannot open here: offer "Open bot chat"
+      // again instead of an Open button that does nothing.
+      if(!createdBotChatOpens(result.conversation)) return fail(botCreationRecoveryMessage(flow));
       flow.created = result.created;
       flow.conversation = result.conversation;
       flow.phase = 'created';
@@ -17084,10 +17105,6 @@
   function cancelMiaBotDraft(roomId){
     var state = chatRoomState(roomId);
     var flow = state.botDraft;
-      adoptCreatedBot(result.created, result.conversation);
-      // The bot exists but its chat cannot open here: offer "Open bot chat"
-      // again instead of an Open button that does nothing.
-      if(!createdBotChatOpens(result.conversation)) return fail(botCreationRecoveryMessage(flow));
     if(!flow) return;
     if(flow.phase === 'activating' || flow.creation) return;
     clearMiaBotDraftRequest(flow, true);
@@ -17934,6 +17951,22 @@
     var state = roomId && chatWs.byRoom[roomId];
     return (state && state.lastTs) || 0;
   }
+  // My Bots in Solo and in a company are ordered here, from the same unread
+  // dot, working dot and time their rows show. A bot you just opened keeps
+  // its unread place until you leave it, so its row doesn't jump from under
+  // your click.
+  function orderSidebarBots(items, roomIdFor, createdAtFor){
+    if(!window.MiaSidebarBotOrder) return items;
+    return window.MiaSidebarBotOrder.orderBots(items, function(item){
+      var roomId = roomIdFor(item) || null;
+      return {
+        unread: chatNeedsAttention(roomId) || (!!roomId && roomId === sidebarUnreadHoldRoomId && roomId === chatWs.activeRoomId),
+        working: sidebarEntryHasActivity({roomId: roomId}),
+        lastTs: lastTsFor(roomId),
+        createdAt: createdAtFor(item)
+      };
+    });
+  }
   // One latest line for every sidebar row: Solo chats, company channels, DMs
   // and bot chats. A Hub thread reply stays in its thread, as in the channel.
   function roomPreview(roomId){
@@ -18137,7 +18170,7 @@
     var allEntries = visibleEntries.filter(function(e){ return !isChatPinned(e.pinKey); });
     // Bots have their own section; Mia stays with the conversations.
     function isBotEntry(e){ return e.kind === 'agent' && !(e.agent && e.agent.id === 'gateway'); }
-    var botEntries = allEntries.filter(isBotEntry);
+    var botEntries = orderSidebarBots(allEntries.filter(isBotEntry), function(e){ return e.roomId; }, function(e){ return e.createdTs || (e.agent && e.agent.createdAt); });
     allEntries = allEntries.filter(function(e){ return !isBotEntry(e); });
 
     allCountEl && (allCountEl.textContent = allEntries.length || '');

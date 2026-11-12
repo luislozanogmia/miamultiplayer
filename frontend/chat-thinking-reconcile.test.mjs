@@ -23,7 +23,7 @@ function harness({ events = [] } = {}) {
     chatWs: { activeRoomId: 'room-a', configured: true, tasks: [] },
     window: {}, document: { hidden: false, hasFocus: () => true },
     closeMentionPopover() {}, clearChatAttachmentError() {}, clearChatAttention() {}, closeNativeChatSocket() {}, saveActiveChatLocation() {},
-    rememberAgentChat() {}, renderChatSidebar() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
+    rememberAgentChat() {}, renderChatSidebar() {}, scheduleSidebarThinkingRender() {}, refreshChatMain() {}, loadMentionRoster() {}, loadActiveNativeDispatches() {},
     syncChatThreadPanel() {}, placeChatComposer() {}, swapChatDraft() {}, renderChatHeaderBar() {}, renderChatThread() {},
     connectNativeChatSocket() {}, renderComposerTaskControl() {}, scheduleNeedsYouRender() {}, syncNativeDispatchFromEvent() {},
     recordWatchedSidebarMessage: () => false, isIncomingAttentionMessage: () => false, notifyDesktopChatMessage() {}, markChatAttention: () => false,
