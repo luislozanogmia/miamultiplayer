@@ -7611,6 +7611,10 @@ async function handleNativeHermesSessionEvent(sessionId, kind, data) {
   } else {
     return;
   }
+  // A follow-on turn that finishes with nothing written still says so.
+  if (artifacts.length === 0 && kind === 'turn.complete' && (!text || /^⚠️ No reply: /.test(text))) {
+    text = userFacingModelDispatchError(Object.assign(new Error('Hermes gateway returned no reply text'), { code: 'HERMES_NO_REPLY_TEXT' }));
+  }
   if (!text && artifacts.length === 0) return;
   const conversation = nativeConversationRepository.getConversation({ companyId: target.companyId, id: target.conversationId });
   if (!conversation) return;
@@ -8883,7 +8887,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const replyParts = cleanBotReplyText(agent.name, visibleText);
   const safeReply = replyParts.text;
   const nextStepMetadata = replyParts.nextStep ? { nextStep: replyParts.nextStep } : {};
-  if (!safeReply && validatedArtifacts.length === 0) throw new Error('native agent produced no user-facing reply');
+  if (!safeReply && validatedArtifacts.length === 0) {
+    throw Object.assign(new Error('native agent produced no user-facing reply'), { code: 'HERMES_NO_REPLY_TEXT' });
+  }
   if (validatedArtifacts.length > 0) {
     let lastResult = null;
     for (let index = 0; index < validatedArtifacts.length; index++) {

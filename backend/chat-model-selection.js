@@ -236,6 +236,13 @@ function userFacingModelDispatchError(error, { managedRouter = false, managedRou
   if ((error && error.code === 'NATIVE_DISPATCH_TIMEOUT') || /native dispatch timed out/i.test(message)) {
     return 'I ran out of time before finishing. Please try again.';
   }
+  // The model finished without writing anything, even after being asked again.
+  if ((error && error.code === 'HERMES_NO_REPLY_TEXT') || /no reply text|no user-facing reply/i.test(message)) {
+    const steps = Number(error && error.steps) || 0;
+    return steps > 0
+      ? `I finished working (${steps} step${steps === 1 ? '' : 's'}) but ended without writing a reply. The work is done; ask me to summarize it and I’ll pick up from there.`
+      : 'I ended that turn without writing a reply. Ask again and I’ll answer.';
+  }
   if (managedRouter && MANAGED_ROUTER_KEY_FAILURE.test(message)) {
     return managedRouterKeyMessage(managedRouterLabel);
   }
