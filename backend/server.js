@@ -1411,15 +1411,17 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, files = [], unreadableFiles = [] }) {
+async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, asker = null, files = [], unreadableFiles = [] }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
     const selection = await chatModelSelectionForUser(modelSelection, owner);
     const userOptions = await inferenceOptionsForUser(owner, chatModelSelectionInferenceOptions(null, selection));
     // The same bot turn as Solo with a narrower context: the requester's own
     // Google connection, so the bot can read files people share, but no Solo
-    // workspace state, private sessions, automations, browser tabs or Google
-    // writes. The owner shares this bot's purpose through the channel control.
+    // workspace state, private sessions, automations or Google writes. The
+    // owner shares this bot's purpose through the channel control. Asked by
+    // the person at this computer, it works in their Mia browser as it does
+    // in their own chat with it; asked by anyone else, it does not.
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [],
       bundledSkills: Array.isArray(bot.bundledSkills) ? bot.bundledSkills : [] };
@@ -1433,9 +1435,12 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
     // The run's Hermes session may use this computer's browser for its owner,
     // the same as their own bot chats; see /api/browser/actor.
     const runSessions = [];
+    const ownBrowser = !!(asker && asker.own) && !EFFECTIVE_RELEASE_PROFILE.agentSearchOnly;
+    const approvals = ownBrowser ? await sharedRunAskBeforeDo({ owner, asker, channel, sharedBot }) : null;
     const onSession = (session) => {
       const id = String(session && session.sessionId || '');
       if (!id) return;
+      if (approvals) approvals.bind(session);
       runSessions.push(id);
       sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
         // The folders this run works in, the only ones it may show in the file manager.
@@ -1480,7 +1485,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         content: speaker(row),
       }))),
       nextStepLine: false,
-      notes: [filesNote, sharedBrowserNote()],
+      notes: [filesNote,
+        ...(ownBrowser ? [nativeBrowserContextNote({ senderType: 'user', metadata: { browserContext: asker.browserContext } }), botBrowserTabsNote()] : []),
+        sharedBrowserNote()],
       inferenceOptions: {
         ...userOptions,
         ...(imagePaths.length ? { imagePaths } : {}),
@@ -1492,7 +1499,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         onSession,
       },
       signal,
-    }).finally(() => { runSessions.forEach((id) => sharedBotRunSessions.delete(id)); });
+    }).finally(() => { runSessions.forEach((id) => sharedBotRunSessions.delete(id)); if (approvals) approvals.end(); });
     return {
       text: cleanBotReplyText(sharedBot.name, turn.rawReply).text,
       provider: String(HERMES_AUTH_PROVIDER_LABELS[userOptions.provider] || '').replace(/\s+subscription$/i, ''),
@@ -9783,6 +9790,57 @@ async function initializeAskBeforeDoGate() {
 }
 
 let miaAppBrowserWork = null;
+// Shows a bot's request for an OK as a card in that bot's own chat, and
+// keeps the card's status current. -> the gate's `present`.
+function botChatApprovalPresenter(bot, conversation) {
+  return async ({ id, summary, whatHappens, repeatable, requester }) => {
+    const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens, repeatable);
+    const metadata = { runtime: 'hermes', agentName: bot.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
+    const created = nativeConversationRepository.createEvent({
+      companyId: conversation.companyId,
+      conversationId: conversation.id,
+      senderId: bot.id,
+      senderType: 'bot',
+      type: 'bot_message',
+      content: { text: card.text },
+      clientIdempotencyKey: `ask-before-do-${id}`,
+      metadata,
+    });
+    try { nativeConversationRealtime.publish(created.event); } catch (_publishError) {}
+    return async (status) => {
+      const event = nativeConversationRepository.updateEvent({
+        companyId: conversation.companyId,
+        id: created.event.id,
+        metadata: { ...metadata, askBeforeDo: { ...metadata.askBeforeDo, status } },
+      });
+      try { nativeConversationRealtime.publish(event); } catch (_publishError) {}
+    };
+  };
+}
+// A company bot asked in a channel by the person at this computer follows
+// their ask-before-do choice. A channel cannot show the card, so the bot asks
+// in its own chat on this computer, where Needs you picks it up. Without such
+// a chat nobody can answer, so with ask-before-do on the run stays unbound and
+// its risky actions stay blocked. -> { bind, end } or null
+async function sharedRunAskBeforeDo({ owner, asker, channel, sharedBot }) {
+  if (!askBeforeDoGate) return null;
+  const enabled = currentInstructionSettings(owner).askBeforeDo !== false;
+  const localBot = asker.localBotId ? db.loadOne(conn, 'bots', asker.localBotId) : null;
+  const conversation = enabled && localBot && sameOwner(localBot, owner) ? await ensureNativeBotConversation(localBot) : null;
+  if (enabled && !conversation) return null;
+  const scope = `hub:${String(channel.teamId || '')}:${String(channel.channelId || '')}:${String(sharedBot.id)}`;
+  return {
+    bind: (session) => askBeforeDoGate.bindTurn(session, {
+      scope,
+      enabled,
+      requester: String(owner || '').trim().toLowerCase(),
+      conversationId: conversation ? conversation.id : scope,
+      present: conversation ? botChatApprovalPresenter(localBot, conversation) : async () => { throw new Error('no chat'); },
+    }),
+    // A finished or stopped run takes its open request with it.
+    end: () => askBeforeDoGate.cancelScope(scope),
+  };
+}
 // A browser bot asks in its own chat, on the same card and setting as any other turn.
 async function bindBrowserWorkerAskBeforeDo(session, work, worker) {
   const bot = db.loadOne(conn, 'bots', worker.botId);
@@ -9793,29 +9851,7 @@ async function bindBrowserWorkerAskBeforeDo(session, work, worker) {
     enabled: currentInstructionSettings(work.ownerId).askBeforeDo,
     requester: work.ownerId,
     conversationId: conversation.id,
-    present: async ({ id, summary, whatHappens, repeatable, requester }) => {
-      const card = approvalCard(summary, db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS).chatOutput, whatHappens, repeatable);
-      const metadata = { runtime: 'hermes', agentName: bot.name, askBeforeDo: { id, line: card.line, summary: card.summary, requester, status: 'pending' } };
-      const created = nativeConversationRepository.createEvent({
-        companyId: conversation.companyId,
-        conversationId: conversation.id,
-        senderId: bot.id,
-        senderType: 'bot',
-        type: 'bot_message',
-        content: { text: card.text },
-        clientIdempotencyKey: `ask-before-do-${id}`,
-        metadata,
-      });
-      try { nativeConversationRealtime.publish(created.event); } catch (_publishError) {}
-      return async (status) => {
-        const event = nativeConversationRepository.updateEvent({
-          companyId: conversation.companyId,
-          id: created.event.id,
-          metadata: { ...metadata, askBeforeDo: { ...metadata.askBeforeDo, status } },
-        });
-        try { nativeConversationRealtime.publish(event); } catch (_publishError) {}
-      };
-    },
+    present: botChatApprovalPresenter(bot, conversation),
   });
   // A finished or stopped bot takes its open request with it.
   return () => askBeforeDoGate?.cancelConversation(conversation.id);

@@ -163,7 +163,7 @@ test('a full team storage allowance is reported as itself, not as an oversized b
 test('a shared bot turn receives the file on the message it answers',async()=>{
   const source=require('node:fs').readFileSync(new URL('./hub-bot-client.js',import.meta.url),'utf8');
   assert.match(source,/const attached=await triggerFile\(s,trigger,token\)/);
-  assert.match(source,/modelSelection:selections\.get\(runKey\(s,run\.job_id\)\)\|\|null,\.\.\.attached\}/);
+  assert.match(source,/modelSelection:selections\.get\(runKey\(s,run\.job_id\)\)\|\|null,asker:asker\(s,run\.registration_id,claim\.requesterId===s\.subject,openPages\.get\(runKey\(s,run\.job_id\)\)\),\.\.\.attached\}/);
   assert.match(source,/unreadableFiles:\[item\.filename\|\|'image'\]/);
 });
 

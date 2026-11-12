@@ -51,7 +51,7 @@ test('a team bot running on this computer may use the browser for the person run
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const turn = source.slice(source.indexOf('async function runSharedBotTurn('), source.indexOf('function nativeConversationPrincipal('));
   assert.match(turn, /sharedBotRunSessions\.set\(id, \{ owner: String\(owner \|\| ''\)\.trim\(\)\.toLowerCase\(\)[^}]*workspace: `hub_\$\{String\(channel\.teamId \|\| ''\)\.toLowerCase\(\)\}`,[^}]*folders: \[teamFolder, teamWorkFolder\]\.filter\(Boolean\) \}\);/, 'a company run is that company\'s');
-  assert.match(turn, /onSession,\n\s*\},\n\s*signal,\n\s*\}\)\.finally\(\(\) => \{ runSessions\.forEach\(\(id\) => sharedBotRunSessions\.delete\(id\)\); \}\);/);
+  assert.match(turn, /onSession,\n\s*\},\n\s*signal,\n\s*\}\)\.finally\(\(\) => \{ runSessions\.forEach\(\(id\) => sharedBotRunSessions\.delete\(id\)\); if \(approvals\) approvals\.end\(\); \}\);/);
   const inference = readFileSync(new URL('./inference.js', import.meta.url), 'utf8');
   assert.match(inference, /onSession: typeof options\.onSession === 'function' \? options\.onSession : null,/);
 });
@@ -110,4 +110,55 @@ test('Mia app actions also reject a completed or expired Hermes session', () => 
   assert.equal(resolveTurn('run', 'owner'), null);
   target.browserActiveUntil = Date.now() - 1;
   assert.equal(resolveTurn('run', 'owner'), null);
+});
+
+// A company bot asked in a channel by the person at this computer: the
+// approval gate follows their choice, and the card goes to the bot's own chat.
+function sharedRunApprovals({ askBeforeDo = true, localBot = { id: 'b1', name: 'Helper', owner: 'owner@example.test' } } = {}) {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function sharedRunAskBeforeDo(');
+  const code = source.slice(start, source.indexOf('// A browser bot asks in its own chat', start));
+  const bound = [], cancelled = [];
+  const context = { String, Error,
+    askBeforeDoGate: { bindTurn: (session, options) => bound.push({ session, options }), cancelScope: (scope) => cancelled.push(scope) },
+    currentInstructionSettings: () => ({ askBeforeDo }),
+    db: { loadOne: (_conn, _table, id) => (localBot && id === localBot.id ? localBot : null) }, conn: {},
+    sameOwner: (bot, owner) => bot.owner === owner,
+    ensureNativeBotConversation: async (bot) => ({ id: 'chat-' + bot.id, companyId: 'solo' }),
+    botChatApprovalPresenter: (bot, conversation) => ({ card: bot.id, in: conversation.id }) };
+  vm.runInNewContext(code + '\nthis.run = sharedRunAskBeforeDo;', context);
+  const channel = { teamId: 'c'.repeat(32), channelId: 'd'.repeat(32) };
+  return { bound, cancelled, run: (asker) => context.run({ owner: 'owner@example.test', asker, channel, sharedBot: { id: 'shared-r-v1' } }) };
+}
+
+test('a channel bot asked by the person at this computer asks for their OK in its own chat', async () => {
+  const h = sharedRunApprovals();
+  const approvals = await h.run({ own: true, localBotId: 'b1' });
+  approvals.bind({ sessionId: 's1' });
+  const { options } = h.bound[0];
+  assert.equal(options.enabled, true);
+  assert.equal(options.requester, 'owner@example.test');
+  assert.equal(options.conversationId, 'chat-b1');
+  assert.deepEqual({ ...options.present }, { card: 'b1', in: 'chat-b1' });
+  approvals.end();
+  assert.deepEqual(h.cancelled, [options.scope]);
+});
+
+test('with ask-before-do off the channel bot just acts; with it on and no chat to ask in, it stays blocked', async () => {
+  const off = sharedRunApprovals({ askBeforeDo: false, localBot: null });
+  (await off.run({ own: true, localBotId: null })).bind({ sessionId: 's1' });
+  assert.equal(off.bound[0].options.enabled, false);
+
+  const nowhere = sharedRunApprovals({ localBot: null });
+  assert.equal(await nowhere.run({ own: true, localBotId: null }), null);
+  const notMine = sharedRunApprovals({ localBot: { id: 'b1', name: 'Helper', owner: 'someone@example.test' } });
+  assert.equal(await notMine.run({ own: true, localBotId: 'b1' }), null);
+});
+
+test('only a run the person at this computer asked for gets their open page and tab pointer', () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const turn = source.slice(source.indexOf('async function runSharedBotTurn('), source.indexOf('function nativeConversationPrincipal('));
+  assert.match(turn, /const ownBrowser = !!\(asker && asker\.own\) && !EFFECTIVE_RELEASE_PROFILE\.agentSearchOnly;/);
+  assert.match(turn, /const approvals = ownBrowser \? await sharedRunAskBeforeDo\(/);
+  assert.match(turn, /\.\.\.\(ownBrowser \? \[nativeBrowserContextNote\(\{ senderType: 'user', metadata: \{ browserContext: asker\.browserContext \} \}\), botBrowserTabsNote\(\)\] : \[\]\),/);
 });

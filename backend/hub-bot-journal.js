@@ -32,6 +32,7 @@ function createHubBotJournal(db) {
     // Every company copy of this person's bots: local id -> its Hub registration.
     sharedCopies(owner) { return db.prepare('SELECT DISTINCT local_bot_id,team_id,registration_id FROM hub_bot_bindings WHERE owner=?').all(owner); },
     // One bot's copies in one company, each with the channel it was shared into.
+    localCopy(owner,teamId,registrationId) { return db.prepare('SELECT local_bot_id FROM hub_bot_bindings WHERE owner=? AND team_id=? AND registration_id=? LIMIT 1').get(owner,teamId,registrationId); },
     copies(owner,teamId,localBotId) { return db.prepare('SELECT * FROM hub_bot_bindings WHERE owner=? AND team_id=? AND local_bot_id=?').all(owner,teamId,localBotId); },
     prepare(s,job) {
       return db.transaction(() => {

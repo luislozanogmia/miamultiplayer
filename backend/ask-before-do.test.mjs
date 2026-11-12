@@ -68,6 +68,12 @@ test('no, no answer, and a stopped turn run nothing', async () => {
   const cancelled = await asking(stopped, stopped.call().message, () => stopped.gate.cancelConversation('c1'));
   assert.equal(cancelled.approved, false);
   assert.equal(stopped.call().allow, false);
+
+  const ended = bound();
+  ended.turn();
+  const closed = await asking(ended, ended.call().message, () => { ended.gate.cancelScope('other'); ended.gate.cancelScope('c1:bot'); });
+  assert.equal(closed.approved, false);
+  assert.deepEqual(ended.recorded, ['declined']);
 });
 
 test('a chat message never unlocks anything', () => {

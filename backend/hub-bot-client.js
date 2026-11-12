@@ -130,7 +130,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
   // Sign-in tokens are the person's, not a channel's, and last about a minute:
   // every poll and every /token refresh replaces the account's one, and each
   // Hub call during a run reads the newest.
-  const inFlight=new Map(), runScopes=new Map(), freshTokens=new Map(), selections=new Map(), marketStops=new Map();
+  const inFlight=new Map(), runScopes=new Map(), freshTokens=new Map(), selections=new Map(), openPages=new Map(), marketStops=new Map();
   const scopeKey=s=>JSON.stringify([s.origin,s.owner,s.subject,s.teamId,s.channelId]);
   const accountKey=s=>JSON.stringify([s.origin,s.owner,s.subject]);
   const accountRunning=s=>[...runScopes.values()].some(other=>accountKey(other)===accountKey(s));
@@ -266,7 +266,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const currentBot={id:'shared-'+run.registration_id+'-v'+claim.definition.version, registrationId:run.registration_id, name:claim.botName || 'Shared bot', instructions:claim.definition.instructions, bundledSkills:preparedSkills.skills};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<claim.triggerSequence),
-        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,...attached});
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat},signal:controller.signal,modelSelection:selections.get(runKey(s,run.job_id))||null,asker:asker(s,run.registration_id,claim.requesterId===s.subject,openPages.get(runKey(s,run.job_id))),...attached});
       if(controller.signal.aborted) throw controller.signal.reason;
       journal.saveReply(s,run.job_id,withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName)));
     } catch(error) {
@@ -307,7 +307,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<run.triggerSequence),
-        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat:false},signal:controller.signal,modelSelection:run.selection||null,...attached});
+        channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat:false},signal:controller.signal,modelSelection:run.selection||null,asker:asker(s,run.botId,true,run.openPage),...attached});
       if(controller.signal.aborted) throw controller.signal.reason;
       text=withRunLabel(typeof reply==='string'?reply:reply && reply.text,runLabel(reply && reply.provider,s.memberName));
       if(typeof text!=='string' || !text.trim()) throw stopError('bot_failed');
@@ -333,7 +333,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     if(inFlight.has(key) || inFlight.size>=2) return;
     runScopes.set(key,s);
     const task=Promise.resolve().then(()=>execute(s,run,token)).catch(error=>log('run failed',error && error.reason || 'unexpected',run.job_id)).finally(()=>{
-      inFlight.delete(key);runScopes.delete(key);selections.delete(key);
+      inFlight.delete(key);runScopes.delete(key);selections.delete(key);openPages.delete(key);
       if(!accountRunning(s)) freshTokens.delete(accountKey(s));
     });
     inFlight.set(key,task);
@@ -361,6 +361,19 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
     if(source && source.teamId===s.teamId && /^[a-f0-9]{32}$/.test(source.botId||'')) return source.botId;
     const row=journal.copies(s.owner,s.teamId,String(bot.id))[0];
     return row?row.registration_id:null;
+  }
+  // The person's own bot on this computer that a company bot was made from or
+  // downloaded as, if any: its chat is where that bot can ask them for an OK.
+  function localBotId(s,registrationId) {
+    const row=journal.localCopy(s.owner,s.teamId,registrationId);
+    if(row) return String(row.local_bot_id);
+    const bot=listBots(s.owner).find(bot=>bot.marketSource && bot.marketSource.teamId===s.teamId && bot.marketSource.botId===registrationId);
+    return bot?String(bot.id):null;
+  }
+  // Who asked, for the run: a bot asked by the person at this computer may
+  // work in their browser as it does in their own chat with it.
+  function asker(s,registrationId,own,page) {
+    return own ? {own:true,browserContext:page||null,localBotId:localBotId(s,registrationId)} : {own:false};
   }
   return {
     journal,
@@ -399,6 +412,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
         if(ownRequest && selection && typeof selection==='object' && !inFlight.has(runKey(scope,job.id)))
           selections.set(runKey(scope,job.id),{provider:String(selection.provider||''),model:String(selection.model||''),
             reasoningEffort:selection.reasoningEffort,speed:selection.speed,fast:selection.fast===true});
+        if(ownRequest && !inFlight.has(runKey(scope,job.id)) && openPage(input.browserContext)) openPages.set(runKey(scope,job.id),openPage(input.browserContext));
         launch(scope,run,token);
       }
       if(!accountRunning(scope)) freshTokens.delete(accountKey(scope));
@@ -495,7 +509,7 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       freshTokens.set(accountKey(scope),token);
       const selection=input.modelSelection && typeof input.modelSelection==='object' ? {provider:String(input.modelSelection.provider||''),model:String(input.modelSelection.model||''),
         reasoningEffort:input.modelSelection.reasoningEffort,speed:input.modelSelection.speed,fast:input.modelSelection.fast===true} : null;
-      const run={replyId:input.replyId,botId:input.botId,triggerSequence:input.triggerSequence,selection};
+      const run={replyId:input.replyId,botId:input.botId,triggerSequence:input.triggerSequence,selection,openPage:openPage(input.browserContext)};
       runScopes.set(key,scope);
       inFlight.set(key,Promise.resolve().then(()=>answer(scope,run,token)).catch(error=>log('run failed',error && error.reason || 'unexpected',run.replyId)).finally(()=>{
         inFlight.delete(key);runScopes.delete(key);
@@ -512,6 +526,12 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       return {stopped:!!stopRun};
     },
   };
+}
+// The page the person has open in the Mia browser, as their screen reports it.
+// Only its address and title, cut to size; the run cleans the address again.
+function openPage(context) {
+  if(!context || typeof context!=='object' || Array.isArray(context) || typeof context.url!=='string' || !context.url) return null;
+  return {url:context.url.slice(0,2000),title:String(context.title||'').slice(0,200)};
 }
 function createHubBotRouter(options) {
   const router=require('express').Router(),client=createHubBotClient(options);

@@ -5122,6 +5122,12 @@
       });
     },HUB_RUN_TOKEN_MS);
   }
+  // The page open in the Mia browser, so a company bot asked from here can
+  // read it as it does in its own chat.
+  function hubOpenPage(){
+    var page=window.miaNativeBrowser && window.miaNativeBrowser.currentPage ? window.miaNativeBrowser.currentPage() : null;
+    return page ? {browserContext:page} : {};
+  }
   function pollHubBots(roomId,immediate){
     if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
@@ -5129,7 +5135,7 @@
     if(!immediate && Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
     state.hubExecutionAt=Date.now();
     var selection=chatModelSelectionMetadata();
-    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{}))
+    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{},hubOpenPage()))
       .then(function(result){state.hubPendingRuns=result.pending||[];if(result.running)keepHubRunTokensFresh();if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
       .catch(function(){/* Own requests authorize local execution; handoffs await local acceptance. */})
       .finally(function(){
@@ -5166,7 +5172,7 @@
     trackHubDispatch(job);
     // A reply the live feed never closes stops showing as working by itself.
     setTimeout(function(){settleHubMarketReplies([{id:replyId,status:'failed'}]);},HUB_MARKET_RUN_MS);
-    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{}))
+    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{},hubOpenPage()))
       .then(function(){keepHubRunTokensFresh();})
       .catch(function(error){
         trackHubDispatch(Object.assign({},job,{state:'failed'}));
