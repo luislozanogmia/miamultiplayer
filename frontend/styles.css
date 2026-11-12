@@ -4226,6 +4226,19 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .chat-msg-row:hover>.chat-msg-body>.chat-msg-react-add,.chat-msg-row:hover>.chat-msg-body>.chat-msg-text>.chat-msg-react-add,.chat-msg-react-add:focus-visible{opacity:1;}
 .chat-msg-react-add:hover{color:var(--sand-text-primary);}
 @media (hover:none){.chat-msg-react-add{opacity:1;}}
+/* Copy button: last item in a message's header, pushed to the far end
+   (the left end on your own messages, whose header runs right to left). A
+   grouped follow-up has no header, so the button floats at the top beside
+   the bubble, on the side away from the avatar. Shown on hover or keyboard
+   focus, like the reaction button. */
+.chat-msg-copy{appearance:none;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;padding:0;margin-left:auto;border:0;border-radius:6px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;opacity:0;}
+.chat-msg-row.is-you .chat-msg-head>.chat-msg-copy{margin-left:0;margin-right:auto;}
+.chat-msg-body>.chat-msg-copy{position:absolute;top:0;left:calc(100% + 6px);z-index:2;margin:0;}
+.chat-msg-row.is-you>.chat-msg-body>.chat-msg-copy{left:auto;right:calc(100% + 6px);}
+.chat-msg-row:hover .chat-msg-copy,.chat-msg-copy:focus-visible{opacity:1;}
+.chat-msg-copy:hover{color:var(--sand-text-primary);background:var(--sand-fill-ghost-hover);}
+.chat-msg-copy:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:1px;}
+@media (hover:none){.chat-msg-copy{opacity:1;}}
 /* A company bot's approved instructions and skills in its chat's details. */
 .cip-bot-instructions { margin-top: 8px; font-size: 13px; }
 .cip-bot-instructions summary { cursor: pointer; color: var(--sand-text-primary); }

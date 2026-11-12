@@ -13180,6 +13180,9 @@
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
     }
+    // The copy button copies the message as written (markdown, Drive links),
+    // before display-only rewrites below.
+    var copySourceText = text;
     var driveDisplay = isHuman ? googleDriveMessageDisplay(text) : {text:text, files:[]};
     text = driveDisplay.text;
     if(!text && !hasMedia && !driveDisplay.files.length) return '';
@@ -13212,13 +13215,14 @@
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
-    var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
-      (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
-      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span></div>';
     // A background task's live activity line ("✓ research done, building
     // table") — muted so a thread of them reads as a progress feed, not a
     // stack of full agent messages.
     var isActivity = !isHuman && /^✓ /.test(text || '');
+    var copyHtml = chatMsgCopyButtonHtml(m, copySourceText, !!(liveProgress || isActivity || m.askBeforeDo));
+    var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
+      (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
+      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span>' + copyHtml + '</div>';
     var directRoom = isDirectChatRoom();
     var messageClass = liveProgress ? ' chat-msg-thinking' : (isPreReasoning ? ' chat-pre-reasoning' : (isLongMessage ? ' chat-expandable-message' : ''));
     var retryAttempted = !!chatRetryAttempts[m.id];
@@ -13235,7 +13239,30 @@
     var reactAddHtml = canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (hasBubble ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + reactAddHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (hasBubble ? '' : reactAddHtml) + '</div></div>';
+      '<div class="chat-msg-body">' + head + (visuallyGrouped ? copyHtml : '') + (hasBubble ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + reactAddHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (hasBubble ? '' : reactAddHtml) + '</div></div>';
+  }
+
+  // One copy button per message, in its header (or floating at the top of a
+  // grouped follow-up that has no header). The source text is kept here by
+  // message id rather than in the DOM, so a click copies exactly what was
+  // written. Re-rendered rows refresh their entry; the oldest entries drop
+  // off so the map stays small.
+  var CHAT_COPY_TEXT_LIMIT = 2000;
+  var chatCopyTextById = new Map();
+  function chatMsgCopyButtonHtml(m, sourceText, isStatusRow){
+    var text = String(sourceText || '');
+    if(!m || m.system || m.deleted || isStatusRow || !m.id || !text.trim()) return '';
+    var id = String(m.id);
+    chatCopyTextById.delete(id);
+    chatCopyTextById.set(id, text);
+    while(chatCopyTextById.size > CHAT_COPY_TEXT_LIMIT) chatCopyTextById.delete(chatCopyTextById.keys().next().value);
+    return '<button type="button" class="chat-msg-copy" data-chat-copy="' + esc(id) + '" title="Copy message" aria-label="Copy message">' +
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ROW_MENU_ICONS.copy + '</svg></button>';
+  }
+  function copyChatMessageText(messageId){
+    var text = chatCopyTextById.get(String(messageId || ''));
+    if(!text) return Promise.resolve(false);
+    return copySidebarText(text, 'Copied');
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -20711,6 +20738,16 @@
       openChatThread(pill.getAttribute('data-root-id'));
     });
   })();
+
+  // Copy buttons in message headers, in the main timeline and the docked
+  // thread panel alike. A <button>, so Enter and Space work without extra keys.
+  document.addEventListener('click', function(e){
+    var button = e.target && e.target.closest ? e.target.closest('[data-chat-copy]') : null;
+    if(!button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    copyChatMessageText(button.getAttribute('data-chat-copy'));
+  });
 
   // Mote avatars in chat open the matching agent profile. The click is
   // delegated because the timeline and docked thread are rebuilt as messages
