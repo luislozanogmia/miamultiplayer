@@ -306,6 +306,17 @@ test('a bot keeps one main chat in Solo and a separate main chat per team worksp
   assert.equal(fresh.metadata.teamWorkspace, teamA);
   assert.equal(fresh.metadata.conversationMode, 'fresh');
   assert.equal(open({ teamWorkspace: teamA }).id, inA.id);
+  assert.equal(fresh.metadata.source, 'native-ui-new-conversation');
+
+  // A company's My Bots chat keeps its mark in a new conversation, so the
+  // person's own bot still answers there.
+  const myBots = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'bot', name: 'OtherBot',
+    metadata: { botId: 'bot-10', teamWorkspace: teamA, source: 'team-bot-chat' },
+  });
+  const freshMyBots = service.createFreshBotConversation({ companyId: 'company-a', conversationId: myBots.id, principal: owner() });
+  assert.equal(freshMyBots.metadata.source, 'team-bot-chat');
+  assert.equal(freshMyBots.metadata.conversationMode, 'fresh');
 
   for (const teamWorkspace of ['hub_short', 'solo', 42]) {
     assert.throws(() => open({ teamWorkspace }), /teamWorkspace must name a company workspace/);
