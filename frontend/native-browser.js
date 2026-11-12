@@ -737,7 +737,6 @@
     followButton.title = following ? 'Stay on this page when ' + (activity.name || 'the bot') + ' moves on'
       : 'Show the page ' + (activity.name || 'the bot') + ' works on as it moves between tabs';
   }
-  var keepPlaying = false;
   function layout() {
     if (scheduled) return;
     scheduled = true;
@@ -762,7 +761,6 @@
       // A menu (over a still of the page) or a dialog only covers the page for
       // a while, so the live view steps aside without pausing what it plays.
       if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered || dialogOpen) payload.menu = true;
-      if (!open && keepPlaying) payload.keepPlaying = true;
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -1696,13 +1694,9 @@
     coverForTips: coverForTips,
     // Counts only (feedback report); never URLs or titles.
     counts: function () { return { tabs: (state.tabs || []).length, groups: (state.groups || []).length }; },
-    // Set just before the browser closes for another tab of the same strip
-    // (Apps, Automations, Files): what it plays carries on, as in a background tab.
-    keepPlayingWhenHidden: function (on) { keepPlaying = on === true; },
     render: function (visible) {
       var opening = visible && !open;
       open = visible;
-      if (visible) keepPlaying = false;
       if (!visible) {
         setSuggestCover(false);
         setDownloadsOpen(false);
@@ -1712,8 +1706,8 @@
         // running, leaving the last browser pixels over chat. Hide the native
         // surface immediately and invalidate the cached layout for reopen.
         lastLayout = '';
-        bridge.command(Object.assign({ action: 'layout', visible: false, panelOpen: false,
-          bounds: { x: 0, y: 0, width: 0, height: 0 } }, keepPlaying ? { keepPlaying: true } : {})).catch(function () {});
+        bridge.command({ action: 'layout', visible: false, panelOpen: false,
+          bounds: { x: 0, y: 0, width: 0, height: 0 } }).catch(function () {});
         return;
       }
       render(state);

@@ -800,20 +800,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
   }
 
-  async function captureMediaState({ pause = false } = {}) {
+  async function captureMediaState() {
     await Promise.all([...tabs.values()].map(async (tab) => {
       const wc = tab.view.webContents;
       // A sleeping tab has no page; it keeps the position it was saved with.
       if (wc.isDestroyed() || tab.asleep) return;
       try {
         const media = await wc.executeJavaScript(`(() => {
-          const mediaNodes = [...document.querySelectorAll("audio,video")];
           const video = document.querySelector("video");
-          if (${pause && tab.id !== docked.id ? "true" : "false"}) {
-            for (const mediaNode of mediaNodes) {
-              try { mediaNode.pause(); } catch (_) {}
-            }
-          }
           if (!video || !Number.isFinite(video.currentTime)) return null;
           return { currentTime: video.currentTime };
         })()`);
@@ -833,55 +827,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       } catch (_) { /* Cross-origin or unloading pages simply keep no media position. */ }
     }));
     persistTabs();
-  }
-
-  function holdMediaPausedWhileHidden(tab) {
-    const wc = tab.view.webContents;
-    if (wc.isDestroyed()) return;
-    if (tab.hiddenMediaPlaybackGuard) {
-      wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard);
-    }
-    const enforceHiddenPause = () => {
-      if (wc.isDestroyed()) return;
-      return wc.executeJavaScript(`(() => {
-        if (!window.__miaosHiddenMediaGestureInstalled) {
-          window.__miaosHiddenMediaGestureInstalled = true;
-          window.__miaosAllowHiddenMediaPlayback = false;
-          const allowPlayback = () => { window.__miaosAllowHiddenMediaPlayback = true; };
-          document.addEventListener("pointerdown", allowPlayback, { capture: true, once: true });
-          document.addEventListener("keydown", allowPlayback, { capture: true, once: true });
-        }
-        if (window.__miaosAllowHiddenMediaPlayback === true) return "allowed";
-        for (const mediaNode of document.querySelectorAll("audio,video")) {
-          try { mediaNode.pause(); } catch (_) {}
-        }
-        return "paused";
-      })()`).then(result => {
-        if (result === "allowed" && tab.hiddenMediaPlaybackGuard && !wc.isDestroyed()) {
-          wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard);
-          tab.hiddenMediaPlaybackGuard = null;
-        }
-        return result;
-      }).catch(() => {});
-    };
-    tab.hiddenMediaPlaybackGuard = enforceHiddenPause;
-    wc.on("media-started-playing", enforceHiddenPause);
-    wc.executeJavaScript(`(() => {
-      window.__miaosHiddenMediaGestureInstalled = true;
-      window.__miaosAllowHiddenMediaPlayback = false;
-      const allowPlayback = () => { window.__miaosAllowHiddenMediaPlayback = true; };
-      document.addEventListener("pointerdown", allowPlayback, { capture: true, once: true });
-      document.addEventListener("keydown", allowPlayback, { capture: true, once: true });
-      for (const mediaNode of document.querySelectorAll("audio,video")) {
-        try { mediaNode.pause(); } catch (_) {}
-      }
-    })()`).catch(() => {});
-  }
-
-  function holdAllMediaPausedWhileHidden() {
-    // The docked tab is still on screen and keeps playing.
-    for (const tab of tabs.values()) if (tab.id !== docked.id) holdMediaPausedWhileHidden(tab);
-    void captureMediaState({ pause: true });
   }
 
   function restoreMediaState(tab) {
@@ -1178,8 +1123,6 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (docked.id !== id || disposed) return;
       if (isVideo) {
         docked.mode = "video"; clearDockScale(tab);
-        // It is on screen now: the hidden-page pause no longer applies.
-        if (tab.hiddenMediaPlaybackGuard) { wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard); tab.hiddenMediaPlaybackGuard = null; }
         wc.insertCSS(DOCK_VIDEO_CSS).then(key => { if (docked.id === id) tab.dockCss = key; else wc.removeInsertedCSS(key).catch(() => {}); }).catch(() => {});
       }
       layout(); publish();
@@ -3043,7 +2986,6 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       mediaRestoreTarget: null,
       mediaRestoreUntil: 0,
       restoredMediaPlaybackGuard: null,
-      hiddenMediaPlaybackGuard: null,
     };
     attachView(tab);
     tabs.set(tab.id, tab);
@@ -3624,12 +3566,12 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         docked.visible = command.dockVisible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
         // A menu or dialog over the page hides the view only for a while; the
-        // page keeps playing and stays in fullscreen. Hiding it for real (the
-        // panel closes, even under a dialog) pauses it, unless the person only
-        // moved to another tab of the same strip (Apps, Automations, Files):
-        // then it keeps playing, as a background tab does.
+        // page stays in fullscreen. Hiding it for real (the panel closes, even
+        // under a dialog) leaves fullscreen. Either way the page keeps
+        // playing, as a background tab does: music carries on while the
+        // person works elsewhere in Mia.
         coveredForMenu = wasShowing && !visible && command.menu === true;
-        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); if (command.keepPlaying !== true) holdAllMediaPausedWhileHidden(); }
+        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); void captureMediaState(); }
         layout(); return;
       }
       if (command.action === "snapshot") {

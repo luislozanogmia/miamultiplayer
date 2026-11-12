@@ -233,12 +233,9 @@ test("new creates one tab; switching and hiding preserve loaded pages", () => {
   h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
   assert.equal(h.views[0].webContents.loads.length, 1);
   assert.equal(h.views[0].webContents.closed, false);
-  // The pause guard, plus the listener that keeps a playing tab awake.
-  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 2);
-  assert.match(h.views[0].webContents.scripts.at(-1), /querySelectorAll\("audio,video"\)/);
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
-  h.views[0].webContents.emit("media-started-playing");
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+  // Only the listener that keeps a playing tab awake: hiding pauses nothing.
+  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 1);
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
 });
 
 test("a menu over a page still hides the view without pausing its media", async () => {
@@ -258,32 +255,20 @@ test("a menu over a page still hides the view without pausing its media", async 
   assert.equal(h.views[0].visible, true);
 });
 
-test("moving to another tab of the strip hides the page without pausing its media", () => {
+test("closing the panel hides the page without pausing its media", () => {
   const h = harness();
   h.command("new");
   h.command("navigate", { value: "https://example.com/music" });
   const box = { x: 0, y: 100, width: 700, height: 600 };
   h.command("layout", { visible: true, bounds: box });
-  const scripts = h.views[0].webContents.scripts.length;
-  h.command("layout", { visible: false, panelOpen: false, keepPlaying: true, bounds: { x: 0, y: 0, width: 0, height: 0 } });
+  h.command("layout", { visible: false, panelOpen: false, bounds: { x: 0, y: 0, width: 0, height: 0 } });
   assert.equal(h.views[0].visible, false);
-  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs");
-});
-
-test("closing the panel while a dialog covers the page still pauses its media", () => {
-  const h = harness();
-  h.command("new");
-  h.command("navigate", { value: "https://example.com/music" });
-  const box = { x: 0, y: 100, width: 700, height: 600 };
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
+  // Also when it closes behind a dialog that was covering the page.
   h.command("layout", { visible: true, bounds: box });
-  const scripts = h.views[0].webContents.scripts.length;
-  // A dialog (Edit channel) opens over the page: hidden, still playing.
   h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
-  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
-  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs for a dialog");
-  // The panel closes behind the dialog: now it is really hidden.
   h.command("layout", { visible: false, panelOpen: false, bounds: box });
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
 });
 
 test("tab favicon is refetched as a data: URI and clears on navigation", async () => {
