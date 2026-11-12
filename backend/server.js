@@ -8565,9 +8565,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           nativeConversationRepository.mergeDispatchMetadata({ companyId: dispatch.companyId, id: dispatch.id, metadata: { usedChangingTool: true } });
         } catch (_) { /* never breaks a turn */ }
       }
+      // The chat's working line counts steps; the number travels with the
+      // signal so a window opened mid-run picks up the right count.
+      if (toolActivity.phase === 'start') dispatch.toolSteps = (dispatch.toolSteps || 0) + 1;
       try {
         nativeConversationRealtime.publishActivity(dispatch.conversationId, {
-          dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...toolActivity,
+          dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), step: dispatch.toolSteps || 0, ...toolActivity,
         });
       } catch (_) { /* the status panel must never break a turn */ }
     }

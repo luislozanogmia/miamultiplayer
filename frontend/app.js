@@ -7225,6 +7225,7 @@
       clientIdempotencyKey: event.clientIdempotencyKey || null,
       nativeDispatchId: event.metadata && typeof event.metadata.dispatchId === 'string' ? event.metadata.dispatchId : null,
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
+      nativeWorking: !!(event.metadata && event.metadata.progress === true && event.metadata.status === 'working'),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
       reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
@@ -13192,8 +13193,11 @@
     var liveProgress = !isHuman && isLatestLiveProgressMessage(m);
     // Shared-channel text renders exactly like Solo: mdLite escapes all HTML
     // and only turns markdown into formatting, so teammates' text is safe.
+    var workingLine = liveProgress && m.nativeWorking && window.MiaActivity;
+    if(workingLine) setTimeout(tickChatWorkingLines, 0);
     var messageHtml = text ? (liveProgress
-      ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
+      ? '<span class="chat-thinking-shimmer"' + (workingLine ? ' data-working-line="' + esc(m.nativeDispatchId) + '" data-started-at="' + Number(m.ts || 0) + '"' : '') + '>' +
+        esc(workingLine ? chatWorkingLineText(m.nativeDispatchId, Number(m.ts || 0)) : text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
     if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
@@ -13845,7 +13849,32 @@
   function applyChatActivity(conversationId, activity){
     if(!conversationId || !window.MiaActivity) return;
     chatActivityByRoom[conversationId] = window.MiaActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
-    if(conversationId === chatWs.activeRoomId) renderChatActivityPanel();
+    if(conversationId === chatWs.activeRoomId){
+      renderChatActivityPanel();
+      tickChatWorkingLines();
+    }
+  }
+
+  // The "working" row in the thread shows the same live signal to everyone:
+  // the current activity, the step number and the time so far.
+  var chatWorkingLineTimer = null;
+
+  function chatWorkingLineText(dispatchId, startedAt){
+    var state = chatWs.activeRoomId ? chatActivityByRoom[chatWs.activeRoomId] : null;
+    return window.MiaActivity.workingLine(state && state.dispatchId === dispatchId ? state : null, startedAt, Date.now());
+  }
+
+  function tickChatWorkingLines(){
+    var nodes = document.querySelectorAll('[data-working-line]');
+    if(!nodes.length){
+      if(chatWorkingLineTimer){ clearInterval(chatWorkingLineTimer); chatWorkingLineTimer = null; }
+      return;
+    }
+    for(var i = 0; i < nodes.length; i++){
+      var text = chatWorkingLineText(nodes[i].getAttribute('data-working-line'), Number(nodes[i].getAttribute('data-started-at') || 0));
+      if(nodes[i].textContent !== text) nodes[i].textContent = text;
+    }
+    if(!chatWorkingLineTimer) chatWorkingLineTimer = setInterval(tickChatWorkingLines, 1000);
   }
 
   function renderChatActivityPanel(){
