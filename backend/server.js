@@ -191,6 +191,7 @@ const {
   departmentsMetaKey,
   botAnswersConversation,
   recordBelongsToCompany,
+  requestNamesCompany,
   workspaceCompanyId,
   workspaceIdForRecord,
   workspaceIdFromRequest,
@@ -342,11 +343,28 @@ function botVisibleInWorkspace(record, req) {
   return isActiveWorkspaceUser(ownerOf(record))
     && (workspaceId === DEFAULT_WORKSPACE_ID || sameOwner(record, req && req.userEmail));
 }
-function botMutableInWorkspace(record, req) {
+// My Bots shows your Solo bots while a company is open, so one-bot requests
+// sent with the company's name must still reach them. Lists stay per
+// workspace; naming Solo already reaches the same bot.
+function botReachable(record, req) {
+  if (botVisibleInWorkspace(record, req)) return true;
+  return requestNamesCompany(req)
+    && workspaceIdForRecord(record) === 'solo'
+    && sameOwner(record, req && req.userEmail)
+    && isActiveWorkspaceUser(ownerOf(record));
+}
+function callerMayChangeBot(record, req) {
   const caller = String(req && req.userEmail || '').toLowerCase();
   const user = caller ? db.getUserByEmail(conn, caller) : null;
-  return botVisibleInWorkspace(record, req)
-    && (sameOwner(record, caller) || isAdmin(caller) || (user && user.role === 'admin'));
+  return sameOwner(record, caller) || isAdmin(caller) || Boolean(user && user.role === 'admin');
+}
+// List rule: bots this caller may change in the named workspace.
+function botMutableInWorkspace(record, req) {
+  return botVisibleInWorkspace(record, req) && callerMayChangeBot(record, req);
+}
+// One-bot rule for writes.
+function botWritable(record, req) {
+  return botReachable(record, req) && callerMayChangeBot(record, req);
 }
 const SESSION_COOKIE = 'miaos_sid';
 // 30-day rolling TTL: a session expires 30 days after its *last* request,
@@ -5881,7 +5899,7 @@ app.get('/api/bots/archived', requireAuth, (req, res) => {
 
 app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
   const entry = db.archivedBot(conn, req.params.id);
-  if (!entry || !botMutableInWorkspace(entry.record, req)) return res.status(404).json({ error: 'not_found' });
+  if (!entry || !botWritable(entry.record, req)) return res.status(404).json({ error: 'not_found' });
   let record;
   try {
     // Cron job ids died with the archive; the sync below schedules fresh ones.
@@ -6014,7 +6032,7 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) 
 const botSharedFolder = require('./bot-shared-folder');
 function sharedFolderFor(req) {
   const bot = db.loadOne(conn, 'bots', String(req.params.id || ''));
-  if (!bot || !botVisibleInWorkspace(bot, req) || !sameOwner(bot, req.userEmail)) {
+  if (!bot || !botReachable(bot, req) || !sameOwner(bot, req.userEmail)) {
     throw new botSharedFolder.SharedFolderError('not_found', 'That bot is not here.', 404);
   }
   return botSharedFolder.createSharedFolder(soloBotWorkFolder(bot));
@@ -6251,8 +6269,8 @@ registerResource({
   // all); beforeSave stamps ownership at create time, before afterCreate
   // does anything conversation-side.
   listFilter: (record, req) => botVisibleInWorkspace(record, req),
-  accessCheck: (record, req) => botVisibleInWorkspace(record, req),
-  writeAccessCheck: (record, req) => botMutableInWorkspace(record, req),
+  accessCheck: (record, req) => botReachable(record, req),
+  writeAccessCheck: (record, req) => botWritable(record, req),
   protectedFields: SERVER_OWNED_AGENT_FIELDS,
   beforeSave: (record, req, existing) => {
     // POST bodies can't smuggle these either — stamp/strip regardless of input.
@@ -6642,7 +6660,7 @@ app.post('/api/mia/bot-setup-requests/:eventId', requireAuth, (req, res) => {
 
 app.post('/api/bots/:id/departments', requireAuth, async (req, res) => {
   const existing = db.loadOne(conn, 'bots', req.params.id);
-  if (!existing || !botMutableInWorkspace(existing, req)) return res.status(404).json({ error: 'not_found' });
+  if (!existing || !botWritable(existing, req)) return res.status(404).json({ error: 'not_found' });
   const name = String((req.body || {}).add || '').trim();
   if (!name) return res.status(400).json({ error: 'add (department name) required' });
   const departments = departmentsOf(existing);

@@ -9,7 +9,7 @@ function fn(name) {
   assert.notEqual(start, -1, name);
   return source.slice(start, source.indexOf('\n  }\n', start) + 4);
 }
-function harness({ styled = true, storedModel = 'current-chat-model', draftModel = 'old-profile-model', models = [], status = 200 } = {}) {
+function harness({ styled = true, storedModel = 'current-chat-model', draftModel = 'old-profile-model', models = [], status = 200, data, reject = false } = {}) {
   const bot = { id: 'sample-bot', name: 'Sample bot', model: storedModel, state: 'running' };
   const requests = [], toasts = [];
   const context = {
@@ -23,7 +23,7 @@ function harness({ styled = true, storedModel = 'current-chat-model', draftModel
     agentColorSwatchesHtml: () => '<button data-agent-color="#123456">Color</button>',
     workspaceLabel: () => 'Solo', botAutomationList: () => [],
     showBenchToast: value => toasts.push(value),
-    api: (url, options) => { requests.push({ url, ...options }); return Promise.resolve({ status }); },
+    api: (url, options) => { requests.push({ url, ...options }); return reject ? Promise.reject(new Error('offline')) : Promise.resolve({ status, data }); },
     closeCinema() {}, loadBenchAgents: () => Promise.resolve(), renderChatSidebar() {}, refreshChatMain() {}, openBenchDetail() {},
   };
   vm.createContext(context);
@@ -72,4 +72,21 @@ test('profile save retains the instructions revision conflict warning', async ()
   assert.equal(requests.length, 1);
   assert.equal(requests[0].body.expectedInstructionsRevision, 'revision-1');
   assert.deepEqual(toasts, ['Instructions changed on disk. Reload the bot before saving.']);
+});
+
+// A refused save (e.g. the bot was not found) used to do nothing at all.
+test('a failed profile save says so', async () => {
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const missing = harness({ status: 404, data: { error: 'not_found' } });
+  missing.context.saveEditCinema();
+  await settle();
+  assert.deepEqual(missing.toasts, ['That didn’t save. Try again.']);
+  const explained = harness({ status: 400, data: { message: 'Name is too long.' } });
+  explained.context.saveEditCinema();
+  await settle();
+  assert.deepEqual(explained.toasts, ['Name is too long.']);
+  const offline = harness({ reject: true });
+  offline.context.saveEditCinema();
+  await settle();
+  assert.deepEqual(offline.toasts, ['That didn’t save. Try again.']);
 });

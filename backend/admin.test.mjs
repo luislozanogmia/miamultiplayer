@@ -498,6 +498,52 @@ inference.runInferenceViaHermesGateway = async () => ({ text: 'Done.\\n<MIA_INST
   }
 });
 
+// My Bots lists your Solo bots while a company is open, and the app sends the
+// company's name on every one-bot request.
+test('your own Solo bot can be changed while a company is open, and no one else\'s', async () => {
+  const server = await startServer({ seedRows: [{ email: 'solo-owner@example.com', password: 'another-horse-battery', role: 'member' }] });
+  try {
+    const owner = await login(server.origin, 'solo-owner@example.com', 'another-horse-battery');
+    assert.equal(owner.response.status, 200);
+    const company = `hub_${'b'.repeat(32)}`;
+    const asOwner = (workspace) => ({ cookie: owner.cookie, 'content-type': 'application/json', 'x-miaos-workspace': workspace });
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: asOwner('solo'),
+      body: JSON.stringify({ name: 'Solo Color Fixture', instructions: 'Solo fixture instructions.',
+        model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    assert.equal(bot.workspaceId, 'solo');
+
+    const saved = await fetch(`${server.origin}/api/bots/${bot.id}`, {
+      method: 'PUT', headers: asOwner(company), body: JSON.stringify({ avatarColor: '#2a9d8f' }),
+    });
+    assert.equal(saved.status, 200, await saved.clone().text());
+    const reread = await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: asOwner(company) });
+    assert.equal(reread.status, 200);
+    const stored = (await reread.json()).bot;
+    assert.equal(stored.avatarColor, '#2a9d8f');
+    assert.equal(stored.workspaceId, 'solo', 'saving does not move the bot into the company');
+
+    // The company's list still holds only company bots.
+    const listed = await (await fetch(`${server.origin}/api/bots`, { headers: asOwner(company) })).json();
+    assert.ok(!listed.bots.some((entry) => entry.id === bot.id));
+
+    // Someone else naming a company, even an admin, still cannot see it.
+    const other = { cookie: await loginAsBootAdmin(server), 'content-type': 'application/json', 'x-miaos-workspace': company };
+    assert.equal((await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: other })).status, 404);
+    const refused = await fetch(`${server.origin}/api/bots/${bot.id}`, {
+      method: 'PUT', headers: other, body: JSON.stringify({ avatarColor: '#e76f51' }),
+    });
+    assert.equal(refused.status, 404);
+    assert.equal((await fetch(`${server.origin}/api/bots/${bot.id}`, { method: 'DELETE', headers: other })).status, 404);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('relative STATIC_DIR serves the standalone admin page', async () => {
   const server = await startServer({ extraEnv: { STATIC_DIR: '../frontend' } });
   try {

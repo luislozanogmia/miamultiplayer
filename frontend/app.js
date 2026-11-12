@@ -4385,7 +4385,9 @@
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200){ reopenAndClose(); publishCompanyBotEdit(targetId); }
       else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
-    }).catch(function(){});
+      // Any other answer leaves the editor open, so say the save failed.
+      else showBenchToast((res.data && res.data.message) || 'That didn’t save. Try again.');
+    }).catch(function(){ showBenchToast('That didn’t save. Try again.'); });
   }
 
   // Shared swatch-grid markup for the Edit-agent cinema and compact Manage
