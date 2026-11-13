@@ -14153,6 +14153,7 @@
     // Thread replies (m.threadRoot set) never appear in this main pass —
     // they render nested under their root instead, via chatThreadFooterHtml.
     var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
+    mainMessages = MiaChatSteps.groupSteps(mainMessages);
     var dateDivider = '';
     if(mainMessages.length){
       var dividerDate = new Date(mainMessages[0].ts || Date.now());
@@ -14163,6 +14164,7 @@
     }
     var prevHumanKey = null;
     var html = mainMessages.map(function(m){
+      if(m.steps) return chatStepsHtml(m);
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevHumanKey;
@@ -14204,9 +14206,26 @@
     wireNewsOnboarding(thread);
     wireMiaBotDraft(thread, roomId, botDraftFlow);
     wireChatExpandableMessages(thread);
+    wireChatSteps(thread);
     wireChatArtifactPreviews(thread);
     wireChatHistoryControl(thread, roomId);
     syncChatThreadPanel();
+  }
+
+  // A run's thinking and tool calls, folded into one line (see chat-steps.js).
+  // The chat is redrawn on every event, so which runs the user opened is kept here.
+  var chatStepsOpen = {};
+  function chatStepsHtml(group){
+    var live = (chatWs.tasks || []).some(function(task){ return task.id === group.dispatchId && task.kind === 'native-dispatch'; });
+    return MiaChatSteps.html(group, {esc: esc, live: live, open: chatStepsOpen[group.dispatchId] === true});
+  }
+  function wireChatSteps(root){
+    els('[data-chat-steps]', root).forEach(function(details){
+      details.addEventListener('toggle', function(){
+        var id = details.getAttribute('data-chat-steps');
+        if(details.open) chatStepsOpen[id] = true; else delete chatStepsOpen[id];
+      });
+    });
   }
 
   // Slack-style thread pill ("↳ N replies · last …") under a root message's
@@ -14408,9 +14427,12 @@
     el('#ctpRoomName').textContent = chatWs.activeLabel || '';
     el('#ctpRoot').innerHTML = chatMsgHtml(root, false, {inThread: true});
     var replies = state.messages.filter(function(rm){ return rm.threadRoot === rootId && (rm.system || isHumanSender(rm.sender) || displayBotBody(rm.body) || chatMessageHasAttachments(rm)); });
-    el('#ctpDivider').textContent = replies.length + (replies.length === 1 ? ' reply' : ' replies');
+    // A run's thinking and tool calls are not replies.
+    var replyCount = replies.filter(function(rm){ return !rm.nativeDiagnostic; }).length;
+    el('#ctpDivider').textContent = replyCount + (replyCount === 1 ? ' reply' : ' replies');
     var prevKey = null;
-    el('#ctpReplies').innerHTML = replies.map(function(m){
+    el('#ctpReplies').innerHTML = MiaChatSteps.groupSteps(replies).map(function(m){
+      if(m.steps) return chatStepsHtml(m);
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevKey;
@@ -14421,6 +14443,7 @@
       return chatMsgHtml(m, false, {inThread: true});
     }).join('');
     wireChatExpandableMessages(el('#chatThreadPanel'));
+    wireChatSteps(el('#chatThreadPanel'));
     wireChatArtifactPreviews(el('#chatThreadPanel'));
     wireChatRetryActions(el('#chatThreadPanel'));
   }

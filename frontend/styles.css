@@ -1168,6 +1168,19 @@
   .chat-pre-reasoning-toggle.expanded .chat-pre-reasoning-chevron,.chat-expandable-toggle.expanded .chat-expandable-chevron{transform:rotate(225deg) translate(-1px,-1px);}
   .chat-pre-reasoning-full .chat-md-p:last-child,.chat-pre-reasoning-full .chat-md-list:last-child,.chat-expandable-full .chat-md-p:last-child,.chat-expandable-full .chat-md-list:last-child{margin-bottom:0;}
   .chat-msg-thinking{display:inline-block;color:var(--sand-text-secondary);background:transparent;padding:0;}
+  /* A run's thinking and tool calls, folded into one muted line the user can open. */
+  .chat-steps-row{padding-top:0;padding-bottom:0;}
+  .chat-steps-row:hover{background:transparent;}
+  .chat-steps{max-width:min(100%,74ch);font-family:var(--styled-sans);font-size:12.5px;line-height:1.45;color:var(--sand-text-secondary);}
+  .chat-steps summary{display:inline-flex;align-items:center;gap:4px;padding:2px 0;cursor:pointer;list-style:none;user-select:none;border-radius:6px;}
+  .chat-steps summary::-webkit-details-marker{display:none;}
+  .chat-steps summary:hover{color:var(--sand-text-primary);}
+  .chat-steps summary:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:2px;}
+  .chat-steps-chevron{flex:0 0 auto;transition:transform .15s ease;}
+  .chat-steps[open] .chat-steps-chevron{transform:rotate(90deg);}
+  .chat-steps-list{display:flex;flex-direction:column;gap:6px;margin:4px 0 6px 2px;padding-left:10px;border-left:1.5px solid var(--sand-border-subtle);}
+  .chat-step{white-space:pre-wrap;overflow-wrap:anywhere;}
+  .chat-step-tool{color:var(--sand-text-primary);}
   .chat-thinking-shimmer{display:inline-block;color:#aeb2b6;background:linear-gradient(90deg,#aeb2b6 0%,#aeb2b6 40%,#ffffff 50%,#aeb2b6 60%,#aeb2b6 100%);background-size:220% 100%;background-position:140% 0;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:chatThinkingSweep 1.8s ease-in-out infinite;}
   @keyframes chatThinkingSweep{0%{background-position:140% 0;}100%{background-position:-40% 0;}}
   .chat-md-table{width:100%;min-width:0;max-width:100%;margin:8px 0;overflow-x:auto;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;}
