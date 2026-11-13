@@ -109,7 +109,8 @@ def _file_identifier(value: str, label: str, kind: str = "") -> str:
     """Extract IDs from exact Google file URLs; never fetch a model-supplied URL.
 
     A link identifies a file, not an OAuth grant. Google still enforces account
-    permissions and (for drive.file) selection/creation through this app.
+    permissions: reading needs whole-Drive read access or a file picked/created
+    through Mia, and changing a file always needs the latter (drive.file).
     """
     text = str(value or "").strip()
     if _ID_RE.fullmatch(text):
@@ -127,6 +128,10 @@ def _file_identifier(value: str, label: str, kind: str = "") -> str:
             return match[2]
         if host == "drive.google.com" and not kind:
             match = re.fullmatch(r"/file/d/([A-Za-z0-9_-]{10,256})(?:/(?:view|edit|preview))?/?", url.path)
+            if match:
+                return match[1]
+            # Folder links, so a bot can list a folder the user pasted.
+            match = re.fullmatch(r"/drive/(?:u/\d{1,2}/)?folders/([A-Za-z0-9_-]{10,256})/?", url.path)
             if match:
                 return match[1]
             if url.path == "/open":
@@ -341,18 +346,34 @@ def google_calendar_create(summary: str, start: str, end: str, description: str 
     return _gws(("calendar", "events", "insert"), params={"calendarId": "primary"}, body=body)
 
 
-def google_drive_list(query: str = "trashed = false", page_size: int = 50) -> Any:
-    """List bounded Drive metadata with an optional Drive query; trashed files stay excluded by default."""
-    return _gws(("drive", "files", "list"), params={"q": _text(query, "Drive query"), "pageSize": max(1, min(100, int(page_size))), "fields": "files(id,name,mimeType,modifiedTime,webViewLink,parents)"})
+def _drive_literal(value: str, label: str) -> str:
+    # Drive query strings are single-quoted; escape so a name cannot widen the query.
+    return "'" + _text(value, label).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def google_drive_list(query: str = "trashed = false", page_size: int = 50, parent_id: str = "", name_contains: str = "", page_token: str = "") -> Any:
+    """List Drive files and folders (metadata only). Optional: parent_id (a folder ID/link) lists that folder, name_contains searches names, query adds a Drive query; trashed files stay excluded by default. Pass nextPageToken back as page_token for more. With whole-Drive reading granted this covers every file; otherwise only files picked or created through Mia."""
+    clauses = [f"({_text(query, 'Drive query')})"] if query else []
+    if parent_id:
+        clauses.append(f"{_drive_literal(_file_identifier(parent_id, 'parent ID'), 'parent ID')} in parents")
+    if name_contains:
+        clauses.append(f"name contains {_drive_literal(name_contains, 'name')}")
+    params: dict[str, Any] = {"pageSize": max(1, min(100, int(page_size))), "supportsAllDrives": True, "includeItemsFromAllDrives": True,
+                              "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,parents)"}
+    if clauses:
+        params["q"] = " and ".join(clauses)
+    if page_token:
+        params["pageToken"] = _text(page_token, "page token")
+    return _gws(("drive", "files", "list"), params=params)
 
 
 def google_drive_get(file_id: str) -> Any:
-    """Read metadata for one shared Drive file by ID."""
-    return _gws(("drive", "files", "get"), params={"fileId": _file_identifier(file_id, "file ID"), "fields": "id,name,mimeType,modifiedTime,webViewLink,parents"})
+    """Read metadata for one Drive file or folder by ID/link. Any file with whole-Drive reading granted; otherwise only files picked or created through Mia."""
+    return _gws(("drive", "files", "get"), params={"fileId": _file_identifier(file_id, "file ID"), "supportsAllDrives": True, "fields": "id,name,mimeType,modifiedTime,webViewLink,parents"})
 
 
 def google_drive_get_content(file_id: str) -> Any:
-    """Read a shared non-Google-native file as base64 (up to 10 MiB) before editing it. No local path input. Use Docs/Sheets/Slides readers for native files. Google enforces the account's selected-file access."""
+    """Read a non-Google-native file as base64 (up to 10 MiB). No local path input. Use Docs/Sheets/Slides readers for native files. Any file with whole-Drive reading granted; otherwise only files picked or created through Mia."""
     file_id = _file_identifier(file_id, "file ID")
     metadata = _gws(("drive", "files", "get"), params={"fileId": file_id, "supportsAllDrives": True, "fields": "id,name,mimeType,size,trashed,capabilities(canDownload)"})
     if not isinstance(metadata, dict) or metadata.get("id") != file_id or metadata.get("trashed") is not False:
@@ -372,7 +393,7 @@ def google_drive_get_content(file_id: str) -> Any:
 
 
 def google_drive_create(name: str, mime_type: str = "application/vnd.google-apps.folder", parent_id: str = "") -> Any:
-    """Create an empty Drive item (a folder by default), optionally inside one shared parent folder."""
+    """Create an empty Drive item (a folder by default), optionally inside a parent folder picked or created through Mia."""
     body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": _text(mime_type, "mime type")}
     if parent_id:
         body["parents"] = [_identifier(parent_id, "parent ID")]
@@ -380,7 +401,7 @@ def google_drive_create(name: str, mime_type: str = "application/vnd.google-apps
 
 
 def google_drive_update_metadata(file_id: str, name: str = "", description: str = "") -> Any:
-    """Rename or describe a file authorized for Mia. Does not edit content, move, trash, delete, or change sharing. Requires drive.file access; a pasted link alone does not grant it."""
+    """Rename or describe a file picked or created through Mia. Does not edit content, move, trash, delete, or change sharing. Being able to read a file does not allow changing it."""
     if not isinstance(name, str) or not isinstance(description, str):
         raise ValueError("name and description must be text")
     file_id = _file_identifier(file_id, "file ID")
@@ -410,17 +431,45 @@ def _drive_media(content_base64: str, mime_type: str) -> tuple[bytes, str]:
     return content, mime_type
 
 
-def google_drive_create_file(name: str, content_base64: str, mime_type: str, parent_id: str = "") -> Any:
-    """Create a non-Google-native file from base64 content (up to 10 MiB). No host filesystem paths. Parent must already be authorized for Mia. Use dedicated editors to create Google Docs/Sheets/Slides."""
+# What Drive can turn into a Google file while it uploads. The result is
+# created through Mia, so the Docs, Sheets and Slides tools can edit it later.
+_DRIVE_CONVERSIONS = {
+    "document": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword", "application/rtf", "application/vnd.oasis.opendocument.text",
+        "text/html", "text/plain", "text/markdown",
+    },
+    "spreadsheet": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel", "application/vnd.oasis.opendocument.spreadsheet",
+        "text/csv", "text/tab-separated-values",
+    },
+    "presentation": {
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint", "application/vnd.oasis.opendocument.presentation",
+    },
+}
+
+
+def google_drive_create_file(name: str, content_base64: str, mime_type: str, parent_id: str = "", convert_to: str = "") -> Any:
+    """Upload a file from base64 content (up to 10 MiB). No host filesystem paths. Parent must be picked or created through Mia. mime_type is the type of the uploaded bytes. Set convert_to to "document", "spreadsheet" or "presentation" to have Drive convert the upload into a Google Doc, Sheet or Slides file (for example a .docx or HTML into a Doc, .xlsx or CSV into a Sheet, .pptx into Slides) that the Docs/Sheets/Slides tools can then edit; leave it empty to keep the file as uploaded."""
     content, mime_type = _drive_media(content_base64, mime_type)
-    body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": mime_type}
+    target = mime_type
+    if convert_to:
+        accepted = _DRIVE_CONVERSIONS.get(convert_to) if isinstance(convert_to, str) else None
+        if accepted is None:
+            raise ValueError('convert_to must be "document", "spreadsheet" or "presentation"')
+        if mime_type.lower() not in accepted:
+            raise ValueError(f"this file type cannot be converted to a Google {convert_to}")
+        target = f"application/vnd.google-apps.{convert_to}"
+    body: dict[str, Any] = {"name": _text(name, "name"), "mimeType": target}
     if parent_id:
         body["parents"] = [_identifier(parent_id, "parent ID")]
     return _gws(("drive", "files", "create"), params={"supportsAllDrives": True, "fields": "id,name,mimeType,webViewLink"}, body=body, media=content, media_type=mime_type)
 
 
 def google_drive_update_content(file_id: str, content_base64: str) -> Any:
-    """Replace content of a non-Google-native file authorized for Mia with non-empty base64 (up to 10 MiB). Preserves its MIME type, name, parents and sharing. This replaces existing bytes: only use when the user requests that edit. Use dedicated editors for Google Docs/Sheets/Slides. A pasted link alone does not grant drive.file access."""
+    """Replace content of a non-Google-native file picked or created through Mia with non-empty base64 (up to 10 MiB). Preserves its MIME type, name, parents and sharing. This replaces existing bytes: only use when the user requests that edit. Use dedicated editors for Google Docs/Sheets/Slides. Being able to read a file does not allow changing it."""
     file_id = _file_identifier(file_id, "file ID")
     # Validate payload before any account access; the file's actual MIME type
     # decides whether media replacement is appropriate, not a model claim.
@@ -433,7 +482,7 @@ def google_drive_update_content(file_id: str, content_base64: str) -> Any:
 
 
 def google_sheets_get(spreadsheet_id: str, a1_range: str = "") -> Any:
-    """Read spreadsheet metadata, or values when an A1 range is supplied. Requires a shared spreadsheet ID/link."""
+    """Read spreadsheet metadata, or values when an A1 range is supplied, by spreadsheet ID/link. Any spreadsheet with whole-Drive reading granted; otherwise only ones picked or created through Mia."""
     spreadsheet_id = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets")
     if a1_range:
         return _gws(("sheets", "spreadsheets", "values", "get"), params={"spreadsheetId": spreadsheet_id, "range": _range(a1_range)})
@@ -450,7 +499,7 @@ def google_sheets_create(title: str, values: list[list[Any]] | None = None) -> A
 
 
 def google_sheets_update(spreadsheet_id: str, a1_range: str, values: list[list[Any]]) -> Any:
-    """Write literal values to an exact A1 range in a shared spreadsheet. Formulas are not evaluated."""
+    """Write literal values to an exact A1 range in a spreadsheet picked or created through Mia. Formulas are not evaluated."""
     spreadsheet_id, a1_range, values = _file_identifier(spreadsheet_id, "spreadsheet ID", "spreadsheets"), _range(a1_range), _values(values)
     return _gws(("sheets", "spreadsheets", "values", "update"), params={"spreadsheetId": spreadsheet_id, "range": a1_range, "valueInputOption": "RAW"}, body={"range": a1_range, "majorDimension": "ROWS", "values": values})
 
@@ -472,7 +521,7 @@ def google_sheets_add_tab(spreadsheet_id: str, title: str) -> Any:
 
 
 def google_docs_get(document_id: str) -> Any:
-    """Read a shared Google Doc by document ID/link."""
+    """Read a Google Doc by document ID/link. Any Doc with whole-Drive reading granted; otherwise only ones picked or created through Mia."""
     return _gws(("docs", "documents", "get"), params={"documentId": _file_identifier(document_id, "document ID", "document")})
 
 
@@ -485,18 +534,18 @@ def google_docs_create(title: str, initial_text: str = "") -> Any:
 
 
 def google_docs_append(document_id: str, text: str) -> Any:
-    """Append bounded plain text to the end of a shared Google Doc."""
+    """Append bounded plain text to the end of a Google Doc picked or created through Mia."""
     return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _file_identifier(document_id, "document ID", "document")}, body={"requests": [{"insertText": {"endOfSegmentLocation": {}, "text": _text(text, "text")}}]})
 
 
 def google_docs_replace(document_id: str, find_text: str, replace_text: str, match_case: bool = True) -> Any:
-    """Replace every exact occurrence of non-empty text in a shared Google Doc."""
+    """Replace every exact occurrence of non-empty text in a Google Doc picked or created through Mia."""
     request = {"replaceAllText": {"containsText": {"text": _text(find_text, "find text"), "matchCase": bool(match_case)}, "replaceText": _text(replace_text, "replacement text")}}
     return _gws(("docs", "documents", "batchUpdate"), params={"documentId": _file_identifier(document_id, "document ID", "document")}, body={"requests": [request]})
 
 
 def google_slides_get(presentation_id: str) -> Any:
-    """Read a shared Google Slides presentation by presentation ID/link."""
+    """Read a Google Slides presentation by ID/link. Any presentation with whole-Drive reading granted; otherwise only ones picked or created through Mia."""
     return _gws(("slides", "presentations", "get"), params={"presentationId": _file_identifier(presentation_id, "presentation ID", "presentation")})
 
 
@@ -506,7 +555,7 @@ def google_slides_create(title: str) -> Any:
 
 
 def google_slides_add_text_slide(presentation_id: str, title: str, body: str) -> Any:
-    """Add one clean text slide to a shared presentation without deleting or rearranging existing slides."""
+    """Add one clean text slide to a presentation picked or created through Mia, without deleting or rearranging existing slides."""
     presentation_id = _file_identifier(presentation_id, "presentation ID", "presentation")
     suffix = secrets.token_hex(8)
     slide_id, title_id, body_id = f"mia_slide_{suffix}", f"mia_title_{suffix}", f"mia_body_{suffix}"
@@ -521,7 +570,7 @@ def google_slides_add_text_slide(presentation_id: str, title: str, body: str) ->
 
 
 def google_slides_replace_text(presentation_id: str, find_text: str, replace_text: str, match_case: bool = True) -> Any:
-    """Replace every exact occurrence of non-empty text in a shared Google Slides presentation."""
+    """Replace every exact occurrence of non-empty text in a Google Slides presentation picked or created through Mia."""
     request = {"replaceAllText": {"containsText": {"text": _text(find_text, "find text"), "matchCase": bool(match_case)}, "replaceText": _text(replace_text, "replacement text")}}
     return _gws(("slides", "presentations", "batchUpdate"), params={"presentationId": _file_identifier(presentation_id, "presentation ID", "presentation")}, body={"requests": [request]})
 
@@ -535,7 +584,7 @@ def _serve() -> None:
 
     server = MCPServer(
         "mia-google-workspace",
-        instructions="Use only the Google capabilities Mia granted to this bot. Drive and Gmail deletion, arbitrary API calls, and permission changes are unavailable. Ask Mia for escalation when the task needs a capability absent from this session.",
+        instructions="Use only the Google capabilities Mia granted to this bot. Drive and Gmail deletion, arbitrary API calls, and permission changes are unavailable. Drive files can be changed only when picked or created through Mia, even when they can be read. Ask Mia for escalation when the task needs a capability absent from this session.",
     )
     for name in TOOL_NAMES:
         server.add_tool(globals()[name], name=name)

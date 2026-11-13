@@ -41,16 +41,6 @@ test('legacy roster responses still show an explicitly in-chat human', () => {
   assert.deepEqual(visibleHumans([legacyJoined, legacyAbsent]), [legacyJoined]);
 });
 
-test('one-to-one headers identify one agent or one bot without a combined count', () => {
-  const countLabel = frontendFunction('chatRosterAgentCountLabel');
-  const peopleLabel = frontendFunction('chatRosterPeopleCountLabel');
-  assert.equal(peopleLabel([{}]), '1 user');
-  assert.equal(peopleLabel([{}, {}]), '2 users');
-  assert.equal(countLabel([{ principalType: 'agent' }]), '1 agent');
-  assert.equal(countLabel([{ principalType: 'bot' }]), '1 bot');
-  assert.equal(countLabel([{ principalType: 'agent' }, { principalType: 'bot' }]), '2 agents &amp; bots');
-});
-
 test('server human directory is available in Multiplayer Test and empty in Solo', () => {
   const projectUsers = sourceFunction(serverSource, 'humanDirectoryUsersForWorkspace', {
     DEFAULT_WORKSPACE_ID: 'multiplayer_test',

@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261103-multiplayer-1" />
+<link rel="stylesheet" href="styles.css?v=20261112-ideas-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -769,6 +769,9 @@
       <button type="button" class="local-browser-btn local-browser-pip-btn" id="localBrowserPipBtn" title="Picture in picture: keep this tab below the chat" aria-label="Picture in picture">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 9V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"></path><rect x="12" y="13" width="10" height="7" rx="2"></rect></svg>
       </button>
+      <button type="button" class="local-browser-btn local-browser-split-btn" id="localBrowserSplitBtn" title="Split view: one page" aria-label="Split view: one page" aria-haspopup="menu" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true" data-mode="1"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect></svg>
+      </button>
       <button type="button" class="local-browser-btn local-browser-mia-toggle" id="localBrowserMiaToggle" title="Hide Mia" aria-label="Hide Mia" aria-pressed="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M14.5 4.5v15"></path></svg>
       </button>
@@ -1040,16 +1043,23 @@
     <section class="styled-settings-pane" data-pane="instructions">
       <h1 class="styled-settings-h1">Instructions</h1>
 
-      <div class="styled-settings-group-label">Agents</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Use the same rules for bots and agents</div><div class="styled-settings-row-desc">One set of instructions for Mia and every bot</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsInstructionsShared" aria-label="Use the same rules for bots and agents" /><span class="gt-track"></span></label>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label" id="settingsAgentInstructionsGroup">Agents</div>
       <div class="styled-settings-card styled-settings-instructions-card">
         <div class="styled-settings-row">
-          <div><div class="styled-settings-row-label">Agent Instructions</div><div class="styled-settings-row-desc">Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude</div></div>
+          <div><div class="styled-settings-row-label" id="settingsAgentInstructionsLabel">Agent Instructions</div><div class="styled-settings-row-desc" id="settingsAgentInstructionsDesc">Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude</div></div>
         </div>
         <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsAgentInstructions" aria-label="Agent Instructions" placeholder="For example: Be concise, use short paragraphs, and ask before expanding the task." maxlength="8000"></textarea>
       </div>
 
-      <div class="styled-settings-group-label">Bots</div>
-      <div class="styled-settings-card styled-settings-instructions-card">
+      <div class="styled-settings-group-label" id="settingsBotInstructionsGroup">Bots</div>
+      <div class="styled-settings-card styled-settings-instructions-card" id="settingsBotInstructionsCard">
         <div class="styled-settings-row">
           <div><div class="styled-settings-row-label">Bot Instructions</div><div class="styled-settings-row-desc">Applied to every bot in addition to that bot’s own brief and automations</div></div>
         </div>
@@ -1357,8 +1367,8 @@
 <script src="feedback-report.js?v=20261022-feedback-1"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
 <script src="chat-scroll.js?v=20261101-approval-reveal-1"></script>
-<script src="dictation.js?v=20261026-dictation-1"></script>
-<script src="agent-activity.js?v=20261001-activity-1"></script>
+<script src="dictation.js?v=20261112-ideas-1"></script>
+<script src="agent-activity.js?v=20261111-working-line-1"></script>
 <script src="clerk-desktop-ui.js"></script>
 <script src="account-switcher.js"></script>
     <script src="browser-work.js"></script>
@@ -1368,7 +1378,7 @@
     <script src="artifacts-page.js?v=20261103-artifacts-2"></script>
     <script src="apps-page.js?v=20261102-apps-3"></script>
     <script src="view-shelf.js?v=20261027-shelf-1"></script>
-    <script src="automation-proposal-card.js?v=20261020-automation-card-3"></script>
+    <script src="automation-proposal-card.js?v=20261111-automation-card-5"></script>
     <script src="instruction-proposal-card.js?v=20261106-instruction-review-1"></script>
     <script src="mia-app-card.js?v=20261102-mia-app-1"></script>
     <script src="tab-strip.js?v=20261102-apps-3"></script>
@@ -1376,7 +1386,7 @@
     <script src="team-logo.js"></script>
     <script src="hub-chat.js?v=20261103-space-control-1"></script>
     <script src="safe-page-url.js?v=20261102-space-1"></script>
-    <script src="shared-space.js?v=20261103-space-control-1"></script>
+    <script src="shared-space.js?v=20261112-ideas-1"></script>
     <script src="team-files.js?v=20261102-team-files-2"></script>
     <script src="bot-folder-sync.js?v=20261109-folder-1"></script>
     <script src="team-files-ui.js?v=20261102-team-files-1"></script>
@@ -1386,14 +1396,16 @@
     <script src="private-agents-ui.js?v=20261102-agents-1"></script>
     <div class="workspace-demo-view" id="workspaceDemoView" hidden></div>
     <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
+    <script src="sidebar-bot-order.js?v=20261111-bot-order-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
     <script src="bot-marketplace.js?v=20261109-market-1"></script>
     <script src="mcp-apps-ui.js?v=20261110-mcp-3"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
-    <script src="app.js?v=20261106-company-logo-1"></script>
-    <script src="shared-space-live.js?v=20261103-space-1"></script>
-    <script src="shared-space-ui.js?v=20261103-space-control-1"></script>
+    <script src="app.js?v=20261111-working-line-2"></script>
+    <script src="shared-space-live.js?v=20261112-ideas-1"></script>
+    <script src="shared-space-talk.js?v=20261112-ideas-1"></script>
+    <script src="shared-space-ui.js?v=20261112-ideas-1"></script>
     <script src="hub-teams.js"></script>
 </body>
 </html>

@@ -16,6 +16,16 @@ function workspaceIdFromRequest(req) {
   return normalizeWorkspaceId(header || query);
 }
 
+// The app names an open company as hub_<id>. It still maps to the default
+// workspace above; this only says a company, not Solo, is open.
+const COMPANY_WORKSPACE_PATTERN = /^hub_[a-f0-9]{32}$/;
+
+function requestNamesCompany(req) {
+  const header = req && req.headers && req.headers['x-miaos-workspace'];
+  const query = req && req.query && req.query.workspace;
+  return COMPANY_WORKSPACE_PATTERN.test(String(header || query || '').trim().toLowerCase());
+}
+
 function workspaceIdForRecord(record) {
   return normalizeWorkspaceId(record && record.workspaceId);
 }
@@ -57,6 +67,7 @@ module.exports = {
   departmentsMetaKey,
   normalizeWorkspaceId,
   recordBelongsToCompany,
+  requestNamesCompany,
   workspaceCompanyId,
   workspaceIdForRecord,
   workspaceIdFromRequest,

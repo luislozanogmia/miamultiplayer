@@ -44,6 +44,33 @@ assert len(paths) == 1
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('Drive list reads folders by parent and searches names without widening the query', () => {
+  const result = spawnSync('python3', ['-c', `
+import runpy
+m = runpy.run_path(${JSON.stringify(server)})
+calls = []
+m['google_drive_list'].__globals__['_gws'] = lambda op, **kwargs: calls.append((op, kwargs)) or {"files": []}
+folder = 'folder_fixture_123456'
+m['google_drive_list'](parent_id='https://drive.google.com/drive/folders/' + folder, name_contains="it's \\\\ x", page_token='next_fixture')
+op, kwargs = calls[-1]
+assert op == ('drive', 'files', 'list')
+params = kwargs['params']
+assert params['q'] == "(trashed = false) and '" + folder + "' in parents and name contains 'it\\\\'s \\\\\\\\ x'", params['q']
+assert params['includeItemsFromAllDrives'] is True and params['supportsAllDrives'] is True
+assert params['pageToken'] == 'next_fixture'
+assert params['fields'].startswith('nextPageToken,')
+m['google_drive_list'](query='')
+assert 'q' not in calls[-1][1]['params']
+for bad in ('https://drive.google.com.evil.example/drive/folders/' + folder, "x' or 'a' in parents"):
+    try:
+        m['google_drive_list'](parent_id=bad)
+        raise AssertionError('invalid parent accepted')
+    except ValueError:
+        pass
+`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('Google CLI failures never expose raw diagnostic credentials or response bodies', () => {
   const result = spawnSync('python3', ['-c', `
 import runpy
@@ -193,6 +220,21 @@ for invalid in ('', 'not base64', '/etc/passwd', 'a' * 14_000_001):
 m['google_drive_create_file']('Fixture.txt', payload, 'text/plain')
 assert calls[-1][0] == ('drive', 'files', 'create')
 assert calls[-1][1]['body'] == {'name': 'Fixture.txt', 'mimeType': 'text/plain'}
+# An upload can become a Google file; the bytes keep their own type.
+docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+m['google_drive_create_file']('Report', payload, docx, convert_to='document')
+assert calls[-1][1]['body'] == {'name': 'Report', 'mimeType': 'application/vnd.google-apps.document'}
+assert calls[-1][1]['media_type'] == docx
+m['google_drive_create_file']('Numbers', payload, 'text/csv', convert_to='spreadsheet')
+assert calls[-1][1]['body']['mimeType'] == 'application/vnd.google-apps.spreadsheet'
+for bad in (('image/png', 'document'), (docx, 'spreadsheet'), ('text/plain', 'folder'), ('text/plain', 'script')):
+    before = len(calls)
+    try:
+        m['google_drive_create_file']('Bad', payload, bad[0], convert_to=bad[1])
+        raise AssertionError('unsafe conversion accepted')
+    except ValueError:
+        pass
+    assert len(calls) == before
 `], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 });

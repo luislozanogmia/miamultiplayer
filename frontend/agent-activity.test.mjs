@@ -141,3 +141,24 @@ test('the Working now panel shows only with detailed output', async () => {
   assert.match(body, /if\(chatOutputMode !== 'verbose' \|\| \(!live && !files\.length\)\)\{\n\s*panel\.hidden = true;/);
   assert.match(source, /function renderOutputSetting\(mode\)\{\n\s*chatOutputMode = mode;\n\s*renderChatActivityPanel\(\);/, 'changing the setting applies at once');
 });
+
+test('the working line names the activity, the step and the time so far', () => {
+  assert.equal(activity.workingLine(null, 1000, 2000), 'Working through this');
+  assert.equal(activity.workingLine(null, 1000, 13000), 'Working through this · 12s');
+  let state = activity.reduceActivity(null, sig({ label: 'Searching the web' }));
+  state = activity.reduceActivity(state, sig({ phase: 'complete', label: 'Searching the web', at: 2000 }));
+  state = activity.reduceActivity(state, sig({ label: 'Reading files', at: 3000 }));
+  assert.equal(activity.workingLine(state, 1000, 66000), 'Reading files · step 2 · 1m 05s');
+});
+
+test('a window opened mid-run takes the step number the signal carries', () => {
+  const state = activity.reduceActivity(null, sig({ label: 'Running a command', step: 7 }));
+  assert.equal(state.steps, 7);
+  assert.equal(activity.workingLine(state, 0, 5000), 'Running a command · step 7');
+});
+
+test('the working row in the thread is filled from the live signal', () => {
+  const appSource = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /data-working-line="/);
+  assert.match(appSource, /window\.MiaActivity\.workingLine\(/);
+});

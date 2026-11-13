@@ -122,14 +122,76 @@ test('a new company bot chat forwards its signed-in Hub token for membership ver
     applyNativeConversationList(){},
     loadChatRoom: async () => {},
     showBenchToast: () => assert.fail('authorized chat should open'),
+    hubWorkspace: () => true,
+    loadNativeConversations: async () => [],
   };
   vm.createContext(context);
   vm.runInContext(fn('openTeamBotChat'), context);
+  vm.runInContext(fn('createNativeAgentConversation'), context);
   await context.openTeamBotChat({ id: 'bot-a', name: 'Team bot' });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].path, '/api/conversations?workspace=solo');
   assert.equal(requests[0].options.headers['x-hub-token'], 'test-session-token');
   assert.equal(requests[0].options.body.metadata.teamWorkspace, workspace);
+});
+
+// Bot setup and My Bots make a bot's chat through one creator. In a company
+// a setup-made chat used to miss the company tag, so the company dropped it
+// and the setup card sat on "Activating…" forever.
+function chatCreator(activeWorkspaceKey, listed = []){
+  const requests = [];
+  const context = {
+    window: { MiaHubChat: { sessionToken: async () => 'test-session-token' } },
+    activeWorkspaceKey,
+    hubWorkspace: () => /^hub_[a-f0-9]{32}$/.test(activeWorkspaceKey),
+    isNativeMiaConversation: () => false,
+    loadNativeConversations: async (options) => { requests.push({ path: 'list', options }); return listed; },
+    api: async (path, options) => {
+      requests.push({ path, options });
+      return { status: 201, data: { conversation: { id: 'new-chat', type: 'bot', metadata: options.body.metadata } } };
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(fn('nativeConversationInView'), context);
+  vm.runInContext(fn('createNativeAgentConversation'), context);
+  return { context, requests };
+}
+
+test('bot setup in a company makes the company\'s own chat with the bot, like My Bots does', async () => {
+  const workspace = 'hub_' + 'c'.repeat(32);
+  const { context, requests } = chatCreator(workspace);
+  const controller = new AbortController();
+  const chat = await context.createNativeAgentConversation({ id: 'bot-new', name: 'New bot', departments: ['ops'] }, { signal: controller.signal });
+  const post = requests.filter((request) => request.path !== 'list');
+  assert.equal(post.length, 1);
+  assert.equal(post[0].path, '/api/conversations?workspace=solo');
+  assert.equal(post[0].options.headers['x-hub-token'], 'test-session-token');
+  assert.equal(post[0].options.signal, controller.signal, 'Cancel still aborts the request');
+  assert.equal(requests[0].options.signal, controller.signal);
+  assert.equal(post[0].options.body.metadata.teamWorkspace, workspace);
+  assert.equal(post[0].options.body.metadata.source, 'team-bot-chat');
+  assert.equal(chat.metadata.teamWorkspace, workspace);
+  assert.equal(context.nativeConversationInView(chat), true, 'the company keeps the new chat');
+});
+
+test('bot setup in Solo still makes an untagged chat, and an existing chat is reused', async () => {
+  const solo = chatCreator('solo');
+  const chat = await solo.context.createNativeAgentConversation({ id: 'bot-new', name: 'New bot' }, {});
+  const post = solo.requests.filter((request) => request.path !== 'list');
+  assert.equal(post[0].path, '/api/conversations');
+  assert.equal(post[0].options.headers, undefined);
+  assert.equal(chat.metadata.teamWorkspace, undefined);
+  assert.equal(chat.metadata.source, 'bot-setup');
+
+  const workspace = 'hub_' + 'c'.repeat(32);
+  const listed = [
+    { id: 'fresh', type: 'bot', metadata: { botId: 'bot-new', teamWorkspace: workspace, conversationMode: 'fresh' } },
+    { id: 'main', type: 'bot', metadata: { botId: 'bot-new', teamWorkspace: workspace } },
+  ];
+  const team = chatCreator(workspace, listed);
+  const existing = await team.context.createNativeAgentConversation({ id: 'bot-new', name: 'New bot' });
+  assert.equal(existing.id, 'main');
+  assert.equal(team.requests.filter((request) => request.path !== 'list').length, 0, 'no duplicate chat');
 });
 
 test('a team shows only its own bot chats, and Solo never shows a team\'s', () => {

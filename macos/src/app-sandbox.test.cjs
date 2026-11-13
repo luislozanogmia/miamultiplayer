@@ -347,6 +347,35 @@ test("the note that an app was stopped reaches the page, without flooding it", (
   assert.equal(notes.length, 2);
 });
 
+test("an app that isn't shown sits off the window, so it can't take clicks", () => {
+  const views = [];
+  const sessions = new Map();
+  const session = { fromPartition(partition) { if (!sessions.has(partition)) sessions.set(partition, fakeSession()); return sessions.get(partition); } };
+  class View {
+    constructor() { this.webContents = fakeContents(); this.visible = true; this.bounds = null; views.push(this); }
+    setBackgroundColor() {} setBounds(bounds) { this.bounds = bounds; } setVisible(visible) { this.visible = visible; }
+  }
+  const window = { isDestroyed: () => false, contentView: { addChildView() {}, removeChildView() {} } };
+  const panes = sandbox.createAppPanes({ window, session, WebContentsView: View, openWebLink() {}, onLinkBlocked() {} });
+  const one = sandbox.appIdentity("notes/one"), two = sandbox.appIdentity("notes/two");
+  const onWindow = (view) => view.bounds.x + view.bounds.width > 0;
+  panes.open(one, "/nowhere");
+  assert.equal(views[0].visible, false);
+  assert.equal(onWindow(views[0]), false, "a new app waits off the window");
+  const bounds = { x: 300, y: 40, width: 800, height: 600 };
+  panes.layout(one.key, bounds);
+  assert.deepEqual(views[0].bounds, bounds);
+  panes.open(two, "/nowhere");
+  panes.layout(two.key, bounds);
+  assert.equal(views[0].visible, false);
+  assert.equal(onWindow(views[0]), false);
+  assert.deepEqual([views[0].bounds.width, views[0].bounds.height], [800, 600], "it keeps its size");
+  assert.deepEqual(views[1].bounds, bounds);
+  panes.layout(one.key, bounds);
+  assert.deepEqual(views[0].bounds, bounds, "and comes back when shown again");
+  assert.equal(onWindow(views[1]), false);
+});
+
 test("every other way of writing a private IPv6 address is refused", () => {
   for (const blocked of ["64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::808:808", "2002:7f00:1::", "2002:0808:0808::1", "fec0::1", "feff::1", "[fec0::1]"]) {
     assert.equal(sandbox.isPrivateAddress(blocked), true, blocked);

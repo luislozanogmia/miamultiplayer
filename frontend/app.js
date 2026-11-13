@@ -1709,6 +1709,24 @@
     if(bot) bot.value = String(instructions.bot || '');
     var askBeforeDo = el('#settingsAskBeforeDo');
     if(askBeforeDo) askBeforeDo.checked = instructions.askBeforeDo !== false;
+    var shared = el('#settingsInstructionsShared');
+    if(shared) shared.checked = instructions.shared === true;
+    applyInstructionsShared(instructions.shared === true);
+  }
+
+  // Shared rules show one box, the agent text, which bots receive too. The bot
+  // box is only hidden, so its text (saved or not) comes back when turned off.
+  function applyInstructionsShared(on){
+    var label = el('#settingsAgentInstructionsLabel');
+    var desc = el('#settingsAgentInstructionsDesc');
+    var agent = el('#settingsAgentInstructions');
+    if(label) label.textContent = on ? 'Instructions' : 'Agent Instructions';
+    if(desc) desc.textContent = on ? 'Applied to Mia and to every bot' : 'Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude';
+    if(agent) agent.setAttribute('aria-label', on ? 'Instructions' : 'Agent Instructions');
+    ['#settingsAgentInstructionsGroup', '#settingsBotInstructionsGroup', '#settingsBotInstructionsCard'].forEach(function(selector){
+      var node = el(selector);
+      if(node) node.hidden = !!on;
+    });
   }
 
   function loadHarnessSettings(showFirstRun){
@@ -2841,16 +2859,22 @@
       settingsAskBeforeDo.disabled = false;
     });
   });
+  var settingsInstructionsShared = el('#settingsInstructionsShared');
+  if(settingsInstructionsShared) settingsInstructionsShared.addEventListener('change', function(){
+    applyInstructionsShared(settingsInstructionsShared.checked);
+  });
   var settingsInstructionsSave = el('#settingsInstructionsSave');
   if(settingsInstructionsSave) settingsInstructionsSave.addEventListener('click', function(){
     var agent = el('#settingsAgentInstructions');
     var bot = el('#settingsBotInstructions');
+    var shared = el('#settingsInstructionsShared');
     var saved = el('#settingsInstructionsSaved');
     settingsInstructionsSave.disabled = true;
     if(saved) saved.classList.remove('visible');
     api('/api/settings/instructions', {method:'POST', body:{
       agent: agent ? agent.value : '',
-      bot: bot ? bot.value : ''
+      bot: bot ? bot.value : '',
+      shared: !!(shared && shared.checked)
     }}).then(function(res){
       if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not save instructions.');
       renderInstructionSettings(res.data.instructions);
@@ -4323,14 +4347,13 @@
   function openEditCinema(id){
     var a = findBenchAgent(id);
     if(!a) return;
-    var text = a.instructions || (a.isBuiltin ? a.brief : '') || '';
-    text = String(text).replace(/\n?\s*Automation:\s*[^\n]*$/i, '').trim();
+    var text = editInstructionsText(a.instructions || (a.isBuiltin ? a.brief : '') || '');
     var modelIx = BENCH_MODELS.indexOf(a.model);
     var k = matchBenchKind(text) || BENCH_FALLBACK_KIND;
     var currentDepts = agentDepartments(a);
     editState = {
       agentId: id, isBuiltin: a.isBuiltin, name: a.name,
-      instructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
+      instructions: text, loadedInstructions: text, skills: Array.isArray(a.skills) ? a.skills.slice() : [], instructionsRevision: a.instructionsRevision, model: a.model || selectedConnectedBotModel(), modelIx: modelIx === -1 ? 0 : modelIx,
       departments: currentDepts.length ? currentDepts.slice() : guessDepartmentsFor(text),
       avatarColor: normalizeAgentAvatarColor(a.avatarColor),
       suggestion: suggestedInstructionsFor(text), suggestDismissed: false,
@@ -4338,6 +4361,7 @@
     };
     editState.testRuns.push(buildTestRun(k, k.sample.task, editState.testScopes));
     cinema.mode = 'edit';
+    refreshEditCinemaInstructions();
     if(styledAgentEditPaneAvailable()){
       prepareChatUtilityPane('agent-edit');
       renderChatInfoPane();
@@ -4355,7 +4379,50 @@
     el('#benchEditTextarea').focus();
   }
 
+  // The editor shows a bot's instructions without the old trailing
+  // "Automation:" line; automations are edited on their own.
+  function editInstructionsText(value){
+    return String(value || '').replace(/\n?\s*Automation:\s*[^\n]*$/i, '').trim();
+  }
+  function editInstructionsChanged(){
+    return typeof editState.loadedInstructions !== 'string'
+      || String(editState.instructions || '').trim() !== editState.loadedInstructions.trim();
+  }
+  // A bot's instructions can change on disk while the bot list still holds an
+  // older copy: the bot rewrites its own when its owner accepts the change in
+  // chat, and Mia can rewrite them too. Read the bot again so the editor holds
+  // the current text and revision. Text the person already edited is left as
+  // it is; saving it then meets the conflict resolveEditInstructionsConflict handles.
+  // -> the bot as read, or null
+  function refreshEditCinemaInstructions(){
+    var agentId = editState.agentId;
+    var a = findBenchAgent(agentId);
+    var targetId = a && (a.isBuiltin ? a.agentId : a.id);
+    if(!targetId) return Promise.resolve(null);
+    return api('/api/bots/' + encodeURIComponent(targetId)).then(function(res){
+      var bot = res.status === 200 && res.data && res.data.bot;
+      if(!bot || cinema.mode !== 'edit' || editState.agentId !== agentId) return null;
+      if(!editInstructionsChanged() && bot.instructionsRevision){
+        var text = editInstructionsText(bot.instructions);
+        editState.instructions = text;
+        editState.loadedInstructions = text;
+        editState.instructionsRevision = bot.instructionsRevision;
+        var field = el('#styledAgentEditInstructions') || el('#benchEditTextarea');
+        if(field && field.value !== text) field.value = text;
+      }
+      return bot;
+    }).catch(function(){ return null; });
+  }
+  // A bot's files changed (the bot list was read again): keep an open editor current.
+  if(typeof window !== 'undefined' && window.addEventListener) window.addEventListener('mia-bots-changed', function(){
+    if(cinema.mode === 'edit' && editState.agentId) refreshEditCinemaInstructions();
+  });
+
   function saveEditCinema(){
+    submitEditCinema(false);
+  }
+  // retried: this is the one automatic second try after a revision conflict.
+  function submitEditCinema(retried){
     var a = findBenchAgent(editState.agentId);
     if(!a) return;
     var instructions = editState.instructions.trim();
@@ -4380,21 +4447,49 @@
     // Profile edits leave model selection to chat. Omit it so a stale editor
     // cannot overwrite the current model or require a connected provider.
     var body = {name: name, instructions: instructions, expectedInstructionsRevision: editState.instructionsRevision, avatarColor: editState.avatarColor || null};
+    // Instructions the person left alone are not sent, so a newer copy on
+    // disk stays as it is and only the other fields save.
+    if(!editInstructionsChanged()){ delete body.instructions; delete body.expectedInstructionsRevision; }
     if(!styledEditOpen) body.model = model;
     if(skillsLibrary) body.skills = (editState.skills || []).filter(function(id){ return skillsLibrary.skills.some(function(skill){ return skill.id === id; }); });
     api('/api/bots/' + targetId, {method:'PUT', body:body}).then(function(res){
       if(res.status === 200){ reopenAndClose(); publishCompanyBotEdit(targetId); }
-      else if(res.status === 409) showBenchToast('Instructions changed on disk. Reload the bot before saving.');
-    }).catch(function(){});
+      else if(res.status === 409) resolveEditInstructionsConflict(!retried);
+      // Any other answer leaves the editor open, so say the save failed.
+      else showBenchToast((res.data && res.data.message) || 'That didn’t save. Try again.');
+    }).catch(function(){ showBenchToast('That didn’t save. Try again.'); });
+  }
+  // The save named an older revision of the instructions than the one on
+  // disk. The check is there so an editor opened earlier never silently
+  // replaces a newer version, such as one the bot wrote after its owner
+  // accepted it in chat. Read the bot again, then:
+  // - nothing on disk is lost by saving (the file still holds what the person
+  //   opened, or already holds their text): save again at once;
+  // - the file holds other new text: say so, and save the person's version
+  //   with one click (or with Save, which now names the current revision).
+  // autoRetry is false after the one automatic retry, so this never loops.
+  function resolveEditInstructionsConflict(autoRetry){
+    var opened = String(editState.loadedInstructions || '').trim();
+    var agentId = editState.agentId;
+    return refreshEditCinemaInstructions().then(function(bot){
+      if(editState.agentId !== agentId) return;
+      if(!bot || !bot.instructionsRevision){ showBenchToast('That didn’t save. Try again.'); return; }
+      var latest = editInstructionsText(bot.instructions);
+      var mine = String(editState.instructions || '').trim();
+      editState.instructionsRevision = bot.instructionsRevision;
+      editState.loadedInstructions = latest;
+      if(autoRetry && (latest === opened || latest === mine)){ submitEditCinema(true); return; }
+      showBenchToast('These instructions changed while you were editing. Click to save yours instead.', function(){ submitEditCinema(true); });
+    });
   }
 
   // Shared swatch-grid markup for the Edit-agent cinema and compact Manage
   // Agents menu. The palette and data attributes stay identical so both
   // surfaces use the same validated color values.
-  function agentColorSwatchesHtml(currentColor, colorInputId, classPrefix){
+  function agentColorSwatchesHtml(currentColor, colorInputId, classPrefix, noAutomatic){
     classPrefix = classPrefix || 'bench-agent-color';
     var current = normalizeAgentAvatarColor(currentColor);
-    var html = '<button type="button" class="' + classPrefix + '-swatch automatic' + (!current ? ' selected' : '') + '" data-agent-color="" aria-label="Use automatic color" aria-pressed="' + (!current ? 'true' : 'false') + '" title="Automatic color">' +
+    var html = noAutomatic ? '' : '<button type="button" class="' + classPrefix + '-swatch automatic' + (!current ? ' selected' : '') + '" data-agent-color="" aria-label="Use automatic color" aria-pressed="' + (!current ? 'true' : 'false') + '" title="Automatic color">' +
       '<span class="' + classPrefix + '-auto-mark">A</span></button>';
     html += AGENT_COLOR_OPTIONS.map(function(option){
       var selected = current === option.value;
@@ -5120,6 +5215,12 @@
       });
     },HUB_RUN_TOKEN_MS);
   }
+  // The page open in the Mia browser, so a company bot asked from here can
+  // read it as it does in its own chat.
+  function hubOpenPage(){
+    var page=window.miaNativeBrowser && window.miaNativeBrowser.currentPage ? window.miaNativeBrowser.currentPage() : null;
+    return page ? {browserContext:page} : {};
+  }
   function pollHubBots(roomId,immediate){
     if(!inHubRoom(roomId) || !roomId || chatWs.configured===false)return Promise.resolve();
     var state=chatRoomState(roomId),workspace=activeWorkspaceKey;
@@ -5127,7 +5228,7 @@
     if(!immediate && Date.now()-Number(state.hubExecutionAt||0)<15000)return Promise.resolve();
     state.hubExecutionAt=Date.now();
     var selection=chatModelSelectionMetadata();
-    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{}))
+    state.hubExecutionRequest=window.MiaHubChat.localCall('POST','/poll',Object.assign({teamId:workspace.slice(4),channelId:roomId},selection?{modelSelection:selection}:{},hubOpenPage()))
       .then(function(result){state.hubPendingRuns=result.pending||[];if(result.running)keepHubRunTokensFresh();if(chatWs.activeRoomId===roomId)renderChatHeaderBar();})
       .catch(function(){/* Own requests authorize local execution; handoffs await local acceptance. */})
       .finally(function(){
@@ -5164,7 +5265,7 @@
     trackHubDispatch(job);
     // A reply the live feed never closes stops showing as working by itself.
     setTimeout(function(){settleHubMarketReplies([{id:replyId,status:'failed'}]);},HUB_MARKET_RUN_MS);
-    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{}))
+    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{},hubOpenPage()))
       .then(function(){keepHubRunTokensFresh();})
       .catch(function(error){
         trackHubDispatch(Object.assign({},job,{state:'failed'}));
@@ -5635,12 +5736,9 @@
       || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
-    return window.MiaHubChat.sessionToken().then(function(token){
-      return api('/api/conversations?workspace=solo',{method:'POST',headers:{'x-hub-token':token},body:{type:'bot',name:bot.name,
-        metadata:{botId:bot.id,teamWorkspace:workspace,departments:Array.isArray(bot.departments)?bot.departments:[],source:'team-bot-chat'}}});
-    }).then(function(res){
-      var conversation=res.data && res.data.conversation;
-      if((res.status!==201 && res.status!==200) || !conversation)throw new Error('team bot chat');
+    // Same chat bot setup makes (createNativeAgentConversation), so a bot
+    // never ends up with two.
+    return createNativeAgentConversation(bot).then(function(conversation){
       if(activeWorkspaceKey!==workspace)return;
       if(!(chatWs.nativeConversations||[]).some(function(item){return item.id===conversation.id;}))chatWs.nativeConversations.push(conversation);
       applyNativeConversationList(chatWs.nativeConversations);
@@ -5908,7 +6006,9 @@
     // Your bots are your bots everywhere, shared or not; only the ones you
     // hid wait in the Hidden group.
     var hiddenBots=myBots.filter(function(bot){ return hubRowHidden('bot:mine:'+bot.id) && !botPinned('mine:'+bot.id); });
-    myBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
+    // The same order as Solo's bots: unread, working, latest message, new.
+    var orderedBots=orderSidebarBots(myBots,function(bot){ var chat=teamBotChat(bot); return chat && chat.id; },function(bot){ return bot.createdAt; });
+    orderedBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
     hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
       'Bots you hid. Right-click one to show it again.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
@@ -6136,14 +6236,13 @@
   }
   function teamBotRow(bot,pinned){
     var chat=teamBotChat(bot);
-    var state=chat && chatWs.byRoom[chat.id];
     var active=!!chat && chatWs.activeRoomId===chat.id;
     var button=document.createElement('button'); button.type='button';
     button.className='chat-recent-row hub-channel-row'+(active?' active':'');
     button.setAttribute('data-team-bot-id',bot.id);
     // The same row text as Solo: activity, unread, time and latest line.
     button.innerHTML='<span class="chat-row-mark tile">'+agentAvatarHtml(bot.name||'Bot',bot.id,40,null,bot.avatarColor,true)+'</span>'
-      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,!!(state && state.thinking));
+      +sidebarRowText(bot.name||'Bot',chat ? chat.id : null,sidebarEntryHasActivity({roomId:chat ? chat.id : null}));
     var line=el('.row-line1',button);
     if(line)line.insertAdjacentHTML('beforeend','<span class="hub-channel-more" role="button" tabindex="-1" aria-label="'+esc('Options for '+(bot.name||'Bot'))+'" title="Options">&#8943;</span>');
     button.addEventListener('click',function(){ openTeamBotChat(bot); });
@@ -6817,6 +6916,11 @@
       return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Colleague'};});
     },
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
+    // What was said goes to this person's own model, which proposes what to do next.
+    suggest:function(lines,had){
+      return api('/api/space/suggestions',{method:'POST',body:{lines:lines,had:had}}).then(function(r){ return r.status===200 && r.data.suggestions || []; });
+    },
+    ask:function(text){ askBotFromBrowserSuggestion(text,null); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
       return hubCall('POST',hubPath()+'/channels/'+channelId+'/space-events',{text:text});
@@ -7225,6 +7329,7 @@
       clientIdempotencyKey: event.clientIdempotencyKey || null,
       nativeDispatchId: event.metadata && typeof event.metadata.dispatchId === 'string' ? event.metadata.dispatchId : null,
       nativeProgress: !!(event.metadata && event.metadata.progress === true),
+      nativeWorking: !!(event.metadata && event.metadata.progress === true && event.metadata.status === 'working'),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
       reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
@@ -7654,22 +7759,17 @@
   function freshAgentSetup(template){
     return {phase:'intent', intent:'', draft:null, error:'', created:null, liveRoomId:null, requestId:0, requestController:null, requestTimeoutTimer:null, requestTimedOut:false,
       key: agentSetupKey(template), templateName: template && template.name ? String(template.name) : '',
-      avatarColor: normalizeAgentAvatarColor(template && template.avatarColor) || newSetupBotColor((typeof chatWs !== 'undefined' && chatWs && chatWs.botRecords) || []),
+      avatarColor: normalizeAgentAvatarColor(template && template.avatarColor) || newSetupBotColor(),
       composer: template && template.prompt ? String(template.prompt) : ''};
   }
   function agentSetupUnfinished(flow){
     return !!flow && !!AGENT_SETUP_UNFINISHED[flow.phase] && (flow.phase !== 'intent' || !!flow.intent || !!flow.error || !!String(flow.composer || '').trim());
   }
   // A bot's color is settled when its setup starts, so the setup chat, its
-  // browser group and the finished bot all show the same mote. It follows the
-  // rule the server applies when no color is sent (newBotColor in
-  // backend/server.js): blue, red, yellow, green, then a random color.
-  var FIRST_BOT_COLORS = ['#3478d4', '#e5484d', '#f2c230', '#3fa34d'];
-  function newSetupBotColor(bots, random){
-    var taken = {};
-    (bots || []).forEach(function(bot){ taken[normalizeAgentAvatarColor(bot && bot.avatarColor)] = true; });
-    var next = FIRST_BOT_COLORS.filter(function(color){ return !taken[color]; })[0];
-    if((bots || []).length < FIRST_BOT_COLORS.length && next) return next;
+  // browser group and the finished bot all show the same mote. A plain New
+  // Bot gets a random color, the rule the server applies when no color is
+  // sent (newBotColor in backend/server.js); the setup card can change it.
+  function newSetupBotColor(random){
     var hue = Math.floor((random || Math.random)() * 360), sat = 0.72, light = 0.52;
     function channel(n){
       var k = (n + hue / 30) % 12;
@@ -8078,7 +8178,11 @@
   function chatNeedsAttention(roomId){
     return !!(roomId && chatAttentionRooms[roomId]);
   }
+  // Opening a chat clears its unread mark; My Bots keeps the row in its
+  // unread place while it stays open (see orderSidebarBots).
+  var sidebarUnreadHoldRoomId = null;
   function clearChatAttention(roomId){
+    sidebarUnreadHoldRoomId = roomId && chatAttentionRooms[roomId] ? roomId : null;
     if(!roomId || !chatAttentionRooms[roomId]) return;
     delete chatAttentionRooms[roomId];
     saveChatAttention();
@@ -12500,7 +12604,7 @@
     }).then(function(res){
       cardState.busy = false;
       if(res.status !== 200 || !res.data.event){
-        cardState.error = res.status === 409 ? 'This card was already answered.' : ((res.data && res.data.message) || 'That didn’t save. Check the fields and try again.');
+        cardState.error = window.MiaAutomationProposalCard.saveErrorText(res.status, res.data);
         if(res.status === 409 && res.data.proposal){
           var answered = Object.assign({}, message.nativeEvent, {metadata: Object.assign({}, message.nativeEvent.metadata, {automationProposal: res.data.proposal})});
           delete automationCardStates[eventId];
@@ -13169,6 +13273,9 @@
       tag = agentTagFor(name);
       text = stripLegacyBackgroundStatus(parsed.text);
     }
+    // The copy button copies the message as written (markdown, Drive links),
+    // before display-only rewrites below.
+    var copySourceText = text;
     var driveDisplay = isHuman ? googleDriveMessageDisplay(text) : {text:text, files:[]};
     text = driveDisplay.text;
     if(!text && !hasMedia && !driveDisplay.files.length) return '';
@@ -13188,8 +13295,11 @@
     var liveProgress = !isHuman && isLatestLiveProgressMessage(m);
     // Shared-channel text renders exactly like Solo: mdLite escapes all HTML
     // and only turns markdown into formatting, so teammates' text is safe.
+    var workingLine = liveProgress && m.nativeWorking && window.MiaActivity;
+    if(workingLine) setTimeout(tickChatWorkingLines, 0);
     var messageHtml = text ? (liveProgress
-      ? '<span class="chat-thinking-shimmer">' + esc(text) + '</span>'
+      ? '<span class="chat-thinking-shimmer"' + (workingLine ? ' data-working-line="' + esc(m.nativeDispatchId) + '" data-started-at="' + Number(m.ts || 0) + '"' : '') + '>' +
+        esc(workingLine ? chatWorkingLineText(m.nativeDispatchId, Number(m.ts || 0)) : text) + '</span>'
       : (isPreReasoning ? chatPreReasoningHtml(text, compactBrowserMessage) : (isLongMessage ? chatExpandableMessageHtml(text, false, compactBrowserMessage) : mdLite(text)))) : '';
     if(text && !liveProgress && !isPreReasoning) messageHtml = withMentionChips(messageHtml);
     var mediaHtml = '';
@@ -13198,13 +13308,14 @@
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
-    var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
-      (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
-      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span></div>';
     // A background task's live activity line ("✓ research done, building
     // table") — muted so a thread of them reads as a progress feed, not a
     // stack of full agent messages.
     var isActivity = !isHuman && /^✓ /.test(text || '');
+    var copyHtml = chatMsgCopyButtonHtml(m, copySourceText, !!(liveProgress || isActivity || m.askBeforeDo));
+    var head = visuallyGrouped ? '' : '<div class="chat-msg-head"><span class="chat-msg-name">' + esc(name) + '</span>' +
+      (tag ? '<span class="chat-msg-tag">' + esc(tag) + '</span>' : '') +
+      '<span class="chat-msg-time"' + (m.pending || m.sendFailed || !m.ts ? '' : ' data-ts="' + Number(m.ts) + '"') + '>' + timeText + '</span>' + copyHtml + '</div>';
     var directRoom = isDirectChatRoom();
     var messageClass = liveProgress ? ' chat-msg-thinking' : (isPreReasoning ? ' chat-pre-reasoning' : (isLongMessage ? ' chat-expandable-message' : ''));
     var retryAttempted = !!chatRetryAttempts[m.id];
@@ -13221,7 +13332,30 @@
     var reactAddHtml = canReactToMessage(m) ? '<button type="button" class="chat-msg-react-add" data-react-add title="Add a reaction" aria-label="Add a reaction"><svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M6.8 11.8c.8 1.3 1.9 2 3.2 2s2.4-.7 3.2-2"/><path d="M7.5 7.8v.4M12.5 7.8v.4"/></svg></button>' : '';
     return '<div class="chat-msg-row' + (visuallyGrouped ? ' grouped' : '') + (m.pending ? ' pending' : '') + (directRoom ? ' is-direct' : '') + (opts.inThread ? ' in-thread' : '') + (isOwnHuman ? ' is-you' : '') + '" data-event-id="' + esc(m.id) +
       '" data-can-thread="' + (showThreadAction ? '1' : '') + '" data-can-delete="' + (showDeleteAction ? '1' : '') + '" data-can-edit="' + (showEditAction ? '1' : '') + '">' + markCol +
-      '<div class="chat-msg-body">' + head + (hasBubble ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + reactAddHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (hasBubble ? '' : reactAddHtml) + '</div></div>';
+      '<div class="chat-msg-body">' + head + (visuallyGrouped ? copyHtml : '') + (hasBubble ? '<div class="chat-msg-text' + (isActivity ? ' chat-msg-activity' : '') + messageClass + '">' + messageHtml + reactAddHtml + '</div>' : '') + mediaHtml + retryHtml + (m.hubAuthor ? '' : chatMsgExtras(m)) + (m.reactions ? window.MiaEmoji.reactionsHtml(m.reactions, reactionSelf(m), esc, canReactToMessage(m)) : '') + (opts.footerHtml || '') + (hasBubble ? '' : reactAddHtml) + '</div></div>';
+  }
+
+  // One copy button per message, in its header (or floating at the top of a
+  // grouped follow-up that has no header). The source text is kept here by
+  // message id rather than in the DOM, so a click copies exactly what was
+  // written. Re-rendered rows refresh their entry; the oldest entries drop
+  // off so the map stays small.
+  var CHAT_COPY_TEXT_LIMIT = 2000;
+  var chatCopyTextById = new Map();
+  function chatMsgCopyButtonHtml(m, sourceText, isStatusRow){
+    var text = String(sourceText || '');
+    if(!m || m.system || m.deleted || isStatusRow || !m.id || !text.trim()) return '';
+    var id = String(m.id);
+    chatCopyTextById.delete(id);
+    chatCopyTextById.set(id, text);
+    while(chatCopyTextById.size > CHAT_COPY_TEXT_LIMIT) chatCopyTextById.delete(chatCopyTextById.keys().next().value);
+    return '<button type="button" class="chat-msg-copy" data-chat-copy="' + esc(id) + '" title="Copy message" aria-label="Copy message">' +
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ROW_MENU_ICONS.copy + '</svg></button>';
+  }
+  function copyChatMessageText(messageId){
+    var text = chatCopyTextById.get(String(messageId || ''));
+    if(!text) return Promise.resolve(false);
+    return copySidebarText(text, 'Copied');
   }
 
   // Bot setup only creates the bot. A schedule the user asked for is handed
@@ -13381,7 +13515,8 @@
     return '<div class="chat-msg-row is-direct agent-setup-review-row"><span class="chat-msg-mark agent' + (view.markClass ? ' ' + view.markClass : '') + '">' + (view.avatarHtml || agentSetupAvatarHtml(28)) + '</span>' +
       '<div class="chat-msg-body"><div class="chat-msg-head"><span class="chat-msg-name">' + esc(view.name || draft.name || 'New Bot') + '</span><span class="chat-msg-tag">' + esc(view.tag || 'Bot') + '</span><span class="chat-msg-time">just now</span></div>' +
       '<div class="agent-setup-card">' +
-        '<div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
+        '<div class="agent-setup-card-head"><div class="agent-setup-card-intro">' + esc(view.intro || 'Here’s what I inferred. Edit anything before activating me.') + '</div>' +
+          '<div class="agent-setup-colors" role="group" aria-label="Bot color">' + agentColorSwatchesHtml(flow.avatarColor, 'agentSetupColorInput', 'agent-setup-color', true) + '</div></div>' +
         '<label class="agent-setup-field"><span>Name</span><input id="agentSetupName" type="text" maxlength="40" value="' + esc(draft.name || '') + '"></label>' +
         '<label class="agent-setup-field"><span>Instructions</span><textarea id="agentSetupInstructions" rows="10" maxlength="' + MAX_BOT_BRIEF_CHARS + '">' + esc(agentSetupDraftInstructions(draft)) + '</textarea></label>' +
         '<div class="agent-setup-field"><span>Skills</span>' + skillPickerHtml('agentSetupSkills', draft.skills) + '</div>' +
@@ -13406,11 +13541,45 @@
     if(automationWanted) flow.draft.automationWanted = !!automationWanted.checked;
   }
 
+  // The color picked on the setup card is the one the bot is created with.
+  // The New Bot chat shows it at once on the bot's icon, in place, so the
+  // card (and an open color panel) is not rebuilt under the person.
+  function setAgentSetupColor(flow, color, thread){
+    color = normalizeAgentAvatarColor(color);
+    if(!color || flow.creation || flow.phase === 'activating') return;
+    flow.avatarColor = color;
+    if(flow !== agentSetup) return;
+    var name = agentSetupIdentity(flow).name;
+    thread.querySelectorAll('.chat-msg-mark.agent .mote-avatar-img').forEach(function(img){ img.style.filter = moteColorFilterFor(name, color); });
+    renderChatSidebar();
+    renderChatHeaderBar();
+  }
+
   function wireAgentSetupReview(thread, flow, actions){
     flow = flow || agentSetup;
     actions = actions || {activate: activateAgentSetup, later: cancelAgentSetupFlow};
     if(flow.creation || flow.phase === 'activating'){
-      thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select').forEach(function(field){ field.disabled = true; });
+      thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea, .agent-setup-card select, .agent-setup-colors button').forEach(function(field){ field.disabled = true; });
+    }
+    var colors = el('.agent-setup-colors', thread);
+    if(colors){
+      colors.addEventListener('click', function(e){
+        var button = e.target.closest('[data-agent-color]');
+        if(!button || button.disabled) return;
+        els('[data-agent-color]', colors).forEach(function(other){
+          other.classList.toggle('selected', other === button);
+          other.setAttribute('aria-pressed', other === button ? 'true' : 'false');
+        });
+        var custom = el('.agent-setup-color-custom', colors);
+        if(custom) custom.classList.remove('selected');
+        setAgentSetupColor(flow, button.getAttribute('data-agent-color'), thread);
+      });
+      // `input`, not `change`: a Mac color panel sends `change` only when it closes.
+      colors.addEventListener('input', function(e){
+        if(e.target.type !== 'color') return;
+        markCustomAgentColor(e.target);
+        setAgentSetupColor(flow, e.target.value, thread);
+      });
     }
     // Edits are kept as they are typed, so leaving the chat does not lose them.
     thread.querySelectorAll('.agent-setup-card input, .agent-setup-card textarea').forEach(function(field){
@@ -13652,31 +13821,53 @@
     });
   }
 
+  // The one way to get a bot's main chat in the view on screen, used by bot
+  // setup and by opening a bot from My Bots in a company. In Solo,
+  // POST /api/bots already provisions it on the server. In a company it is
+  // your private chat with the bot, stored in Solo and tagged with the
+  // company (the server-provisioned chat sits outside the company's view).
+  // Refresh before creating anything so the client never races that hook
+  // and creates a duplicate room for the same bot.
   function createNativeAgentConversation(agent, requestOptions){
-    // POST /api/bots provisions this native conversation on the server.
-    // Refresh before creating anything so the client never races that hook
-    // and creates a duplicate room for the same bot.
-    return loadNativeConversations(requestOptions).then(function(conversations){
+    // Only the abort signal is passed on: api() writes headers into the
+    // options it is given, and one request's workspace must not leak into
+    // the next.
+    var signal = requestOptions && requestOptions.signal;
+    function options(extra){ return Object.assign(signal ? {signal:signal} : {}, extra || {}); }
+    var workspace = activeWorkspaceKey, team = hubWorkspace();
+    return loadNativeConversations(options()).then(function(conversations){
       var existing = (conversations || []).filter(function(conversation){
         var metadata = conversation.metadata || {};
-        return conversation.type === 'bot' && metadata.botId === agent.id && nativeConversationInView(conversation);
+        return conversation.type === 'bot' && metadata.botId === agent.id && metadata.conversationMode !== 'fresh' && nativeConversationInView(conversation);
       })[0];
       if(existing) return existing;
-      return api('/api/conversations', Object.assign({}, requestOptions || {}, {method:'POST', body:{
-        type: 'bot',
-        name: agent.name,
-        metadata: {
-          botId: agent.id,
-          departments: Array.isArray(agent.departments) ? agent.departments : [],
-          source: 'bot-setup'
-        }
-      }})).then(function(res){
+      var metadata = {botId: agent.id, departments: Array.isArray(agent.departments) ? agent.departments : [], source: 'bot-setup'};
+      var made;
+      if(!team){
+        made = api('/api/conversations', options({method:'POST', body:{type:'bot', name:agent.name, metadata:metadata}}));
+      } else {
+        // The server lets a bot answer a chat outside its own workspace only
+        // when the chat says it is a team bot chat.
+        metadata.teamWorkspace = workspace;
+        metadata.source = 'team-bot-chat';
+        made = window.MiaHubChat.sessionToken().then(function(token){
+          return api('/api/conversations?workspace=solo', options({method:'POST', headers:{'x-hub-token':token}, body:{type:'bot', name:agent.name, metadata:metadata}}));
+        });
+      }
+      return made.then(function(res){
         if((res.status !== 201 && res.status !== 200) || !res.data || !res.data.conversation){
           throw new Error(res.data && (res.data.message || res.data.error) || 'native bot conversation could not be created');
         }
         return res.data.conversation;
       });
     });
+  }
+
+  // A new bot's chat opens only when it belongs to the view on screen (a
+  // company shows only chats tagged with it); otherwise loadChatRoom would
+  // quietly do nothing.
+  function createdBotChatOpens(conversation){
+    return !!conversation && nativeConversationInView(conversation) && !inHubRoom(conversation.id);
   }
 
   // Checks a reviewed draft and builds the POST /api/bots body. Shared by the
@@ -13748,7 +13939,8 @@
     });
     createdBotRecords.push(created);
     syncChatBotRecords(createdBotRecords);
-    chatWs.nativeConversations.push(conversation);
+    // "Open bot chat" after a failed open adopts the same chat again.
+    if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })) chatWs.nativeConversations.push(conversation);
     applyNativeConversationList(chatWs.nativeConversations);
     renderChatSidebar();
     renderChatHeaderBar();
@@ -13784,11 +13976,19 @@
       agentSetup.teamTarget = null;
       clearAgentSetupRequest(false);
       agentSetup.created = created;
-      agentSetup.liveRoomId = conversation.id;
-      agentSetup.phase = 'idle';
       adoptCreatedBot(created, conversation);
       if(onCreated) try { onCreated({botId:String(created.id), name:String(created.name || '')}); } catch(_){}
-      if(teamTarget) return addCreatedBotToTeam(created, conversation, teamTarget);
+      if(teamTarget){
+        agentSetup.liveRoomId = conversation.id;
+        agentSetup.phase = 'idle';
+        return addCreatedBotToTeam(created, conversation, teamTarget);
+      }
+      // The bot exists but its chat cannot open here (say, another workspace
+      // was opened meanwhile): show the card's "Open bot chat" recovery
+      // rather than a button stuck on Activating.
+      if(!createdBotChatOpens(conversation)) return finishAgentSetupFailure(attempt, 'activating', false);
+      agentSetup.liveRoomId = conversation.id;
+      agentSetup.phase = 'idle';
       if(!agentSetupAutomationRequest(draft)) chatRoomState(conversation.id).localWelcome = buildAgentSetupWelcomeMessage(conversation.id, created, draft);
       loadChatRoom(conversation.id, 'agent', created.name);
       handOffAgentSetupAutomation(conversation.id, draft);
@@ -13810,7 +14010,32 @@
   function applyChatActivity(conversationId, activity){
     if(!conversationId || !window.MiaActivity) return;
     chatActivityByRoom[conversationId] = window.MiaActivity.reduceActivity(chatActivityByRoom[conversationId], activity);
-    if(conversationId === chatWs.activeRoomId) renderChatActivityPanel();
+    if(conversationId === chatWs.activeRoomId){
+      renderChatActivityPanel();
+      tickChatWorkingLines();
+    }
+  }
+
+  // The "working" row in the thread shows the same live signal to everyone:
+  // the current activity, the step number and the time so far.
+  var chatWorkingLineTimer = null;
+
+  function chatWorkingLineText(dispatchId, startedAt){
+    var state = chatWs.activeRoomId ? chatActivityByRoom[chatWs.activeRoomId] : null;
+    return window.MiaActivity.workingLine(state && state.dispatchId === dispatchId ? state : null, startedAt, Date.now());
+  }
+
+  function tickChatWorkingLines(){
+    var nodes = document.querySelectorAll('[data-working-line]');
+    if(!nodes.length){
+      if(chatWorkingLineTimer){ clearInterval(chatWorkingLineTimer); chatWorkingLineTimer = null; }
+      return;
+    }
+    for(var i = 0; i < nodes.length; i++){
+      var text = chatWorkingLineText(nodes[i].getAttribute('data-working-line'), Number(nodes[i].getAttribute('data-started-at') || 0));
+      if(nodes[i].textContent !== text) nodes[i].textContent = text;
+    }
+    if(!chatWorkingLineTimer) chatWorkingLineTimer = setInterval(tickChatWorkingLines, 1000);
   }
 
   function renderChatActivityPanel(){
@@ -13994,13 +14219,88 @@
     var threadEvents = (state.messages || []).filter(function(rm){ return rm.threadRoot === rootId; });
     var replies = threadEvents.filter(function(rm){ return rm.system || isHumanSender(rm.sender) || displayBotBody(rm.body) || chatMessageHasAttachments(rm); });
     if(!replies.length && !(root && root.taskRoot) && !threadEvents.length) return '';
+    var pillAttrs = ' data-thread-toggle data-root-id="' + esc(rootId) + '" role="button" tabindex="0"';
     if(!replies.length){
-      return '<div class="chat-thread-pill" data-thread-toggle data-root-id="' + esc(rootId) + '">&#8618; Open thread</div>';
+      return '<div class="chat-thread-pill is-empty"' + pillAttrs + '>&#8618; Open thread</div>';
     }
     var last = replies[replies.length - 1];
-    return '<div class="chat-thread-pill" data-thread-toggle data-root-id="' + esc(rootId) + '">&#8618; ' +
-      replies.length + (replies.length === 1 ? ' reply' : ' replies') +
+    var unread = state.openThreadRoot !== rootId && chatThreadHasUnread(rootId, replies);
+    var countText = replies.length + (replies.length === 1 ? ' reply' : ' replies');
+    return '<div class="chat-thread-pill' + (unread ? ' is-unread' : '') + '"' + pillAttrs +
+      ' aria-label="' + esc(countText + (unread ? ', new replies' : '') + ', open thread') + '">&#8618; ' +
+      (unread ? '<strong>' + countText + '</strong>' : countText) +
       ' &middot; last ' + esc(chatRelTime(last.ts)) + '</div>';
+  }
+
+  // When this user last looked at each thread, keyed by root message id and
+  // kept per account and workspace like the sidebar's unread marks. A thread
+  // is unread when someone else replied after that time; your own replies
+  // never make a thread unread. Only the most recent threads are kept.
+  var CHAT_THREAD_READS_LIMIT = 500;
+  var chatThreadReads = null, chatThreadReadsKey = '';
+  function chatThreadReadsStorageKey(){
+    return 'miaChatThreadReads:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
+  }
+  function loadChatThreadReads(){
+    var key = chatThreadReadsStorageKey();
+    if(chatThreadReads && chatThreadReadsKey === key) return chatThreadReads;
+    chatThreadReadsKey = key;
+    try {
+      var raw = localStorage.getItem(key);
+      var parsed = raw ? JSON.parse(raw) : {};
+      chatThreadReads = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch(err){ chatThreadReads = {}; }
+    return chatThreadReads;
+  }
+  function saveChatThreadReads(){
+    var reads = loadChatThreadReads();
+    var ids = Object.keys(reads);
+    if(ids.length > CHAT_THREAD_READS_LIMIT){
+      ids.sort(function(a, b){ return (Number(reads[a]) || 0) - (Number(reads[b]) || 0); });
+      ids.slice(0, ids.length - CHAT_THREAD_READS_LIMIT).forEach(function(id){ delete reads[id]; });
+    }
+    try { localStorage.setItem(chatThreadReadsKey, JSON.stringify(reads)); } catch(err) {}
+  }
+  // Moves a thread's "last seen" forward (never back) and saves when it changed.
+  function markChatThreadRead(rootId, ts){
+    if(!rootId) return false;
+    var reads = loadChatThreadReads();
+    var when = Number(ts) || 0;
+    if(when <= (Number(reads[rootId]) || 0)) return false;
+    reads[rootId] = when;
+    saveChatThreadReads();
+    return true;
+  }
+  function chatMessageIsOwn(m){
+    if(!m || m.system) return false;
+    if(m.hubMessage) return hubOwnMessage(m);
+    if(m.pending || m.sendFailed) return true;
+    if(!isHumanSender(m.sender)) return false;
+    var email = parseSignedHumanBody(m.body).agent;
+    return !email || email.toLowerCase() === String(currentUser || '').toLowerCase();
+  }
+  function chatThreadHasUnread(rootId, replies){
+    var seen = Number(loadChatThreadReads()[rootId]) || 0;
+    return (replies || []).some(function(reply){
+      return !reply.system && !chatMessageIsOwn(reply) && (Number(reply.ts) || 0) > seen;
+    });
+  }
+  function newestChatThreadReplyTs(state, rootId){
+    return (state.messages || []).reduce(function(newest, m){
+      return m.threadRoot === rootId ? Math.max(newest, Number(m.ts) || 0) : newest;
+    }, 0);
+  }
+  // Re-renders just one root's pill in the main timeline, e.g. so it drops
+  // its unread look the moment its thread opens.
+  function refreshChatThreadPill(roomId, rootId){
+    var thread = el('#chatThread');
+    if(!thread || !roomId || roomId !== chatWs.activeRoomId) return;
+    var state = chatRoomState(roomId);
+    els('[data-thread-toggle]', thread).forEach(function(pill){
+      if(pill.getAttribute('data-root-id') !== rootId) return;
+      var html = chatThreadFooterHtml(state, rootId);
+      if(html) pill.outerHTML = html;
+    });
   }
 
   // Keeps the docked #chatThreadPanel in sync with the active room's
@@ -14103,6 +14403,8 @@
     panel.hidden = false;
     placeChatComposer(roomId, rootId);
     syncRightPanelSlot();
+    // Replies that arrive while the thread is open are seen as they land.
+    markChatThreadRead(rootId, newestChatThreadReplyTs(state, rootId));
     el('#ctpRoomName').textContent = chatWs.activeLabel || '';
     el('#ctpRoot').innerHTML = chatMsgHtml(root, false, {inThread: true});
     var replies = state.messages.filter(function(rm){ return rm.threadRoot === rootId && (rm.system || isHumanSender(rm.sender) || displayBotBody(rm.body) || chatMessageHasAttachments(rm)); });
@@ -14133,8 +14435,11 @@
     if(!roomId || !rootId) return;
     closeChatTasksPanel();
     closeChatUtilityPane();
-    chatRoomState(roomId).openThreadRoot = rootId;
+    var state = chatRoomState(roomId);
+    state.openThreadRoot = rootId;
+    markChatThreadRead(rootId, Math.max(Date.now(), newestChatThreadReplyTs(state, rootId)));
     syncChatThreadPanel();
+    refreshChatThreadPill(roomId, rootId);
     var input = el('#ccInput');
     if(input) input.focus();
   }
@@ -14145,8 +14450,10 @@
     var roomId = chatWs.activeRoomId;
     var state = roomId && chatRoomState(roomId);
     if(!state || !state.openThreadRoot) return false;
+    var rootId = state.openThreadRoot;
     state.openThreadRoot = null;
     syncChatThreadPanel();
+    refreshChatThreadPill(roomId, rootId);
     return true;
   }
 
@@ -14475,36 +14782,14 @@
     return agentHasLiveWork({id: row.agentId, name: row.name});
   }
 
-  function chatRosterAgentCountLabel(rows){
-    var agents = rows || [];
-    if(agents.length === 1){
-      return agents[0].principalType === 'bot' ? '1 bot' : '1 agent';
-    }
-    return agents.length + ' agents &amp; bots';
-  }
-
-  function chatRosterPeopleCountLabel(rows){
-    var count = (rows || []).length;
-    return count + (count === 1 ? ' user' : ' users');
-  }
-
   // Solo has only you and your own agents, so the roster says nothing new.
-  function renderChatRosterChips(data){
-    if(!data || activeWorkspaceKey === 'solo') return '';
-    var html = '';
-    if(data.peopleUnavailable){
-      html += '<span class="ch-roster-chip ch-roster-unavailable" title="Human membership unavailable" aria-label="Human membership unavailable">' +
-        '<span class="ch-roster-count">users unavailable</span></span>';
-    }
-    if(data.people.length){
-      html += '<button type="button" class="ch-roster-chip' + (chatRoster.open === 'people' ? ' open' : '') + '" id="chatRosterPeopleBtn" title="People in this chat">' +
-        '<span class="ch-roster-count">' + chatRosterPeopleCountLabel(data.people) + '</span></button>';
-    }
-    if(data.agents.length){
-      html += '<button type="button" class="ch-roster-chip' + (chatRoster.open === 'agents' ? ' open' : '') + '" id="chatRosterAgentsBtn" title="Agents and bots in this chat">' +
-        '<span class="ch-roster-count">' + chatRosterAgentCountLabel(data.agents) + '</span></button>';
-    }
-    return html;
+  // Elsewhere the two lists open from the chat's menu, not from counts in the bar.
+  function chatRosterMenuKinds(data){
+    if(!data || activeWorkspaceKey === 'solo') return [];
+    var kinds = [];
+    if(data.people.length) kinds.push('people');
+    if(data.agents.length) kinds.push('agents');
+    return kinds;
   }
 
   // Working agents get the same blinking orange task dot used in the
@@ -14538,17 +14823,15 @@
   }
 
   function wireChatRosterControls(header, rosterData){
-    var peopleBtn = el('#chatRosterPeopleBtn', header);
-    if(peopleBtn) peopleBtn.addEventListener('click', function(e){
-      e.stopPropagation();
-      chatRoster.open = chatRoster.open === 'people' ? null : 'people';
-      renderChatHeaderBar();
-    });
-    var agentsBtn = el('#chatRosterAgentsBtn', header);
-    if(agentsBtn) agentsBtn.addEventListener('click', function(e){
-      e.stopPropagation();
-      chatRoster.open = chatRoster.open === 'agents' ? null : 'agents';
-      renderChatHeaderBar();
+    // The menu can sit on the page itself, outside the header, while open.
+    ['people', 'agents'].forEach(function(kind){
+      var item = document.getElementById(kind === 'people' ? 'chatRosterPeopleItem' : 'chatRosterAgentsItem');
+      if(item) item.addEventListener('click', function(e){
+        e.stopPropagation();
+        resetChannelMenuState();
+        chatRoster.open = kind;
+        renderChatHeaderBar();
+      });
     });
     var closeBtn = el('#chatRosterCloseBtn', header);
     if(closeBtn) closeBtn.addEventListener('click', function(e){
@@ -15904,19 +16187,18 @@
       : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? (chatWs.activeKind === 'agent-setup' ? agentSetupAvatarHtml(24, headerMiaIsWorking ? 'activity' : null, true) : agentAvatarHtml(chatWs.activeLabel, null, 24, headerMiaIsWorking ? 'activity' : null, null, !channelMenuKind())) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
     var title = chatWs.activeLabel;
     var rosterData = chatRosterData();
-    var rosterChips = renderChatRosterChips(rosterData);
     var rosterOverlay = chatRoster.open ? renderChatRosterPanel(rosterData) : '';
     var conversationActions = renderConversationHeaderActions();
     var titleHtml = '<span class="channel-header-title" role="heading" aria-level="1">' + esc(title) + '</span>';
     var menuHtml = channelMenuKind() ? '<div class="channel-menu' + (channelMenu.open ? ' open' : '') + '" id="channelMenu" role="menu">' + (channelMenu.open ? renderChannelMenuHtml() : '') + '</div>' : '';
-    var titleButtonHtml = channelMenuKind()
+    var titleButtonHtml = channelMenuKind() || chatRosterMenuKinds(rosterData).length
       ? '<button type="button" class="ch-title-btn" id="channelTitleBtn" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="' + (channelMenu.open ? 'true' : 'false') + '">' + markHtml + titleHtml + '<span class="ch-title-caret" aria-hidden="true">&#9662;</span></button>'
       : markHtml + titleHtml;
     if(STYLED_SKIN){
       var mobileBackBtn = '<button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to chats">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>';
       header.innerHTML = '<div class="ch-left">' + mobileBackBtn + '<div class="ch-title-row">' + titleButtonHtml + '</div></div>' +
-        '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '</div>';
+        '<div class="ch-right">' + conversationActions + rosterOverlay + '</div>';
       var mobileBack = el('#chatMobileBack', header);
       if(mobileBack) mobileBack.addEventListener('click', closeMobileChatRoom);
       wireChannelMenu(header);
@@ -15929,7 +16211,7 @@
     // Export sits in the header per the mock, but there's nothing to export
     // yet — it's a quiet no-op, never a fake download.
     header.innerHTML = '<div class="ch-left"><div class="ch-title-row">' + titleButtonHtml + menuHtml + '</div></div>' +
-      '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
+      '<div class="ch-right">' + conversationActions + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
     wireChannelMenu(header);
     wireChatRosterControls(header, rosterData);
     wireConversationHeaderActions(header);
@@ -16437,9 +16719,20 @@
     renderComposerTaskControl();
   }
 
+  // A reply starting or ending moves its bot between Working and the rest,
+  // so the sidebar repaints once after the change, not on every event.
+  var sidebarThinkingRenderTimer = null;
+  function scheduleSidebarThinkingRender(){
+    if(sidebarThinkingRenderTimer) return;
+    sidebarThinkingRenderTimer = setTimeout(function(){
+      sidebarThinkingRenderTimer = null;
+      renderChatSidebar();
+    }, 0);
+  }
   function stopChatThinking(roomId){
     var state = chatRoomState(roomId);
     if(state.thinkingTimer){ clearTimeout(state.thinkingTimer); state.thinkingTimer = null; }
+    if(state.thinking) scheduleSidebarThinkingRender();
     state.thinking = false;
     state.thinkingSince = null;
     state.thinkingAgentName = null;
@@ -16448,6 +16741,7 @@
   }
   function startChatThinking(roomId){
     var state = chatRoomState(roomId);
+    if(!state.thinking) scheduleSidebarThinkingRender();
     state.thinking = true;
     state.thinkingSince = Date.now();
     if(chatWs.activeRoomId === roomId){ renderChatHeaderBar(); renderChatThread(); }
@@ -17038,11 +17332,14 @@
     createBotFromSetupPayload(prepared.payload, controller ? {signal:controller.signal} : {}, flow).then(function(result){
       if(stale()) return;
       clearMiaBotDraftRequest(flow, false);
+      adoptCreatedBot(result.created, result.conversation);
+      // The bot exists but its chat cannot open here: offer "Open bot chat"
+      // again instead of an Open button that does nothing.
+      if(!createdBotChatOpens(result.conversation)) return fail(botCreationRecoveryMessage(flow));
       flow.created = result.created;
       flow.conversation = result.conversation;
       flow.phase = 'created';
       answerMiaBotSetupRequest(roomId, flow, 'accepted', result.created && result.created.id);
-      adoptCreatedBot(result.created, result.conversation);
       flow.automationHandedOff = handOffAgentSetupAutomation(result.conversation.id, flow.draft);
       if(!flow.automationHandedOff) chatRoomState(result.conversation.id).localWelcome = buildAgentSetupWelcomeMessage(result.conversation.id, result.created, flow.draft);
       renderMiaBotDraftRoom(roomId);
@@ -17113,7 +17410,10 @@
     }
     var open = el('[data-mia-bot-open]', thread);
     if(open && flow.conversation && flow.created){
-      open.addEventListener('click', function(){ loadChatRoom(flow.conversation.id, 'agent', flow.created.name); });
+      open.addEventListener('click', function(){
+        if(!createdBotChatOpens(flow.conversation)) return showBenchToast('Couldn’t open ' + (flow.created.name || 'the bot') + '’s chat here. Open it from My Bots.');
+        loadChatRoom(flow.conversation.id, 'agent', flow.created.name);
+      });
     }
   }
 
@@ -17898,6 +18198,22 @@
     var state = roomId && chatWs.byRoom[roomId];
     return (state && state.lastTs) || 0;
   }
+  // My Bots in Solo and in a company are ordered here, from the same unread
+  // dot, working dot and time their rows show. A bot you just opened keeps
+  // its unread place until you leave it, so its row doesn't jump from under
+  // your click.
+  function orderSidebarBots(items, roomIdFor, createdAtFor){
+    if(!window.MiaSidebarBotOrder) return items;
+    return window.MiaSidebarBotOrder.orderBots(items, function(item){
+      var roomId = roomIdFor(item) || null;
+      return {
+        unread: chatNeedsAttention(roomId) || (!!roomId && roomId === sidebarUnreadHoldRoomId && roomId === chatWs.activeRoomId),
+        working: sidebarEntryHasActivity({roomId: roomId}),
+        lastTs: lastTsFor(roomId),
+        createdAt: createdAtFor(item)
+      };
+    });
+  }
   // One latest line for every sidebar row: Solo chats, company channels, DMs
   // and bot chats. A Hub thread reply stays in its thread, as in the channel.
   function roomPreview(roomId){
@@ -18101,7 +18417,7 @@
     var allEntries = visibleEntries.filter(function(e){ return !isChatPinned(e.pinKey); });
     // Bots have their own section; Mia stays with the conversations.
     function isBotEntry(e){ return e.kind === 'agent' && !(e.agent && e.agent.id === 'gateway'); }
-    var botEntries = allEntries.filter(isBotEntry);
+    var botEntries = orderSidebarBots(allEntries.filter(isBotEntry), function(e){ return e.roomId; }, function(e){ return e.createdTs || (e.agent && e.agent.createdAt); });
     allEntries = allEntries.filter(function(e){ return !isBotEntry(e); });
 
     allCountEl && (allCountEl.textContent = allEntries.length || '');
@@ -19758,6 +20074,11 @@
       ? item('chatShareConversation', 'Copy conversation ID', '<rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>') +
         item('chatBookmarkConversation', pinned ? 'Remove bookmark' : 'Bookmark conversation', '<path d="M18 20l-6-4-6 4V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1z"></path>', ' aria-pressed="' + (pinned ? 'true' : 'false') + '"') +
         (activeBotTabsAvailable(activeConversation) ? item('chatShowBotTabsBtn', 'Show this bot\'s tabs', '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 9h18M9 5v4"></path>') : '') +
+        chatRosterMenuKinds(chatRosterData()).map(function(kind){
+          return kind === 'people'
+            ? item('chatRosterPeopleItem', 'People in this chat', '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>')
+            : item('chatRosterAgentsItem', 'Agents and bots in this chat', '<path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path>');
+        }).join('') +
         item('chatHistoryBtn', 'History', '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l3 2"></path>') +
         item('chatNewConversationBtn', 'New conversation', '<path d="M12 5v14M5 12h14"></path>', ' title="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '')) +
         (activeConversation && activeMetadata.botId ? item('chatBotSettingsBtn', 'Bot settings', '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>') : '') +
@@ -20517,7 +20838,24 @@
       var pill = e.target.closest('[data-thread-toggle]');
       if(pill) openChatThread(pill.getAttribute('data-root-id'));
     });
+    thread.addEventListener('keydown', function(e){
+      if(e.key !== 'Enter' && e.key !== ' ') return;
+      var pill = e.target.closest && e.target.closest('[data-thread-toggle]');
+      if(!pill) return;
+      e.preventDefault();
+      openChatThread(pill.getAttribute('data-root-id'));
+    });
   })();
+
+  // Copy buttons in message headers, in the main timeline and the docked
+  // thread panel alike. A <button>, so Enter and Space work without extra keys.
+  document.addEventListener('click', function(e){
+    var button = e.target && e.target.closest ? e.target.closest('[data-chat-copy]') : null;
+    if(!button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    copyChatMessageText(button.getAttribute('data-chat-copy'));
+  });
 
   // Mote avatars in chat open the matching agent profile. The click is
   // delegated because the timeline and docked thread are rebuilt as messages
@@ -20819,14 +21157,11 @@
       micBtn.classList.toggle('recording', next === 'recording');
       micBtn.disabled = next === 'transcribing' || next === 'starting';
     }
-    function speechFetch(path, opts){
-      opts = opts || {};
-      opts.credentials = 'include';
-      opts.headers = Object.assign({'X-MiaOS-Workspace':activeWorkspaceKey}, opts.headers || {});
-      return fetch(path, opts).then(function(r){
-        return r.json().catch(function(){ return {}; }).then(function(data){ return {status:r.status, data:data}; });
-      });
-    }
+    // Also what a shared session's transcript listens with.
+    var engine = window.MiaSpeech = D.createEngine({
+      fetch: function(path, init){ return fetch(path, init); },
+      workspace: function(){ return activeWorkspaceKey; }
+    });
     function releaseMic(){
       if(stream){ stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
       recorder = null;
@@ -20836,23 +21171,10 @@
       show(message, {notice:true, autoHide:7000});
     }
 
-    // Engine/model gate. The model download only ever starts from this
-    // explicit confirmation, and goes to the user's Mia data folder.
     function ensureReady(){
-      return speechFetch('/api/speech/status').then(function(res){
-        var s = res.data || {};
-        if(!s.binaryReady){
-          throw new Error('Dictation is missing from this copy of Mia. Reinstall Mia to get it back.');
-        }
-        if(s.modelReady) return true;
-        if(!window.confirm('Dictation runs on this computer with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
-          return false;
-        }
-        show('Downloading speech model… (one time, about 142 MB)');
-        return speechFetch('/api/speech/model', {method:'POST'}).then(function(done){
-          if(done.status !== 200) throw new Error((done.data && done.data.message) || 'Model download failed.');
-          return true;
-        });
+      return engine.ready({
+        confirm: function(text){ return window.confirm(text); },
+        onDownloading: function(){ show('Downloading speech model… (one time, about 142 MB)'); }
       });
     }
 
@@ -20889,10 +21211,8 @@
           return D.toWav16k(channels, audio.sampleRate);
         });
       }).then(function(wav){
-        return speechFetch('/api/speech/transcribe', {method:'POST', headers:{'Content-Type':'audio/wav'}, body:wav});
-      }).then(function(res){
-        if(res.status !== 200) throw new Error((res.data && res.data.message) || 'Transcription failed.');
-        var text = String((res.data && res.data.text) || '').trim();
+        return engine.transcribe(wav);
+      }).then(function(text){
         setState('idle');
         if(!text){ show('No speech detected.', {notice:true, autoHide:3000}); return; }
         var input = el('#ccInput');

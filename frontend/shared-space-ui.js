@@ -24,7 +24,9 @@
   var s = {space:null, teamKey:null, channelId:null, groupId:null, links:{}, presence:{}, participants:{}, invites:{},
     follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
     confirming:null, approveEach:false, approved:{}, approving:{}, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
-    sharePicking:null, activeAt:0, aloneSince:0, ending:null, endingCard:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false};
+    sharePicking:null, activeAt:0, aloneSince:0, ending:null, endingCard:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false,
+    talk: window.MiaSpaceTalk ? window.MiaSpaceTalk.createTranscript() : null, listener:null, listening:false, listenStarting:false,
+    ideas: window.MiaSpaceTalk ? window.MiaSpaceTalk.createIdeas() : null, suggester:null, reviewingIdea:null};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -122,7 +124,7 @@
     (state ? state.tabs : []).forEach(function(tab){
       if(tab.botActivity && linksByLocal[tab.id]) bots.push({tab: linksByLocal[tab.id], name: tab.botActivity.name || (tab.botActivity.mia ? 'Mia' : 'Bot'), mia: !!tab.botActivity.mia});
     });
-    return {t: 'here', tab: active && linksByLocal[active.id] || null, url: active ? model.shareableUrl(active.url) : '', follow: s.follow, away: !inRoom(), bots: bots};
+    return {t: 'here', tab: active && linksByLocal[active.id] || null, url: active ? model.shareableUrl(active.url) : '', follow: s.follow, away: !inRoom(), listen: s.listening, bots: bots};
   }
   // In the call means the browser is in front. Back to Mia keeps you in the call, stepped out.
   function inRoom(){ return document.body.classList.contains('browser-collab-mode'); }
@@ -401,7 +403,7 @@
   // Tells this computer's backend a session is live, so Mia and bots are reminded on every turn.
   function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
-    s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
+    s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {}; s.reviewingIdea = null;
     s.presence = {}; s.participants = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.approved = {}; s.approving = {}; s.ignored = {}; s.joined = false;
     s.sendQueue = null; s.joinReady = false;
     if(me()) s.participants[me().id] = true;
@@ -604,10 +606,22 @@
     if(self && window.MiaSpaceLive && window.RTCPeerConnection) s.mesh = window.MiaSpaceLive.createMesh({
       selfId: self.id,
       signal: function(to, payload){ if(bound() && s.joinReady && s.participants[to]) post(Object.assign({t: 'rtc', to: to}, payload)); },
-      onMessage: onLive
+      onMessage: onLive,
+      // Someone who connects late gets what this person has said so far.
+      onOpen: function(id){
+        if(s.talk && s.mesh) s.talk.by(self.id).slice(-200).forEach(function(line){ s.mesh.sendKept({t: 's', id: line.id, text: line.text, at: line.at}, id); });
+        if(s.ideas && s.mesh) s.ideas.waiting(self.id).forEach(function(idea){ s.mesh.sendKept({t: 'g', id: idea.id, title: idea.title, ask: idea.ask, at: idea.at}, id); });
+      }
     });
+    if(s.mesh && s.ideas) s.suggester = window.MiaSpaceTalk.createSuggester({should: suggesting, ask: askForIdeas, onIdeas: propose});
   }
   function stopLive(){
+    stopListening(true);
+    if(s.talk) s.talk.clear();
+    if(s.suggester) s.suggester.stop();
+    s.suggester = null;
+    if(s.ideas) s.ideas.clear();
+    s.reviewingIdea = null;
     if(s.mesh) s.mesh.close();
     s.mesh = null; s.frames = {}; s.pointers = {}; s.botPoints = {}; s.worked = {}; s.done = {}; s.lastBot = {};
     s.cursorSig = ''; s.frameTick = 0; s.viewSig = ''; s.viewAt = 0;
@@ -616,7 +630,21 @@
     syncToolbar();
   }
   function onLive(fromId, message){
-    if(!bound() || !s.participants[fromId] || !s.presence[fromId] || !message || typeof message.tab !== 'string') return;
+    if(!bound() || !s.participants[fromId] || !s.presence[fromId] || !message) return;
+    // The name comes from the connection the line arrived on, never from the line itself.
+    if(message.t === 's'){
+      heard(s.talk && s.talk.add({id: message.id, by: fromId, name: s.presence[fromId].name, text: message.text, at: message.at}));
+      return;
+    }
+    if(message.t === 'g'){
+      if(s.ideas && s.ideas.add({id: message.id, by: fromId, name: s.presence[fromId].name, title: message.title, ask: message.ask, at: message.at})) render();
+      return;
+    }
+    if(message.t === 'ga'){
+      if(s.ideas && typeof message.by === 'string' && typeof message.id === 'string' && s.ideas.take(message.by + '|' + message.id, {id: fromId, name: s.presence[fromId].name})) render();
+      return;
+    }
+    if(typeof message.tab !== 'string') return;
     if(!s.space.tabs.some(function(tab){ return tab.k === message.tab; })) return;
     if(message.t === 'f'){
       if(typeof message.url !== 'string' || message.url.length > MAX_FRAME_CHARS || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(message.url)) return;
@@ -632,6 +660,128 @@
     } else if(message.t === 'v' && fromId === s.follow){
       followScroll(fromId, message);
     }
+  }
+  // ---- Transcript -----------------------------------------------------------
+  // Each person turns listening on for themselves. Their own Mia writes down
+  // what they say, on their computer, and sends only the words to the others.
+  function stopListening(quiet){
+    var was = s.listening || s.listenStarting;
+    if(s.listener) s.listener.stop();
+    s.listener = null; s.listening = false; s.listenStarting = false;
+    if(was && !quiet){ sendPresence(true); render(); }
+  }
+  function said(text, at){
+    var self = me();
+    if(!bound() || !self || !s.listening) return;
+    var line = s.talk.add({id: key(), by: self.id, name: self.name, text: text, at: at});
+    if(!line) return;
+    if(s.mesh) s.mesh.sendKept({t: 's', id: line.id, text: line.text, at: line.at});
+    heard(line);
+  }
+  function heard(line){
+    if(!line) return;
+    if(s.suggester) s.suggester.heard(line);
+    render();
+  }
+  // ---- Ideas ----------------------------------------------------------------
+  // From what was said, Mia proposes things to do. Only one computer asks the
+  // model, so a session gets one set of ideas: the first, by id, of the people
+  // being written down.
+  function suggesting(){
+    var self = me(), h = host();
+    if(!bound() || !self || !h || !h.suggest) return false;
+    return listeners().map(function(person){ return person.id; }).sort()[0] === self.id;
+  }
+  function askForIdeas(){
+    var self = me();
+    return host().suggest(s.talk.lines().slice(-30).map(function(line){ return {name: self && line.by === self.id ? self.name : line.name, text: line.text}; }), s.ideas.titles());
+  }
+  function propose(list){
+    var self = me();
+    if(!bound() || !self) return;
+    list.slice(0, 2).forEach(function(item){
+      var idea = s.ideas.add({id: key(), by: self.id, name: self.name, title: item && item.title, ask: item && item.ask, at: Date.now()});
+      if(idea && s.mesh) s.mesh.sendKept({t: 'g', id: idea.id, title: idea.title, ask: idea.ask, at: idea.at});
+    });
+    render();
+  }
+  // Taking an idea asks this person's own Mia to do it, and tells the others it is taken.
+  function takeIdea(ideaKey){
+    var self = me(), h = host();
+    if(!bound() || !self || !h || !h.ask || !s.ideas ||
+      !s.ideas.open().some(function(idea){ return idea.key === ideaKey && idea === s.reviewingIdea; })) return;
+    s.reviewingIdea = null;
+    var idea = s.ideas.take(ideaKey, {id: self.id, name: self.name});
+    if(!idea) return render();
+    if(s.mesh) s.mesh.sendKept({t: 'ga', by: idea.by, id: idea.id});
+    render();
+    h.ask(idea.ask);
+  }
+  function ideasHtml(){
+    if(!s.ideas) return '';
+    var self = me(), h = host(), mote = h && h.moteSrc ? h.moteSrc('Mia') : '';
+    return s.ideas.open().map(function(idea){
+      var taker = idea.taken && (self && idea.taken.id === self.id ? 'You asked Mia to do this' : idea.taken.name + ' asked Mia to do this');
+      var reviewing = !taker && s.reviewingIdea === idea;
+      return '<div class="mia-space-slim mia-space-idea' + (taker ? ' taken' : '') + (reviewing ? ' reviewing' : '') + '">' + (mote ? '<img class="mia-space-idea-mote" alt="" src="' + esc(mote) + '">' : '') +
+        '<span class="mia-space-text"><b>' + esc(idea.title) + '</b><span class="mia-space-hint">' + esc(taker || 'Mia suggests, from what was said') + '</span></span>' +
+        (reviewing ? '<p class="mia-space-idea-request"><span class="mia-space-hint">Request Mia will receive:</span><br>' + esc(idea.ask) + '</p>' : '') +
+        (taker ? '' : '<span class="mia-space-choices">' + (reviewing
+          ? '<button type="button" class="mia-space-btn primary" data-space-idea-do="' + esc(idea.key) + '">Ask Mia</button><button type="button" class="mia-space-btn" data-space-idea-cancel="' + esc(idea.key) + '">Cancel</button>'
+          : '<button type="button" class="mia-space-btn primary" data-space-idea-review="' + esc(idea.key) + '">Review request</button>') +
+          '<button type="button" class="mia-space-btn icon" data-space-idea-no="' + esc(idea.key) + '" aria-label="Dismiss" title="Dismiss">×</button></span>') + '</div>';
+    }).join('');
+  }
+  function toggleListening(){
+    if(s.listening || s.listenStarting) return stopListening();
+    var speech = window.MiaSpeech, talk = window.MiaSpaceTalk, dictation = window.MiaDictation;
+    var media = window.navigator && window.navigator.mediaDevices, Context = window.AudioContext || window.webkitAudioContext;
+    if(!speech || !talk || !dictation || !media || !Context) return toast('Mia can\'t listen on this computer.');
+    var spaceId = s.space.id;
+    s.listenStarting = true;
+    renderCall();
+    speech.ready({
+      confirm: function(text){ return window.confirm(text); },
+      onDownloading: function(){ toast('Downloading the speech model… (one time, about 142 MB)'); }
+    }).then(function(ok){
+      if(!ok || !s.listenStarting || !bound() || s.space.id !== spaceId) return false;
+      s.listener = talk.createListener({media: media, AudioContext: Context, onLine: said,
+        toWav: function(samples, rate){ return dictation.toWav16k([samples], rate); },
+        transcribe: speech.transcribe,
+        onError: function(){ stopListening(); toast('Mia stopped listening: the words could not be written down.'); }});
+      return s.listener.start().then(function(){ return true; });
+    }).then(function(started){
+      if(!started || !s.listenStarting){ if(!s.listening) stopListening(); return; }
+      s.listenStarting = false; s.listening = true;
+      sendPresence(true);
+      toast('Mia is writing down what you say. Everyone in the session can read it, and Mia suggests what to do next.');
+      render();
+    }).catch(function(error){
+      stopListening();
+      var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
+      toast(denied ? 'Microphone access is blocked. Allow Mia to use the microphone in your computer\'s privacy settings.' : (error && error.message) || 'Mia could not start listening.');
+    });
+  }
+  function listeners(){
+    var self = me(), live = model.livePresence(s.presence, Date.now());
+    return (s.listening && self ? [{id: self.id, name: 'you'}] : []).concat(Object.keys(live).filter(function(id){ return live[id].listen && s.participants[id]; })
+      .map(function(id){ return {id: id, name: live[id].name}; }));
+  }
+  function lineHtml(line, withTime){
+    var self = me(), time = withTime ? '<time>' + esc(new Date(line.at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})) + '</time>' : '';
+    return '<p class="mia-space-line">' + time + '<b style="color:' + tone(line.by) + '">' + esc(self && line.by === self.id ? 'You' : line.name) + '</b> ' + esc(line.text) + '</p>';
+  }
+  // The last few lines sit above the minimap; the whole transcript opens from there.
+  function talkHtml(){
+    if(!s.talk) return '';
+    var lines = s.talk.lines(), who = listeners();
+    if(!lines.length && !who.length) return '';
+    var names = who.map(function(person){ return person.name; });
+    var status = !names.length ? 'Nobody is being written down now' :
+      'Mia is writing down what ' + (names.length > 2 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names.join(' and ')) + (names.length === 1 && names[0] !== 'you' ? ' says' : ' say');
+    return '<div class="mia-space-talk"><div class="mia-space-talk-head"><span class="mia-space-hint">' + (names.length ? '<i class="mia-space-live-dot" aria-hidden="true"></i>' : '') + esc(status) + '</span>' +
+      (lines.length ? '<button type="button" class="mia-space-btn" data-space-transcript>Transcript</button>' : '') + '</div>' +
+      '<div class="mia-space-lines" role="log" aria-live="polite" aria-label="What was just said">' + lines.slice(-3).map(function(line){ return lineHtml(line); }).join('') + '</div></div>';
   }
   // Only the person you follow moves your page; everyone else's pointer just shows on it.
   function followScroll(fromId, message){
@@ -858,6 +1008,7 @@
   // ---- Rendering -----------------------------------------------------------
   var PEOPLE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M15.5 5.2a3.2 3.2 0 0 1 0 5.6M17.5 14.4c1.6.7 2.6 2.3 3 4.6"></path></svg>';
   var BOT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="3"></rect><path d="M12 4v4M9.5 13h.01M14.5 13h.01"></path></svg>';
+  var MIC_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"></path></svg>';
   function chip(person, extraClass, attrs){
     return '<span class="mia-space-chip ' + (extraClass || '') + '" title="' + esc(person.name) + '"' + (attrs || '') + '>' + esc(person.initials || model.initials(person.name)) + '</span>';
   }
@@ -935,6 +1086,10 @@
       return '<div class="mia-space-call-menu" role="menu"><button type="button" role="menuitem" data-space-look>Bring everyone to my tab</button>' +
         '<button type="button" role="menuitem" data-space-map="' + (s.mapHidden ? 'show' : 'hide') + '">' + (s.mapHidden ? 'Show' : 'Hide') + ' minimap</button></div>';
     }
+    if(s.callMenu === 'transcript'){
+      return '<div class="mia-space-call-menu transcript" role="dialog" aria-label="Transcript"><b>Transcript</b><span class="mia-space-hint">Written on each person\'s own computer. It is kept only while this session is open.</span>' +
+        '<div class="mia-space-lines full">' + (s.talk ? s.talk.lines() : []).map(function(line){ return lineHtml(line, true); }).join('') + '</div></div>';
+    }
     if(s.callMenu !== 'invite') return '';
     var people = invitePeople(), channel = (host() ? host().channels() : []).filter(function(item){ return item.id === s.channelId; })[0];
     var open = people.filter(function(person){ return !person.here; });
@@ -976,15 +1131,17 @@
     } else {
       callBar.className = 'mia-space-call';
       var self = me(), live = model.livePresence(s.presence, Date.now());
-      var faces = (self ? chip({name: self.name}, 'me') : '') + Object.keys(live).map(function(id){
+      var faces = (self ? chip({name: self.name}, 'me' + (s.listening ? ' listening' : '')) : '') + Object.keys(live).map(function(id){
         var person = live[id], where = person.tab ? tabTitle(person.tab) : '';
-        return '<button type="button" class="mia-space-person' + (s.follow === id ? ' following' : '') + (person.away ? ' away' : '') + '" data-space-follow="' + esc(id) +
-          '" title="' + (person.away ? esc(person.name) + ' is away · ' : '') + (s.follow === id ? 'Stop following ' : 'Follow ') + esc(person.name) + (where ? ' · on ' + esc(where) : '') + '">' + chip({name: person.name}, 'tone', ' style="background:' + tone(id) + '"') + '</button>';
+        return '<button type="button" class="mia-space-person' + (s.follow === id ? ' following' : '') + (person.away ? ' away' : '') + (person.listen ? ' listening' : '') + '" data-space-follow="' + esc(id) +
+          '" title="' + (person.away ? esc(person.name) + ' is away · ' : '') + (s.follow === id ? 'Stop following ' : 'Follow ') + esc(person.name) + (where ? ' · on ' + esc(where) : '') + (person.listen ? ' · Mia is writing down what they say' : '') + '">' + chip({name: person.name}, 'tone', ' style="background:' + tone(id) + '"') + '</button>';
       }).join('');
       html = '<button type="button" class="mia-space-btn" data-space-back><span aria-hidden="true">←</span> Back to Mia</button>' +
         '<span class="mia-space-call-title"><i class="mia-space-live-dot" aria-hidden="true"></i><span class="mia-space-call-name">In a call: ' + esc(callName(s.channelId, s.space.name)) + '</span><b class="mia-space-clock">' + clockText() + '</b></span>' +
         '<span class="mia-space-faces">' + faces + '</span><span class="mia-space-call-follow-slot"></span>' +
-        '<span class="mia-space-call-actions"><button type="button" class="mia-space-btn" data-space-invite>Invite</button>' +
+        '<span class="mia-space-call-actions">' + (s.talk ? '<button type="button" class="mia-space-btn listen' + (s.listening ? ' on' : '') + '" data-space-listen aria-pressed="' + s.listening + '"' + (s.listenStarting ? ' disabled' : '') +
+          ' title="' + (s.listening ? 'Stop writing down what you say' : 'Mia writes down what you say, on this computer. Everyone in the session can read it, and Mia suggests what to do next.') + '">' + MIC_ICON + (s.listening ? 'Mia is listening' : s.listenStarting ? 'Starting…' : 'Mia listens') + '</button>' : '') +
+        '<button type="button" class="mia-space-btn" data-space-invite>Invite</button>' +
         '<button type="button" class="mia-space-btn icon" data-space-more aria-label="More" title="More">⋯</button>' +
         '<button type="button" class="mia-space-btn leave" data-space-leave>Leave</button></span>' + callMenuHtml();
     }
@@ -993,6 +1150,8 @@
       paintedCall = html.replace(/mia-space-clock">[^<]*/, '');
       callBar.innerHTML = html;
       placeFollow();
+      var transcript = callBar.querySelector('.mia-space-lines.full');
+      if(transcript) transcript.scrollTop = transcript.scrollHeight;
     }
     callBar.hidden = false;
   }
@@ -1023,7 +1182,7 @@
         '<span class="mia-space-tile-label"><span class="mia-space-tile-title">' + esc(tile.title) + '</span><span class="mia-space-tile-check" aria-label="Done">✓</span></span></button>';
     }).join('') + '</div>' + mapToggle + '</div>';
     bar.hidden = !(approvals || map);
-    paint(approvals + map);
+    paint(approvals + talkHtml() + ideasHtml() + map);
     if(s.mesh) s.mesh.sync(others.map(function(person){ return person.id; }));
     syncLive();
   }
@@ -1054,6 +1213,21 @@
     }
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')){ s.callMenu = null; lookHere(); renderCall(); }
+    else if(target.hasAttribute('data-space-listen')) toggleListening();
+    else if(target.hasAttribute('data-space-idea-review')){
+      var reviewKey = target.getAttribute('data-space-idea-review');
+      if(s.ideas) s.reviewingIdea = s.ideas.open().find(function(idea){ return idea.key === reviewKey && !idea.taken; }) || null;
+      render();
+    }
+    else if(target.hasAttribute('data-space-idea-do')) takeIdea(target.getAttribute('data-space-idea-do'));
+    else if(target.hasAttribute('data-space-idea-cancel')){ s.reviewingIdea = null; render(); }
+    else if(target.hasAttribute('data-space-idea-no')){ s.ideas.dismiss(target.getAttribute('data-space-idea-no')); s.reviewingIdea = null; render(); }
+    else if(target.hasAttribute('data-space-transcript')){
+      // The same click has already closed an open menu; pressing the button again leaves it closed.
+      var reopened = s.closedMenu && s.closedMenu.event === event && s.closedMenu.menu === 'transcript';
+      s.callMenu = reopened ? null : 'transcript';
+      renderCall();
+    }
     else if(target.hasAttribute('data-space-invite')){ s.callMenu = s.callMenu === 'invite' ? null : 'invite'; renderCall(); }
     else if(target.hasAttribute('data-space-more')){ s.callMenu = s.callMenu === 'more' ? null : 'more'; renderCall(); }
     else if(target.hasAttribute('data-space-ring')) ring([target.getAttribute('data-space-ring')]);
@@ -1072,10 +1246,10 @@
   if(callBar) callBar.addEventListener('click', onClick);
   // The Invite and More lists close like any menu. A click on the page itself
   // never reaches this window, it only takes the focus away.
-  function closeCallMenu(){ if(s.callMenu){ s.callMenu = null; renderCall(); } }
+  function closeCallMenu(event){ if(s.callMenu){ s.closedMenu = {event: event, menu: s.callMenu}; s.callMenu = null; renderCall(); } }
   if(callBar && document.addEventListener){
     // Before the bar redraws, while the clicked button is still inside it.
-    document.addEventListener('click', function(event){ if(!callBar.contains(event.target)) closeCallMenu(); }, true);
+    document.addEventListener('click', function(event){ if(!callBar.contains(event.target)) closeCallMenu(event); }, true);
     document.addEventListener('keydown', function(event){ if(event.key === 'Escape') closeCallMenu(); });
     window.addEventListener('blur', closeCallMenu);
   }

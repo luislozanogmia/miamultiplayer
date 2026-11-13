@@ -107,6 +107,19 @@ test('own request starts on poll without another approval and concurrent polls n
   assert.equal(f.runs(),1);
 });
 
+test('a bot asked by the person at this computer gets their open page and their own bot; anyone else\'s request gets neither',async t=>{
+  const f=fixture(t,{ownRequest:true});
+  await f.client.share(owner,f.input,'fixture.token');
+  await f.client.poll(owner,{...f.input,browserContext:{url:'https://example.test/page',title:'A page',extra:'dropped'}},'fixture.token');await f.client.idle();
+  assert.deepEqual(f.received[0].asker,{own:true,browserContext:{url:'https://example.test/page',title:'A page'},localBotId:'local'});
+
+  const g=fixture(t);
+  await g.client.share(owner,g.input,'fixture.token');
+  await g.client.poll(owner,{...g.input,browserContext:{url:'https://example.test/page',title:'A page'}},'fixture.token');
+  await g.client.run(owner,g.input,'fixture.token');await g.client.idle();
+  assert.deepEqual(g.received[0].asker,{own:false});
+});
+
 // Shared channels allow the Hub's 16,000-byte messages; a reply over the old
 // 4,000-byte local cap used to turn into "could not complete the request".
 test('long shared-channel replies are published, and over-limit replies are shortened instead of lost',async t=>{

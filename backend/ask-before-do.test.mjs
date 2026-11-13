@@ -68,6 +68,12 @@ test('no, no answer, and a stopped turn run nothing', async () => {
   const cancelled = await asking(stopped, stopped.call().message, () => stopped.gate.cancelConversation('c1'));
   assert.equal(cancelled.approved, false);
   assert.equal(stopped.call().allow, false);
+
+  const ended = bound();
+  ended.turn();
+  const closed = await asking(ended, ended.call().message, () => { ended.gate.cancelScope('other'); ended.gate.cancelScope('c1:bot'); });
+  assert.equal(closed.approved, false);
+  assert.deepEqual(ended.recorded, ['declined']);
 });
 
 test('a chat message never unlocks anything', () => {
@@ -146,7 +152,7 @@ test('a scheduled run never waits: a blocked action is skipped and reported as n
 test('each turn reads the setting where promptInstructions puts it', async () => {
   const { readFile } = await import('node:fs/promises');
   const server = await readFile(new URL('./server.js', import.meta.url), 'utf8');
-  assert.match(server, /return \{ agent: \{ text: agent, askBeforeDo \}, bot: \{ text: bot, askBeforeDo \} \};/);
+  assert.match(server, /return \{ agent: \{ text: agent, askBeforeDo \}, bot: \{ text: shared \? agent : bot, askBeforeDo \} \};/);
   assert.match(server, /enabled: globalInstructions\.bot\.askBeforeDo,/);
 });
 

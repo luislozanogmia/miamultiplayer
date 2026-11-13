@@ -43,9 +43,44 @@ test('insertText adds spaces only where words would glue together', () => {
 
 test('the composer mic is wired to local dictation, not the old stub', () => {
   assert.match(index, /dictation\.js[^>]*>[\s\S]*app\.js/);
-  assert.match(app, /\/api\/speech\/transcribe/);
-  assert.match(app, /\/api\/speech\/status/);
+  assert.match(app, /window\.MiaSpeech = D\.createEngine\(/);
+  assert.match(app, /engine\.transcribe\(wav\)/);
   assert.match(app, /getUserMedia\(\{audio:true\}\)/);
-  assert.match(app, /window\.confirm\([\s\S]{0,400}never uploaded/, 'model download needs explicit confirmation');
+  assert.match(app, /engine\.ready\(\{\s*confirm: function\(text\)\{ return window\.confirm\(text\); \}/, 'model download needs explicit confirmation');
   assert.doesNotMatch(app, /var recording = false;\s*micBtn\.addEventListener/);
+});
+
+// The engine both the composer mic and a shared session's transcript use.
+function engineWith(routes) {
+  const calls = [];
+  const engine = D.createEngine({ workspace: () => 'solo', fetch: async (path, init) => {
+    calls.push([path, init]);
+    const [status, data] = routes[path];
+    return { status, json: async () => data };
+  } });
+  return { engine, calls };
+}
+
+test('the speech model is only downloaded after an explicit yes', async () => {
+  const routes = { '/api/speech/status': [200, { binaryReady: true, modelReady: false, model: 'ggml-base.bin' }], '/api/speech/model': [200, {}] };
+  const asked = [], no = engineWith(routes);
+  assert.equal(await no.engine.ready({ confirm: (text) => { asked.push(text); return false; } }), false);
+  assert.match(asked[0], /never uploaded/);
+  assert.deepEqual(no.calls.map(([path]) => path), ['/api/speech/status']);
+  const yes = engineWith(routes);
+  let downloading = 0;
+  assert.equal(await yes.engine.ready({ confirm: () => true, onDownloading: () => downloading++ }), true);
+  assert.equal(downloading, 1);
+  assert.deepEqual(yes.calls.map(([path, init]) => [path, init.method || 'GET', init.headers['X-MiaOS-Workspace']]), [['/api/speech/status', 'GET', 'solo'], ['/api/speech/model', 'POST', 'solo']]);
+  const ready = engineWith({ '/api/speech/status': [200, { binaryReady: true, modelReady: true }] });
+  assert.equal(await ready.engine.ready({ confirm() { assert.fail('nothing to ask'); } }), true);
+  await assert.rejects(engineWith({ '/api/speech/status': [200, { binaryReady: false }] }).engine.ready({}), /Reinstall Mia/);
+});
+
+test('transcribing posts the recording to this computer and returns the words', async () => {
+  const ok = engineWith({ '/api/speech/transcribe': [200, { text: '  hello  ' }] });
+  assert.equal(await ok.engine.transcribe('wav-bytes'), 'hello');
+  assert.equal(ok.calls[0][1].headers['Content-Type'], 'audio/wav');
+  assert.equal(ok.calls[0][1].body, 'wav-bytes');
+  await assert.rejects(engineWith({ '/api/speech/transcribe': [409, { message: 'The speech model has not been downloaded yet.' }] }).engine.transcribe('x'), /not been downloaded/);
 });

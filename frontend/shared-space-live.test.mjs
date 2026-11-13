@@ -12,7 +12,11 @@ function fakeRTC() {
   class FakePeer {
     constructor() { this.iceGatheringState = 'complete'; this.signalingState = 'stable'; this.connectionState = 'new'; made.push(this); }
     addEventListener() {}
-    createDataChannel() { this.channel = { readyState: 'connecting', bufferedAmount: 0, sent: [], send(text) { this.sent.push(text); this.peer?.onmessage?.({ data: text }); } }; return this.channel; }
+    createDataChannel(label) {
+      const channel = { label, readyState: 'connecting', bufferedAmount: 0, sent: [], send(text) { this.sent.push(text); this.peer?.onmessage?.({ data: text }); } };
+      if (label === 'mia-space-talk') this.talk = channel; else this.channel = channel;
+      return channel;
+    }
     async createOffer() { return { type: 'offer', sdp: 'offer-sdp' }; }
     async createAnswer() { return { type: 'answer', sdp: 'answer-sdp' }; }
     async setLocalDescription(desc) { this.localDescription = desc; if (desc.type === 'offer') this.signalingState = 'have-local-offer'; }
@@ -68,5 +72,32 @@ test('a stale answer is ignored and someone who left is dropped', async () => {
   assert.equal(caller.remoteDescription.sdp, 'answer-sdp');
   a.sync([]);
   assert.equal(caller.connectionState, 'closed');
+  a.close(); b.close();
+});
+
+test('transcript lines use their own kept channel and a late joiner is told when it opens', async () => {
+  const fake = fakeRTC(), inbox = [], opened = [];
+  const b = createMesh({ selfId: 'u2', RTC: fake.RTC, gatherMs: 0, signal: (to, msg) => a.signal('u2', msg), onMessage: (from, msg) => inbox.push([from, msg]), onOpen: (id) => opened.push(id) });
+  const a = createMesh({ selfId: 'u1', RTC: fake.RTC, gatherMs: 0, signal: (to, msg) => b.signal('u1', msg), onMessage() {}, onOpen: (id) => opened.push(id) });
+  a.sync(['u2']);
+  await settle();
+  const [caller, callee] = fake.made;
+  const receiving = { label: 'mia-space-talk', readyState: 'open', send() {} };
+  callee.ondatachannel({ channel: receiving });
+  a.sendKept({ t: 's', id: 'l1', text: 'not open yet' });
+  assert.deepEqual(caller.talk.sent, []);
+  caller.talk.readyState = 'open';
+  caller.talk.peer = receiving;
+  caller.talk.onopen();
+  receiving.onopen();
+  assert.deepEqual(opened, ['u2', 'u1']);
+  // A full frame queue never holds a line back.
+  caller.channel.readyState = 'open';
+  caller.channel.bufferedAmount = 10 * 1024 * 1024;
+  a.sendKept({ t: 's', id: 'l1', text: 'hello' });
+  a.sendKept({ t: 's', id: 'l2', text: 'only for someone else' }, 'u9');
+  a.sendKept({ t: 's', id: 'l3', text: 'just you' }, 'u2');
+  assert.deepEqual(inbox, [['u1', { t: 's', id: 'l1', text: 'hello' }], ['u1', { t: 's', id: 'l3', text: 'just you' }]]);
+  assert.deepEqual(caller.channel.sent, []);
   a.close(); b.close();
 });

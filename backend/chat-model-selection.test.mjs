@@ -134,6 +134,14 @@ test('turns model credential and stale-selection failures into actionable safe r
     'I ran out of time before finishing. Please try again.'
   );
   assert.equal(
+    userFacingModelDispatchError(Object.assign(new Error('Hermes gateway returned no reply text'), { code: 'HERMES_NO_REPLY_TEXT', steps: 3 })),
+    'I finished working (3 steps) but ended without writing a reply. The work is done; ask me to summarize it and I’ll pick up from there.'
+  );
+  assert.equal(
+    userFacingModelDispatchError(new Error('native agent produced no user-facing reply')),
+    'I ended that turn without writing a reply. Ask again and I’ll answer.'
+  );
+  assert.equal(
     userFacingModelDispatchError(new Error("Error code: 401 - {'code': 'invalid_api_key'}")),
     'Your connected model credential was rejected. Reconnect it in Settings → Access, then try again.'
   );

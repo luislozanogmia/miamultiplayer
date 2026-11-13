@@ -182,6 +182,21 @@ test("REST translation rejects caller URLs, authorization overrides and incompat
   assert.throws(() => buildGoogleRequest({ args: ["drive", "files", "get", "--params", '{"fileId":"fixture","alt":"media"}'] }), /invalid_request/);
 });
 
+test("whole-Drive read requests pass while delete, trash and permission changes stay refused", () => {
+  const list = buildGoogleRequest({ args: ["drive", "files", "list", "--params", JSON.stringify({
+    q: "(trashed = false) and 'folder_fixture_123456' in parents and name contains 'plan'", pageSize: 50,
+    supportsAllDrives: true, includeItemsFromAllDrives: true, pageToken: "next_fixture",
+    fields: "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,parents)" })] });
+  assert.equal(list.method, "GET");
+  assert.equal(new URL(list.url).searchParams.get("includeItemsFromAllDrives"), "true");
+  const get = buildGoogleRequest({ args: ["drive", "files", "get", "--params", JSON.stringify({ fileId: "file_fixture_123456", supportsAllDrives: true, fields: "id,name" })] });
+  assert.equal(get.method, "GET");
+  for (const args of [["drive", "files", "delete"], ["drive", "files", "trash"], ["drive", "files", "emptyTrash"],
+    ["drive", "permissions", "create"], ["drive", "permissions", "delete"]]) {
+    assert.equal(validRun({ args }), false, args.join(" "));
+  }
+});
+
 test("auth status retains provider-verified scopes and caches only access credentials in memory", async t => {
   let refreshes = 0, api = 0;
   const f = await fixture(t, async (url, options) => {

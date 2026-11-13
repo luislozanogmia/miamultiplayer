@@ -305,6 +305,10 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
         if (approval.conversationId === conversationId) settle(approval, 'declined');
       }
     },
+    // The same for a run with no conversation of its own on this computer.
+    cancelScope(scope) {
+      for (const approval of [...open.values()]) if (approval.scope === scope) settle(approval, 'declined');
+    },
   };
 }
 
@@ -343,6 +347,7 @@ async function createAskBeforeDoGate(options) {
     authorizeBrowser: state.authorizeBrowser,
     answer: state.answer,
     cancelConversation: state.cancelConversation,
+    cancelScope: state.cancelScope,
     async stop() { server.closeAllConnections?.(); await new Promise((resolve) => server.close(resolve)); },
   };
 }

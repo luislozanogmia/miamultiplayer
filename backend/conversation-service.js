@@ -277,7 +277,9 @@ function createConversationService({ repository, authorization, realtime = null,
         ? { teamWorkspace: sourceMetadata.teamWorkspace }
         : {}),
       conversationMode: 'fresh',
-      source: 'native-ui-new-conversation',
+      // A company's My Bots chat keeps its mark, so the new conversation is
+      // still answered by the person's own bot (see botAnswersConversation).
+      source: sourceMetadata.source === 'team-bot-chat' ? 'team-bot-chat' : 'native-ui-new-conversation',
     };
     const owner = {
       principalId: required(principal && principal.principalId, 'principalId'),

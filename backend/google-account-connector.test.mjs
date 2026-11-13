@@ -146,14 +146,43 @@ test('browser sign-in starts the official gws login with filtered read/write sco
   assert.equal(calls[0].args[3].includes('gmail.modify'), true);
   assert.equal(calls[0].args[3].includes('gmail.send'), false);
   assert.equal(calls[0].args[3].includes('drive.file'), true);
+  assert.deepEqual(calls[0].args[3].split(','), googleAccount.GWS_OAUTH_SCOPES);
+  assert.equal(calls[0].args[3].split(',').includes('https://www.googleapis.com/auth/drive.readonly'), true);
+  assert.equal(calls[0].args[3].split(',').includes('https://www.googleapis.com/auth/drive'), false);
   assert.equal(calls[0].args[3].includes('/presentations'), false);
   assert.equal(calls[0].args[3].includes('/documents'), false);
   assert.equal(calls[0].args[3].includes('/spreadsheets'), false);
 });
 
-test('previous broad file grants require reconnect rather than passing restricted policy', () => {
-  for (const scope of ['drive', 'drive.readonly', 'documents', 'spreadsheets', 'presentations']) {
+test('previous broad write grants require reconnect rather than passing restricted policy', () => {
+  for (const scope of ['drive', 'drive.metadata', 'drive.metadata.readonly', 'documents', 'documents.readonly',
+    'spreadsheets', 'spreadsheets.readonly', 'presentations', 'presentations.readonly']) {
     assert.equal(googleAccount.authPayloadHasRequiredScopes({scopes:[...googleAccount.GWS_OAUTH_SCOPES, 'https://www.googleapis.com/auth/' + scope]}), false);
+  }
+});
+
+test('whole-Drive read grant counts as connected and older per-file grants still do', async () => {
+  const readonly = 'https://www.googleapis.com/auth/drive.readonly';
+  assert.equal(googleAccount.authPayloadHasRequiredScopes({ scopes: [...googleAccount.GWS_REQUIRED_SCOPES, readonly] }), true);
+  assert.equal(googleAccount.authPayloadHasRequiredScopes({ scopes: googleAccount.GWS_REQUIRED_SCOPES }), true);
+  // drive.readonly cannot stand in for drive.file: writing still needs it.
+  assert.equal(googleAccount.authPayloadHasRequiredScopes({ scopes: googleAccount.GWS_OAUTH_SCOPES
+    .filter((scope) => !scope.endsWith('/drive.file')) }), false);
+  for (const [scopes, wholeDriveRead] of [[googleAccount.GWS_OAUTH_SCOPES, true], [googleAccount.GWS_REQUIRED_SCOPES, false]]) {
+    const connector = googleAccount.createGoogleAccountConnector({
+      runtime: { available: true, gwsBin: '/fixture/gws' },
+      runProcess: async () => ({ code: 0, stdout: JSON.stringify({ token_valid: true, scopes }) }),
+    });
+    const status = await connector.status();
+    assert.equal(status.state, 'connected');
+    assert.equal(status.wholeDriveRead, wholeDriveRead);
+  }
+});
+
+test('whole-Drive reading never opens delete or trash', () => {
+  for (const [operation, args] of [['drive.files.delete', []], ['drive.files.trash', []],
+    ['drive.files.list', ['--params', '{"q":"trashed = false"}', '--permanent']], ['drive.permissions.delete', []]]) {
+    assert.throws(() => googleAccount.assertAllowedGwsOperation(operation, args));
   }
 });
 
@@ -390,12 +419,13 @@ test('server registers only the Hermes-owned Google Account lifecycle routes', a
 });
 
 // Keep permission requests aligned with the supported desktop tools.
-test('Google connection needs only five supported scopes and refuses Contacts operations', async () => {
+test('Google connection asks for five supported scopes plus whole-Drive reading and refuses Contacts operations', async () => {
   const scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/gmail.modify',
     'https://www.googleapis.com/auth/calendar.events',
     'https://www.googleapis.com/auth/drive.file'];
-  assert.deepEqual(googleAccount.GWS_OAUTH_SCOPES, scopes);
+  assert.deepEqual(googleAccount.GWS_REQUIRED_SCOPES, scopes);
+  assert.deepEqual(googleAccount.GWS_OAUTH_SCOPES, [...scopes, 'https://www.googleapis.com/auth/drive.readonly']);
   let operations = 0;
   const connector = googleAccount.createGoogleAccountConnector({
     runtime: { available: true, gwsBin: '/fixture/gws' },

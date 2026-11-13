@@ -29,6 +29,12 @@ const MODEL_OPTIONS_TIMEOUT_MS = 30000;
 const MODEL_OPTIONS_ATTEMPTS = 10;
 const RETRY_DELAY_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 300;
+// A turn that ends with nothing written. run() asks once more in the same
+// session before the chat reports it (chat-model-selection.js words it).
+const NO_REPLY_CODE = 'HERMES_NO_REPLY_TEXT';
+const HERMES_NO_REPLY_NOTICE = /^⚠️ No reply: /;
+const NO_REPLY_PROMPT = 'Your last turn ended without a reply, so the person saw nothing. '
+  + 'Write your reply now: what you did, what you found, and anything still open. Do not call tools.';
 
 function numericPort(value, fallback = DEFAULT_PORT) {
   const parsed = Number(value);
@@ -704,7 +710,11 @@ class HermesGatewayClient {
           failureReason: String(payload.failure_reason || ''),
         }));
       } else if (!text && artifacts.length === 0) {
-        turn.reject(new Error('Hermes gateway returned no reply text'));
+        turn.reject(Object.assign(new Error('Hermes gateway returned no reply text'), { code: NO_REPLY_CODE }));
+      } else if (HERMES_NO_REPLY_NOTICE.test(text) && artifacts.length === 0) {
+        // Hermes already asked the model again and gave up: its notice names
+        // commands Mia does not have, so Mia says it in her own words.
+        turn.reject(Object.assign(new Error('Hermes gateway returned no reply text'), { code: NO_REPLY_CODE, alreadyRetried: true }));
       } else {
         turn.resolve({
           text,
@@ -1174,7 +1184,24 @@ class HermesGatewayClient {
           path: String(imagePath || ''),
         }, REQUEST_TIMEOUT_MS, signal));
       }
-      const completed = await this.submitTurn(session, message, { onEvent, signal, operation });
+      let steps = 0;
+      const countSteps = (type, payload) => {
+        if (type === 'tool.start') steps += 1;
+        if (typeof onEvent === 'function') onEvent(type, payload);
+      };
+      let completed;
+      try {
+        completed = await this.submitTurn(session, message, { onEvent: countSteps, signal, operation });
+      } catch (error) {
+        if (error && error.code === NO_REPLY_CODE && error.alreadyRetried) error.steps = steps;
+        if (!error || error.code !== NO_REPLY_CODE || error.alreadyRetried || (signal && signal.aborted)) throw error;
+        try {
+          completed = await this.submitTurn(session, NO_REPLY_PROMPT, { onEvent: countSteps, signal, operation });
+        } catch (retryError) {
+          if (retryError && retryError.code === NO_REPLY_CODE) retryError.steps = steps;
+          throw retryError;
+        }
+      }
       return {
         text: completed.text,
         storedSessionId: session.storedSessionId,

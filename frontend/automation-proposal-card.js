@@ -10,6 +10,8 @@
   // 'weekdays' is a daily schedule with weekdaysOnly; it is only a menu choice.
   var FREQUENCIES = [['daily','Every day'],['weekdays','Weekdays'],['weekly','Every week'],['monthly','Every month'],['interval','Repeating timer']];
 
+  var CLOCK_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.3 1.5"/></svg>';
+
   function scheduleText(schedule){
     var value = schedule || {};
     var zone = value.timezone ? ' · ' + value.timezone : '';
@@ -87,20 +89,25 @@
       : '<div class="agent-setup-schedule-row">' + frequency + day +
         '<input data-field="time" type="time" value="' + esc(schedule.time || '09:00') + '" aria-label="Time">' +
         '<input data-field="timezone" type="text" value="' + esc(schedule.timezone || options.timezone || '') + '" aria-label="Time zone" placeholder="America/Mexico_City"></div>';
+    // A compact card: label beside its field, the confirmation and buttons on
+    // one closing row, so the whole thing fits in the chat panel.
     return '<div class="agent-setup-card automation-proposal-card" data-automation-proposal="' + esc(eventId) + '" data-frequency="' + esc(choice || '') + '">' +
-      '<div class="agent-setup-card-intro">' + (isUpdate ? 'Here’s the change I’d make. Edit anything before saving.' : 'Here’s the automation I’d set up. Edit anything before turning it on.') + '</div>' +
+      '<div class="automation-proposal-head"><span class="automation-proposal-icon" aria-hidden="true">' + CLOCK_ICON + '</span>' +
+        '<div><div class="automation-proposal-title">' + (isUpdate ? 'Change to this automation' : 'New automation') + '</div>' +
+        '<div class="agent-setup-card-intro">' + (isUpdate ? 'Edit anything before saving.' : 'Edit anything before turning it on.') + '</div></div></div>' +
       field('name', 'Name', '<input data-field="name" type="text" maxlength="80" value="' + esc(automation.name || '') + '">') +
       field('goal', 'Goal', '<textarea data-field="goal" rows="2" maxlength="500">' + esc(automation.goal || '') + '</textarea>') +
       field('schedule', 'When', when) +
-      field('steps', 'Steps (one per line)', '<textarea data-field="steps" rows="' + Math.min(8, Math.max(3, (automation.steps || []).length + 1)) + '">' + esc((automation.steps || []).join('\n')) + '</textarea>') +
+      field('steps', 'Steps <i>one per line</i>', '<textarea data-field="steps" rows="' + Math.min(6, Math.max(2, (automation.steps || []).length)) + '">' + esc((automation.steps || []).join('\n')) + '</textarea>') +
       field('output', 'Output', '<textarea data-field="output" rows="2" maxlength="300">' + esc(automation.output || '') + '</textarea>') +
-      '<div class="agent-setup-confirm-copy">' + (isUpdate ? 'Save this change?' : 'Turn on this automation?') + '</div>' +
-      '<div class="agent-setup-safety">' + (isUpdate ? 'Nothing changes until you confirm.' : 'Nothing is scheduled until you confirm.') + '</div>' +
       (options.error ? '<div class="agent-setup-error" role="alert">' + esc(options.error) + '</div>' : '') +
-      '<div class="agent-setup-actions">' +
-        '<button type="button" class="agent-setup-activate" data-automation-decision="accept"' + (options.busy ? ' disabled' : '') + '>' + (options.busy ? 'Saving…' : (isUpdate ? 'Save change' : 'Yes, turn it on')) + '</button>' +
-        '<button type="button" class="agent-setup-later" data-automation-decision="dismiss"' + (options.busy ? ' disabled' : '') + '>Not yet</button>' +
-      '</div></div>';
+      '<div class="automation-proposal-foot">' +
+        '<div class="automation-proposal-confirm"><div class="agent-setup-confirm-copy">' + (isUpdate ? 'Save this change?' : 'Turn on this automation?') + '</div>' +
+        '<div class="agent-setup-safety">' + (isUpdate ? 'Nothing changes until you confirm.' : 'Nothing is scheduled until you confirm.') + '</div></div>' +
+        '<div class="agent-setup-actions">' +
+          '<button type="button" class="agent-setup-later" data-automation-decision="dismiss"' + (options.busy ? ' disabled' : '') + '>Not yet</button>' +
+          '<button type="button" class="agent-setup-activate" data-automation-decision="accept"' + (options.busy ? ' disabled' : '') + '>' + (options.busy ? 'Saving…' : (isUpdate ? 'Save change' : 'Yes, turn it on')) + '</button>' +
+        '</div></div></div>';
   }
 
   // html(message, {esc, canEdit, busy, error, timezone}) -> '' when the
@@ -146,7 +153,19 @@
     };
   }
 
-  var api = {html: html, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields};
+  // Why a card's answer was refused, in the server's words when it gave any.
+  // Only a rejected value (400) is about the fields.
+  function saveErrorText(status, data){
+    if(status === 409) return 'This card was already answered.';
+    if(data && data.message) return String(data.message);
+    if(status === 400) return 'That didn’t save. Check the fields and try again.';
+    if(status === 403) return 'Only the bot’s owner can answer this card.';
+    if(status === 404) return 'Mia could not find this bot or card. Reload Mia and try again.';
+    if(status === 401) return 'You are signed out. Sign in and try again.';
+    return 'That didn’t save. Try again.';
+  }
+
+  var api = {html: html, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields, saveErrorText: saveErrorText};
   if(typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MiaAutomationProposalCard = api;
 })(typeof window !== 'undefined' ? window : globalThis);

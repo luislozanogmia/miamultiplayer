@@ -9,6 +9,19 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.9] — Unreleased
+
+### Added
+- Shared browser sessions can transcribe each participant's opted-in microphone locally and suggest tasks from the conversation. A suggestion shows its full request for review before it can ask that person's Mia to act.
+- The browser can show two or four pages at once and supports camera, microphone, and screen sharing in pages.
+- Connecting Google can request read-only access to the whole Drive; file changes still require a file picked or created through Mia.
+
+### Changed
+- A company bot asked by the person at this computer can use that person's Mia browser. Settings can use one set of instructions for Mia and all bots.
+
+### Fixed
+- Bot chats and settings work for a person's Solo bots while a company is open. Chat progress and follow-up messages stay visible, and a run that ends without a reply reports it.
+
 ## [0.3.8] — 2026-11-11
 
 ### Added

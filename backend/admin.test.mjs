@@ -441,6 +441,83 @@ inference.runInferenceViaHermesGateway = async () => ({ text: 'I changed it.\\n<
   }
 });
 
+// The same card route as above, for an automation: the bot is the owner's
+// Solo bot, opened from a company's My Bots, so the app names the company.
+test('a Solo bot\'s automation card can be accepted while a company is open', async () => {
+  const block = JSON.stringify({ schemaVersion: 1, action: 'create', automation: {
+    name: 'Weekly fixture review', goal: 'Review the fixture list', output: 'A short list in this chat',
+    schedule: { frequency: 'weekly', day: 'wednesday', time: '19:00', timezone: 'America/Monterrey' },
+    steps: ['Read the list', 'Post the summary'],
+  } });
+  const preloadScript = `
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async () => ({ text: 'Here it is.\\n<MIA_AUTOMATION>' + ${JSON.stringify(block)} + '</MIA_AUTOMATION>' });
+const cronSync = require(${JSON.stringify(path.join(BACKEND_DIR, 'cron-sync.js'))});
+cronSync.syncBotAutomation = async (bot) => ({
+  ...bot,
+  hermesCronJobIds: Object.fromEntries((bot.automations || []).map((automation) => [automation.id, 'fixture-job-' + automation.id])),
+});
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const company = `hub_${'b'.repeat(32)}`;
+    const solo = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const inCompany = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': company };
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: solo,
+      body: JSON.stringify({ name: 'Solo Automation Fixture', instructions: 'Original solo instructions.',
+        model: 'fixture-model', status: 'running', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    assert.equal(bot.workspaceId, 'solo');
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1")
+      .get(`%${bot.id}%`);
+    database.close();
+    assert.ok(chat);
+    const sent = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: { text: 'Review the list every Wednesday.' }, clientIdempotencyKey: 'automation-card-company-open' }),
+    });
+    assert.equal(sent.status, 201);
+    let proposalEvent;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, { headers: { cookie } });
+      const payload = await response.json();
+      proposalEvent = (payload.events || []).find((event) => event.metadata && event.metadata.automationProposal);
+      if (proposalEvent) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(proposalEvent, `the bot posted a pending automation card: ${server.logs.join('')}`);
+    assert.equal(proposalEvent.metadata.automationProposal.status, 'pending');
+
+    const route = `${server.origin}/api/bots/${bot.id}/automation-proposals/${proposalEvent.id}`;
+    // A card that is not in this bot's chat is refused with a reason, not a field error.
+    const missing = await fetch(`${server.origin}/api/bots/${bot.id}/automation-proposals/evt_missing`, {
+      method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(missing.status, 404);
+    assert.match((await missing.json()).message, /could not find this card/);
+
+    const accepted = await fetch(route, { method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const body = await accepted.json();
+    assert.equal(body.event.metadata.automationProposal.status, 'accepted');
+    assert.equal(body.event.metadata.automationProposal.schedule, 'scheduled', 'the scheduler was synced');
+    assert.equal(body.bot.workspaceId, 'solo', 'accepting does not move the bot into the company');
+    assert.equal(body.bot.automations.length, 1);
+    assert.equal(body.bot.automations[0].name, 'Weekly fixture review');
+    assert.ok(body.bot.hermesCronJobIds[body.bot.automations[0].id]);
+    assert.equal((await fetch(route, { method: 'POST', headers: inCompany, body: JSON.stringify({ decision: 'accept' }) })).status, 409);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('a Solo bot\'s instruction card can be accepted while a company is open', async () => {
   const preloadScript = `
 const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
@@ -493,6 +570,200 @@ inference.runInferenceViaHermesGateway = async () => ({ text: 'Done.\\n<MIA_INST
       .find((candidate) => candidate.endsWith(`--${bot.id}`));
     assert.ok(packageDir);
     assert.match(fs.readFileSync(path.join(packageDir, 'AGENTS.md'), 'utf8'), /Company-open fixture instructions/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+// My Bots lists your Solo bots while a company is open, and the app sends the
+// company's name on every one-bot request.
+// A company's My Bots chat is your private chat with your own bot, stored
+// with Solo's chats and tagged with the company. Your Bot Instructions reach
+// it as they reach the same bot's Solo chat, whichever list the bot is in.
+test('your Bot Instructions reach your private bot chats in Solo and in a company', async () => {
+  const preloadScript = `
+const fs = require('node:fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async ({ seedMessages }) => {
+  fs.appendFileSync(process.env.MIAOS_TEST_GATE_READY, JSON.stringify(seedMessages[0].content) + '\\n');
+  return { text: 'Fixture bot reply' };
+};
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const company = `hub_${'c'.repeat(32)}`;
+    const headers = (workspace) => ({ cookie, 'content-type': 'application/json', 'x-miaos-workspace': workspace });
+    const saved = await fetch(`${server.origin}/api/settings/instructions`, {
+      method: 'POST', headers: headers(company), body: JSON.stringify({ agent: '', bot: 'Answer as the fixture persona.' }),
+    });
+    assert.equal(saved.status, 200, 'the Settings pane saves the same way while a company is open');
+    const makeBot = async (workspace, name) => {
+      const created = await fetch(`${server.origin}/api/bots`, {
+        method: 'POST', headers: headers(workspace),
+        body: JSON.stringify({ name, instructions: 'Fixture brief.', model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+      });
+      assert.equal(created.status, 201);
+      return (await created.json()).bot;
+    };
+    const soloBot = await makeBot('solo', 'Solo Persona Fixture');
+    const companyBot = await makeBot(company, 'Company Persona Fixture');
+    // The app makes a company chat with a Hub sign-in check this test has no
+    // Hub for, so the chat is made in Solo and tagged here the way the app tags it.
+    const botChat = async (bot) => {
+      const made = await fetch(`${server.origin}/api/conversations?workspace=solo`, {
+        method: 'POST', headers: headers('solo'), body: JSON.stringify({ type: 'bot', name: bot.name, metadata: { botId: bot.id, departments: [] } }),
+      });
+      assert.ok(made.status === 201 || made.status === 200, await made.clone().text());
+      return (await made.json()).conversation.id;
+    };
+    const tagForCompany = (id) => {
+      const database = new Database(server.dbPath);
+      const row = database.prepare('SELECT metadata FROM conversations WHERE id = ?').get(id);
+      const metadata = { ...JSON.parse(row.metadata), teamWorkspace: company, source: 'team-bot-chat' };
+      database.prepare('UPDATE conversations SET metadata = ? WHERE id = ?').run(JSON.stringify(metadata), id);
+      database.close();
+    };
+    const companyChats = [await botChat(soloBot), await botChat(companyBot)];
+    companyChats.forEach(tagForCompany);
+    // With its first chat now the company's, the Solo bot gets a Solo chat again.
+    const soloChat = await botChat(soloBot);
+    assert.ok(!companyChats.includes(soloChat));
+    let sentCount = 0;
+    for (const id of [soloChat, ...companyChats]) {
+      // The app sends a request that names a workspace with that workspace.
+      const sent = await fetch(`${server.origin}/api/conversations/${id}/events?workspace=solo`, {
+        method: 'POST', headers: headers('solo'),
+        body: JSON.stringify({ content: { text: 'Who are you?' }, clientIdempotencyKey: `persona-${id}` }),
+      });
+      assert.equal(sent.status, 201, await sent.clone().text());
+      sentCount += 1;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const seen = fs.existsSync(server.dispatchReadyPath) ? fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').length : 0;
+        if (seen >= sentCount) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    const prompts = fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(prompts.length, 3, server.logs.join(''));
+    for (const prompt of prompts) {
+      assert.match(prompt, /User-configured Bot Instructions:[\s\S]*Answer as the fixture persona\./);
+    }
+  } finally {
+    await stopServer(server);
+  }
+});
+
+// With "Use the same rules for bots and agents" on, your bot chats get your
+// one set of instructions; turning it off brings your old Bot Instructions back.
+test('shared rules send your instructions to your bots, and turning them off restores the bot text', async () => {
+  const preloadScript = `
+const fs = require('node:fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async ({ seedMessages }) => {
+  fs.appendFileSync(process.env.MIAOS_TEST_GATE_READY, JSON.stringify(seedMessages[0].content) + '\\n');
+  return { text: 'Fixture bot reply' };
+};
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const headers = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const save = (body) => fetch(`${server.origin}/api/settings/instructions`, { method: 'POST', headers, body: JSON.stringify(body) });
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.' })).status, 200);
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: 'yes' })).status, 400);
+    const sharedOn = await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: true });
+    assert.equal(sharedOn.status, 200);
+    assert.deepEqual((await sharedOn.json()).instructions,
+      { agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', askBeforeDo: true, shared: true });
+
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ name: 'Shared Rules Fixture', instructions: 'Fixture brief.', model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const bot = (await created.json()).bot;
+    const made = await fetch(`${server.origin}/api/conversations?workspace=solo`, {
+      method: 'POST', headers, body: JSON.stringify({ type: 'bot', name: bot.name, metadata: { botId: bot.id, departments: [] } }),
+    });
+    assert.ok(made.status === 201 || made.status === 200, await made.clone().text());
+    const chatId = (await made.json()).conversation.id;
+    let sentCount = 0;
+    const ask = async () => {
+      const sent = await fetch(`${server.origin}/api/conversations/${chatId}/events?workspace=solo`, {
+        method: 'POST', headers, body: JSON.stringify({ content: { text: 'Who are you?' }, clientIdempotencyKey: `shared-${sentCount}` }),
+      });
+      assert.equal(sent.status, 201, await sent.clone().text());
+      sentCount += 1;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const seen = fs.existsSync(server.dispatchReadyPath) ? fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').length : 0;
+        if (seen >= sentCount) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const prompts = fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(prompts.length, sentCount, server.logs.join(''));
+      return prompts[sentCount - 1];
+    };
+    const sharedPrompt = await ask();
+    assert.match(sharedPrompt, /User-configured Bot Instructions:[\s\S]*Agent fixture rules\./);
+    assert.doesNotMatch(sharedPrompt, /Bot fixture rules\./);
+
+    // Turning it off brings the old bot text back untouched.
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: false })).status, 200);
+    const settings = await (await fetch(`${server.origin}/api/settings`, { headers })).json();
+    assert.equal(settings.instructions.bot, 'Bot fixture rules.');
+    assert.equal(settings.instructions.shared, false);
+    const separatePrompt = await ask();
+    assert.match(separatePrompt, /User-configured Bot Instructions:[\s\S]*Bot fixture rules\./);
+    assert.doesNotMatch(separatePrompt, /Agent fixture rules\./);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('your own Solo bot can be changed while a company is open, and no one else\'s', async () => {
+  const server = await startServer({ seedRows: [{ email: 'solo-owner@example.com', password: 'another-horse-battery', role: 'member' }] });
+  try {
+    const owner = await login(server.origin, 'solo-owner@example.com', 'another-horse-battery');
+    assert.equal(owner.response.status, 200);
+    const company = `hub_${'b'.repeat(32)}`;
+    const asOwner = (workspace) => ({ cookie: owner.cookie, 'content-type': 'application/json', 'x-miaos-workspace': workspace });
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: asOwner('solo'),
+      body: JSON.stringify({ name: 'Solo Color Fixture', instructions: 'Solo fixture instructions.',
+        model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    assert.equal(bot.workspaceId, 'solo');
+
+    const saved = await fetch(`${server.origin}/api/bots/${bot.id}`, {
+      method: 'PUT', headers: asOwner(company), body: JSON.stringify({ avatarColor: '#2a9d8f' }),
+    });
+    assert.equal(saved.status, 200, await saved.clone().text());
+    const reread = await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: asOwner(company) });
+    assert.equal(reread.status, 200);
+    const stored = (await reread.json()).bot;
+    assert.equal(stored.avatarColor, '#2a9d8f');
+    assert.equal(stored.workspaceId, 'solo', 'saving does not move the bot into the company');
+
+    // The company's list still holds only company bots.
+    const listed = await (await fetch(`${server.origin}/api/bots`, { headers: asOwner(company) })).json();
+    assert.ok(!listed.bots.some((entry) => entry.id === bot.id));
+
+    // Someone else naming a company, even an admin, still cannot see it.
+    const other = { cookie: await loginAsBootAdmin(server), 'content-type': 'application/json', 'x-miaos-workspace': company };
+    assert.equal((await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: other })).status, 404);
+    const refused = await fetch(`${server.origin}/api/bots/${bot.id}`, {
+      method: 'PUT', headers: other, body: JSON.stringify({ avatarColor: '#e76f51' }),
+    });
+    assert.equal(refused.status, 404);
+    assert.equal((await fetch(`${server.origin}/api/bots/${bot.id}`, { method: 'DELETE', headers: other })).status, 404);
   } finally {
     await stopServer(server);
   }

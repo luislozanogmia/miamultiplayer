@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences } = require("electron");
+const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
@@ -18,6 +18,7 @@ const { createClosedTabs } = require("./closed-tabs.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
 const { resolveFolderOpenTarget, showInFileManager } = require("./folder-open.cjs");
+const { splitMode, splitRects, enterSplit, pickSlot, removeFromSlots, refillSlots } = require("./browser-split.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 // Longer fill values are inserted in one go rather than key by key.
@@ -253,6 +254,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // (laid out as in the browser, so the bot sees the same page). The renderer
   // reports where the dock is; `area` is the browser's own page area.
   const docked = { id: null, mode: "page", bounds: null, visible: false, area: null, applied: "" };
+  // Split view: the browser area shows two tabs side by side or four in a
+  // grid. `slots` holds the tab id in each pane (null for an empty one) and
+  // `focus` the pane of the active tab, the one the address bar and bots'
+  // default target follow. Each workspace keeps its own choice while Mia
+  // runs; one with none shows one page.
+  const splitByWorkspace = new Map();
+  let split = { mode: 1, slots: [], focus: 0 };
   let nextId = 1;
   let visible = false;
   // Hidden only while a menu or dialog covers the page: still showing, so it keeps playing.
@@ -383,7 +391,9 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
   }
   // Microphone/camera requests from HTTPS pages surface a native Allow/Block
-  // dialog, remembered per origin next to the browser state file. Every other
+  // dialog, remembered per origin next to the browser state file. Not Now
+  // (or Escape) turns down this one request and asks again next time. The
+  // page's right-click menu changes a remembered choice. Every other
   // permission stays denied.
   const permissionsPath = statePath ? `${statePath.replace(/\.json$/, "")}-permissions.json` : "";
   const mediaDecisions = new Map();
@@ -642,14 +652,54 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       .map(({ entry }) => ({ url: entry.url, title: entry.title, count: entry.count, lastVisit: entry.lastVisit,
         icon: historyIcons.get(historyHost(entry.url)) || "" }));
   }
-  async function ensureSystemMediaAccess() {
-    if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return;
-    try {
-      await systemPreferences.askForMediaAccess("microphone");
-      await systemPreferences.askForMediaAccess("camera");
-    } catch (error) {
-      log(`system media access request failed: ${error.message}`);
+  // macOS asks on its own whether Mia may use the camera and microphone.
+  // Check every time a site is allowed, not only at the first Allow: a
+  // rebuilt or reinstalled Mia starts with no system answer, and without one
+  // the page gets no picture or sound and Mia never shows up in the system's
+  // camera and microphone lists. When the answer is No, say where to change it.
+  let systemMediaNotice = null;
+  async function ensureSystemMediaAccess(kinds) {
+    if (process.platform !== "darwin" || !systemPreferences || typeof systemPreferences.askForMediaAccess !== "function") return true;
+    const missing = [];
+    for (const kind of kinds) {
+      try {
+        if (!(await systemPreferences.askForMediaAccess(kind))) missing.push(kind);
+      } catch (error) {
+        log(`system media access request failed: ${error.message}`);
+        missing.push(kind);
+      }
     }
+    if (missing.length && !systemMediaNotice) {
+      const names = missing.map(kind => kind === "camera" ? "Camera" : "Microphone");
+      systemMediaNotice = dialog.showMessageBox(window, {
+        type: "warning",
+        title: names.join(" and "),
+        message: `Mia isn't allowed to use your ${names.join(" and ").toLowerCase()}`,
+        detail: `Turn on Mia in System Settings > Privacy & Security > ${names[0]}, then reload the page.`,
+        buttons: ["Open System Settings", "OK"],
+        defaultId: 0,
+        cancelId: 1,
+      }).then(result => {
+        const pane = missing[0] === "camera" ? "Privacy_Camera" : "Privacy_Microphone";
+        if (result && result.response === 0 && typeof shell.openExternal === "function") {
+          void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`).catch(() => {});
+        }
+      }).catch(() => {}).finally(() => { systemMediaNotice = null; });
+    }
+    return missing.length === 0;
+  }
+  // The kinds a camera/microphone request asks for, in macOS's names. Both
+  // when the request doesn't say.
+  function requestedMediaKinds(details) {
+    const types = Array.isArray(details && details.mediaTypes) ? details.mediaTypes : [];
+    const kinds = [];
+    if (types.includes("audio")) kinds.push("microphone");
+    if (types.includes("video")) kinds.push("camera");
+    return kinds.length ? kinds : ["microphone", "camera"];
+  }
+  function rememberMediaDecision(origin, allowed) {
+    mediaDecisions.set(origin, allowed);
+    persistMediaDecisions();
   }
   function decideMediaPermission(origin) {
     if (mediaDecisions.has(origin)) return Promise.resolve(mediaDecisions.get(origin));
@@ -658,23 +708,33 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       type: "question",
       title: "Microphone and camera",
       message: `Allow ${origin} to use your microphone and camera?`,
-      detail: "Mia remembers this choice for this site.",
-      buttons: ["Allow", "Block"],
+      detail: "Mia remembers Allow or Block for this site. You can change it later from the page's right-click menu.",
+      buttons: ["Allow", "Block", "Not Now"],
       defaultId: 0,
-      cancelId: 1,
-    }).then(async (result) => {
-      const allowed = result && result.response === 0;
-      mediaDecisions.set(origin, allowed);
-      persistMediaDecisions();
+      cancelId: 2,
+    }).then((result) => {
+      const response = result && result.response;
       mediaPrompts.delete(origin);
-      if (allowed) await ensureSystemMediaAccess();
-      return allowed;
+      if (response === 0 || response === 1) rememberMediaDecision(origin, response === 0);
+      return response === 0;
     }).catch(() => {
       mediaPrompts.delete(origin);
       return false;
     });
     mediaPrompts.set(origin, prompt);
     return prompt;
+  }
+  // The right-click menu item that changes a site's remembered choice. The
+  // page reloads so it asks again (after Allow) or lets go of the camera and
+  // microphone (after Block).
+  function mediaMenuItems(wc) {
+    const origin = mediaRequestOrigin(null, wc);
+    if (!origin || !mediaDecisions.has(origin)) return [];
+    const allowed = mediaDecisions.get(origin);
+    return [{
+      label: allowed ? "Block Camera and Microphone for This Site" : "Allow Camera and Microphone for This Site",
+      click: () => { rememberMediaDecision(origin, !allowed); if (!wc.isDestroyed()) wc.reload(); },
+    }];
   }
   function mediaRequestOrigin(details, contents) {
     const raw = (details && (details.securityOrigin || details.requestingUrl))
@@ -695,7 +755,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (permission !== "media") return callback(false);
     const origin = mediaRequestOrigin(details, contents);
     if (!origin) return callback(false);
-    decideMediaPermission(origin).then(callback).catch(() => callback(false));
+    // A screen share asks with no camera or microphone in it. The screen
+    // picker below is its prompt, so it doesn't need the camera choice too.
+    if (Array.isArray(details && details.mediaTypes) && details.mediaTypes.length === 0) return callback(true);
+    decideMediaPermission(origin)
+      .then(allowed => allowed && ensureSystemMediaAccess(requestedMediaKinds(details)))
+      .then(allowed => callback(allowed === true), () => callback(false));
   });
   profile.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
     if (permission === CLIPBOARD_WRITE || permission === "fullscreen") return true;
@@ -714,8 +779,44 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   });
   profile.setDevicePermissionHandler(() => false);
 
-  profile.setDisplayMediaRequestHandler((_request, callback) => {
-    callback({});
+  // Screen sharing. macOS 15 and later show the system's own picker and
+  // never call this. Everywhere else Mia lists the screens and windows in a
+  // native dialog; the choice applies to this one request. Only HTTPS pages
+  // can ask.
+  let displayPrompt = null;
+  async function chooseDisplaySource(request) {
+    let frameUrl = "";
+    try { frameUrl = (request && request.frame && request.frame.url) || ""; } catch (_) { /* The frame is gone. */ }
+    const origin = mediaRequestOrigin({ securityOrigin: (request && request.securityOrigin) || frameUrl }, null);
+    if (!origin || displayPrompt || !desktopCapturer || typeof desktopCapturer.getSources !== "function") return {};
+    const sources = (await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 } }))
+      .filter(source => source && typeof source.id === "string");
+    const screens = sources.filter(source => source.id.startsWith("screen:"));
+    const choices = [...screens, ...sources.filter(source => !source.id.startsWith("screen:"))].slice(0, 6);
+    if (!choices.length) return {};
+    const labels = choices.map(source => source.id.startsWith("screen:")
+      ? (screens.length > 1 ? `Screen ${screens.indexOf(source) + 1}` : "Entire Screen")
+      : String(source.name || "Window").slice(0, 60));
+    displayPrompt = dialog.showMessageBox(window, {
+      type: "question",
+      title: "Share your screen",
+      message: `Share your screen with ${origin}?`,
+      detail: "Choose what to share.",
+      buttons: [...labels, "Cancel"],
+      defaultId: 0,
+      cancelId: labels.length,
+    }).finally(() => { displayPrompt = null; });
+    const result = await displayPrompt;
+    const source = result && choices[result.response];
+    if (!source) return {};
+    // Windows can also share the computer's sound; elsewhere it's picture only.
+    return { video: source, ...(request && request.audioRequested && process.platform === "win32" ? { audio: "loopback" } : {}) };
+  }
+  profile.setDisplayMediaRequestHandler((request, callback) => {
+    chooseDisplaySource(request).then(callback, (error) => {
+      log(`screen share request failed: ${error && error.message}`);
+      callback({});
+    });
   }, { useSystemPicker: true });
 
   function normalizeStoredTarget(value) {
@@ -800,20 +901,14 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }
   }
 
-  async function captureMediaState({ pause = false } = {}) {
+  async function captureMediaState() {
     await Promise.all([...tabs.values()].map(async (tab) => {
       const wc = tab.view.webContents;
       // A sleeping tab has no page; it keeps the position it was saved with.
       if (wc.isDestroyed() || tab.asleep) return;
       try {
         const media = await wc.executeJavaScript(`(() => {
-          const mediaNodes = [...document.querySelectorAll("audio,video")];
           const video = document.querySelector("video");
-          if (${pause && tab.id !== docked.id ? "true" : "false"}) {
-            for (const mediaNode of mediaNodes) {
-              try { mediaNode.pause(); } catch (_) {}
-            }
-          }
           if (!video || !Number.isFinite(video.currentTime)) return null;
           return { currentTime: video.currentTime };
         })()`);
@@ -833,55 +928,6 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       } catch (_) { /* Cross-origin or unloading pages simply keep no media position. */ }
     }));
     persistTabs();
-  }
-
-  function holdMediaPausedWhileHidden(tab) {
-    const wc = tab.view.webContents;
-    if (wc.isDestroyed()) return;
-    if (tab.hiddenMediaPlaybackGuard) {
-      wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard);
-    }
-    const enforceHiddenPause = () => {
-      if (wc.isDestroyed()) return;
-      return wc.executeJavaScript(`(() => {
-        if (!window.__miaosHiddenMediaGestureInstalled) {
-          window.__miaosHiddenMediaGestureInstalled = true;
-          window.__miaosAllowHiddenMediaPlayback = false;
-          const allowPlayback = () => { window.__miaosAllowHiddenMediaPlayback = true; };
-          document.addEventListener("pointerdown", allowPlayback, { capture: true, once: true });
-          document.addEventListener("keydown", allowPlayback, { capture: true, once: true });
-        }
-        if (window.__miaosAllowHiddenMediaPlayback === true) return "allowed";
-        for (const mediaNode of document.querySelectorAll("audio,video")) {
-          try { mediaNode.pause(); } catch (_) {}
-        }
-        return "paused";
-      })()`).then(result => {
-        if (result === "allowed" && tab.hiddenMediaPlaybackGuard && !wc.isDestroyed()) {
-          wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard);
-          tab.hiddenMediaPlaybackGuard = null;
-        }
-        return result;
-      }).catch(() => {});
-    };
-    tab.hiddenMediaPlaybackGuard = enforceHiddenPause;
-    wc.on("media-started-playing", enforceHiddenPause);
-    wc.executeJavaScript(`(() => {
-      window.__miaosHiddenMediaGestureInstalled = true;
-      window.__miaosAllowHiddenMediaPlayback = false;
-      const allowPlayback = () => { window.__miaosAllowHiddenMediaPlayback = true; };
-      document.addEventListener("pointerdown", allowPlayback, { capture: true, once: true });
-      document.addEventListener("keydown", allowPlayback, { capture: true, once: true });
-      for (const mediaNode of document.querySelectorAll("audio,video")) {
-        try { mediaNode.pause(); } catch (_) {}
-      }
-    })()`).catch(() => {});
-  }
-
-  function holdAllMediaPausedWhileHidden() {
-    // The docked tab is still on screen and keeps playing.
-    for (const tab of tabs.values()) if (tab.id !== docked.id) holdMediaPausedWhileHidden(tab);
-    void captureMediaState({ pause: true });
   }
 
   function restoreMediaState(tab) {
@@ -949,7 +995,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
   let sessionGroupId = null;
-  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, split: splitState(), lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     private: tab.private === true,
@@ -1075,6 +1121,36 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (group) group.collapsed = false;
   }
 
+  // The tabs a pane can take by itself: pages not in the dock, used most
+  // recently first. Tabs are fenced per workspace, so all are this one's.
+  function splitCandidates() {
+    return [...tabs.values()].filter(tab => tab.url && tab.id !== docked.id && tab.id !== activeId)
+      .sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0) || b.id - a.id).map(tab => tab.id);
+  }
+  function inPane(id) { return split.mode > 1 && split.slots.includes(id); }
+  // Keeps the panes in step with the tabs: a closed or docked tab leaves its
+  // pane, the active tab always has one (picking a tab not on show puts it in
+  // the first empty pane, else in the focused one), empty panes take the next
+  // tabs used, and every page on show is awake.
+  function settleSplit() {
+    if (split.mode === 1 || restoring) return;
+    split.slots = split.slots.map(id => (tabs.has(id) && id !== docked.id ? id : null));
+    if (tabs.has(activeId) && activeId !== docked.id) Object.assign(split, pickSlot(split.slots, split.focus, activeId));
+    split.slots = refillSlots(split.slots, splitCandidates());
+    for (const id of split.slots) if (id !== null) wakeTab(tabs.get(id));
+  }
+  function setSplitMode(value) {
+    const mode = splitMode(value);
+    split = mode === 1 ? { mode: 1, slots: [], focus: 0 }
+      : { mode, ...enterSplit(mode, tabs.has(activeId) ? activeId : null, splitCandidates()) };
+    splitByWorkspace.set(workspaceKey, split);
+    settleSplit();
+  }
+  function splitState() {
+    if (split.mode === 1) return { mode: 1, slots: [], rects: [] };
+    const slots = split.slots.map(id => (tabs.has(id) && id !== docked.id ? id : null));
+    return { mode: split.mode, slots, focus: Math.max(0, slots.indexOf(activeId)), rects: splitRects(bounds, split.mode) };
+  }
   function exitPageFullscreen() {
     const tab = tabs.get(fullscreenId);
     if (tab && !tab.view.webContents.isDestroyed()) {
@@ -1118,8 +1194,23 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (shown) { dockTab.dockBox = box; dockTab.view.setBounds(box); dockTab.view.setVisible(true); void applyDockScale(dockTab, box); }
       else hide(dockTab, dockTab.dockBox || dockTab.captureBounds || { width: Math.max(1, width), height: Math.max(1, height) });
     }
+    // Split view: each tab in a pane is shown in its own part of the area.
+    settleSplit();
+    const panes = split.mode > 1 ? splitRects(bounds, split.mode) : null;
     for (const tab of tabs.values()) {
       if (tab === dockTab) continue;
+      const pane = panes ? split.slots.indexOf(tab.id) : -1;
+      if (pane >= 0) {
+        const rect = panes[pane];
+        const box = place({ x: bounds.x + rect.x, y: bounds.y + rect.y, width: rect.width, height: rect.height });
+        const room = box.width > 0 && box.height > 0;
+        if (room) tab.captureBounds = box;
+        if (visible && !!tab.url && !tab.error && room) {
+          tab.view.setBounds(box);
+          tab.view.setVisible(true);
+        } else hide(tab, room ? box : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }));
+        continue;
+      }
       if (area.width > 0 && area.height > 0) tab.captureBounds = area;
       const size = area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
       if (visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0) {
@@ -1178,8 +1269,6 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (docked.id !== id || disposed) return;
       if (isVideo) {
         docked.mode = "video"; clearDockScale(tab);
-        // It is on screen now: the hidden-page pause no longer applies.
-        if (tab.hiddenMediaPlaybackGuard) { wc.removeListener("media-started-playing", tab.hiddenMediaPlaybackGuard); tab.hiddenMediaPlaybackGuard = null; }
         wc.insertCSS(DOCK_VIDEO_CSS).then(key => { if (docked.id === id) tab.dockCss = key; else wc.removeInsertedCSS(key).catch(() => {}); }).catch(() => {});
       }
       layout(); publish();
@@ -1235,6 +1324,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // A focus this soon after the person pressed in a page is theirs.
   const PERSON_FOCUS_MS = 1000;
   const PERSON_LOAD_MS = 10000;
+  // How long a focus waits for the press that caused it before it counts as
+  // the page's own.
+  const PERSON_PRESS_WAIT_MS = 150;
   function giveFocusBack(target = userFocus || window.webContents) {
     if (disposed || !target || target.isDestroyed()) return;
     if (target.isFocused && target.isFocused()) return;
@@ -2712,7 +2804,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // comes to the front or a bot uses it. A tab that is playing, docked,
   // shared in a session or being worked on never sleeps.
   function canSleep(tab) {
-    if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId) return false;
+    if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId || inPane(tab.id)) return false;
     if (sessionGroupId && tab.groupId === sessionGroupId) return false;
     if ((tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0 || heldByRenderer.has(tab.id)) return false;
     if (actorRuntime.list().some(actor => actor.tabId === tab.id)) return false;
@@ -2787,6 +2879,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // Where this person's pointer is, for teammates in a shared session.
       if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
       if (mouse.type === "mouseDown") tab.personPressedAt = Date.now();
+      // Pressing in another pane's page makes that tab the active one.
+      if (mouse.type === "mouseDown" && tab.id !== activeId && inPane(tab.id)) {
+        activateTab(tab.id); layout(); persistTabs(); publish();
+      }
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2804,16 +2900,26 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     // (the window focuses the clicked view first, then hands it the mouse
     // down), so the decision waits one turn, for that press to arrive.
     // Deciding at once gave the focus of every click from the chat back to
-    // the chat: the click did nothing.
+    // the chat: the click did nothing. The press can also land a little
+    // after that turn (a busy page, a frame from another site), so with the
+    // person's focus in Mia and no bot at work the decision waits a moment
+    // more for it before giving focus back.
     wc.on("focus", () => {
       if (borrowingTabId === tab.id) return;
-      setImmediate(() => {
+      const decide = (waited) => {
         if (disposed || wc.isDestroyed() || tab.view.webContents !== wc) return;
         const theirs = Date.now() - (tab.personPressedAt || 0) < PERSON_FOCUS_MS;
-        const taken = !theirs && ((tab.botWork || 0) > 0 || userFocus === window.webContents);
-        if (tab.id === activeId && !taken) userFocus = wc;
-        else giveFocusBack();
-      });
+        const botAtWork = (tab.botWork || 0) > 0;
+        const inFront = tab.id === activeId;
+        if (inFront && (theirs || (!botAtWork && userFocus !== window.webContents))) { userFocus = wc; return; }
+        // A page in another pane waits for its press too: the press makes it
+        // the active tab, and then the focus is the person's.
+        if ((inFront || inPane(tab.id)) && !botAtWork && !waited) { setTimeout(() => decide(true), PERSON_PRESS_WAIT_MS); return; }
+        // The person moved on while this waited: nothing to give back.
+        if (waited && wc.isFocused && !wc.isFocused()) return;
+        giveFocusBack();
+      };
+      setImmediate(() => decide(false));
     });
     wc.on("found-in-page", (_event, result) => {
       if (tab.id === activeId) window.webContents.send("miaos-browser-find-result", {
@@ -3015,6 +3121,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       items.push({ label: "Back", enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
         { label: "Reload", click: () => wc.reload() },
+        ...mediaMenuItems(wc),
         { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
@@ -3043,7 +3150,6 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       mediaRestoreTarget: null,
       mediaRestoreUntil: 0,
       restoredMediaPlaybackGuard: null,
-      hiddenMediaPlaybackGuard: null,
     };
     attachView(tab);
     tabs.set(tab.id, tab);
@@ -3227,6 +3333,15 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     );
     items.push({ type: "separator" }, ...closedTabMenuItems());
     Menu.buildFromTemplate(items).popup({ window });
+  }
+  // One page, two side by side or four in a grid, under the bar's button.
+  // The renderer draws the line icons (in the bar's style and theme) as PNGs.
+  function showSplitMenu({ icons, x, y } = {}) {
+    const icon = mode => menuIcon(icons && typeof icons === "object" ? icons[mode] : undefined);
+    const item = (mode, label) => ({ label, type: "radio", checked: split.mode === mode, icon: icon(mode),
+      click: menuAction(() => setSplitMode(mode)) });
+    const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.round(x), y: Math.round(y) } : {};
+    Menu.buildFromTemplate([item(1, "One page"), item(2, "Two side by side"), item(4, "Four in a grid")]).popup({ window, ...at });
   }
   // Gives a group to a bot (or back to Mia with null). An unnamed group takes
   // the bot's name so the label says who works there.
@@ -3474,6 +3589,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
     activeId = null;
+    splitByWorkspace.clear();
+    split = { mode: 1, slots: [], focus: 0 };
     historyEntries = [];
     historyIcons = new Map();
     downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
@@ -3618,23 +3735,39 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         const b = command.bounds;
         if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
         const wasShowing = visible || coveredForMenu;
+        // The renderer draws split view's outline from the panes in the tab state.
+        const resized = b.width !== bounds.width || b.height !== bounds.height;
         bounds = b; visible = command.visible === true;
         const d = command.dock;
         docked.bounds = d && [d.x, d.y, d.width, d.height].every(Number.isFinite) ? d : null;
         docked.visible = command.dockVisible === true;
         panelOpen = command.panelOpen === undefined ? visible : command.panelOpen === true;
         // A menu or dialog over the page hides the view only for a while; the
-        // page keeps playing and stays in fullscreen. Hiding it for real (the
-        // panel closes, even under a dialog) pauses it.
+        // page stays in fullscreen. Hiding it for real (the panel closes, even
+        // under a dialog) leaves fullscreen. Either way the page keeps
+        // playing, as a background tab does: music carries on while the
+        // person works elsewhere in Mia.
         coveredForMenu = wasShowing && !visible && command.menu === true;
-        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); holdAllMediaPausedWhileHidden(); }
-        layout(); return;
+        if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); void captureMediaState(); }
+        layout();
+        if (resized && split.mode > 1) publish();
+        return;
       }
       if (command.action === "snapshot") {
         // A still of the page in front, shown under an app menu while the
         // live view steps aside.
         const tab = active();
         if (!tab || !visible || tab.view.webContents.isDestroyed()) return { error: "No page to capture." };
+        // Split view: a still of each pane, which the renderer lays out as the panes are.
+        if (split.mode > 1) {
+          const rects = splitRects(bounds, split.mode);
+          return Promise.all(split.slots.map((id, index) => {
+            const item = tabs.get(id);
+            if (!item || !item.url || item.error || item.view.webContents.isDestroyed()) return null;
+            return item.view.webContents.capturePage().then(image => (image.isEmpty() ? null
+              : { rect: rects[index], dataUrl: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}` })).catch(() => null);
+          })).then(panes => (panes.some(Boolean) ? { panes: panes.filter(Boolean) } : { error: "No page to capture." }));
+        }
         return tab.view.webContents.capturePage().then(image => (image.isEmpty()
           ? { error: "No page to capture." }
           : { dataUrl: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}` }));
@@ -3904,6 +4037,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         normalizeGroups(); persistTabs();
       }
       if (command.action === "tabMenu") showTabMenu(command.id);
+      if (command.action === "split") { setSplitMode(command.mode); layout(); }
+      if (command.action === "splitMenu") showSplitMenu(command);
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
       if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
       if (command.action === "groupNewTab" && groups.has(command.groupId)) {
@@ -4044,6 +4179,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     sessionGroupId = null;
     workspaceKey = key;
     workspaceChangedAt = Date.now();
+    // Split view comes back as this workspace last had it while Mia ran.
+    split = splitByWorkspace.get(key) || { mode: 1, slots: [], focus: 0 };
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();

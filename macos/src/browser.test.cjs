@@ -151,15 +151,17 @@ function harness(options = {}) {
       },
     },
     dialog: { showMessageBox: (...args) => { dialogCalls.push(args); return Promise.resolve(dialogResponse.gate).then(() => ({ response: dialogResponse.value })); } },
-    systemPreferences: { askForMediaAccess: async () => true },
-    shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); } },
+    systemPreferences: options.systemPreferences || { askForMediaAccess: async () => true },
+    desktopCapturer: options.desktopCapturer,
+    shell: { showItemInFolder: target => { shown.push(target); }, openPath: target => { opened.push(target); return Promise.resolve(""); },
+      openExternal: target => { opened.push(target); return Promise.resolve(); } },
   };
   const context = {
     require: request => request === "electron" ? electron : require(request),
     module: { exports: {} }, URL, Buffer, setImmediate,
     setTimeout: options.setTimeout || setTimeout, clearTimeout: options.clearTimeout || clearTimeout,
     setInterval, clearInterval,
-    AbortController, ReadableStream, process,
+    AbortController, ReadableStream, process: options.process || process,
     __dirname,
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./browser.cjs"), "utf8"), context);
@@ -233,12 +235,9 @@ test("new creates one tab; switching and hiding preserve loaded pages", () => {
   h.command("layout", { visible: false, bounds: { x: 0, y: 100, width: 700, height: 600 } });
   assert.equal(h.views[0].webContents.loads.length, 1);
   assert.equal(h.views[0].webContents.closed, false);
-  // The pause guard, plus the listener that keeps a playing tab awake.
-  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 2);
-  assert.match(h.views[0].webContents.scripts.at(-1), /querySelectorAll\("audio,video"\)/);
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
-  h.views[0].webContents.emit("media-started-playing");
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+  // Only the listener that keeps a playing tab awake: hiding pauses nothing.
+  assert.equal(h.views[0].webContents.listenerCount("media-started-playing"), 1);
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
 });
 
 test("a menu over a page still hides the view without pausing its media", async () => {
@@ -258,20 +257,20 @@ test("a menu over a page still hides the view without pausing its media", async 
   assert.equal(h.views[0].visible, true);
 });
 
-test("closing the panel while a dialog covers the page still pauses its media", () => {
+test("closing the panel hides the page without pausing its media", () => {
   const h = harness();
   h.command("new");
   h.command("navigate", { value: "https://example.com/music" });
   const box = { x: 0, y: 100, width: 700, height: 600 };
   h.command("layout", { visible: true, bounds: box });
-  const scripts = h.views[0].webContents.scripts.length;
-  // A dialog (Edit channel) opens over the page: hidden, still playing.
+  h.command("layout", { visible: false, panelOpen: false, bounds: { x: 0, y: 0, width: 0, height: 0 } });
+  assert.equal(h.views[0].visible, false);
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
+  // Also when it closes behind a dialog that was covering the page.
+  h.command("layout", { visible: true, bounds: box });
   h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
-  h.command("layout", { visible: false, menu: true, panelOpen: true, bounds: box });
-  assert.equal(h.views[0].webContents.scripts.length, scripts, "no pause script runs for a dialog");
-  // The panel closes behind the dialog: now it is really hidden.
   h.command("layout", { visible: false, panelOpen: false, bounds: box });
-  assert.match(h.views[0].webContents.scripts.at(-1), /mediaNode\.pause\(\)/);
+  assert.doesNotMatch(h.views[0].webContents.scripts.join("\n"), /\.pause\(\)/);
 });
 
 test("tab favicon is refetched as a data: URI and clears on navigation", async () => {
@@ -556,6 +555,100 @@ test("microphone/camera prompt once per HTTPS origin; insecure origins stay deni
   assert.deepEqual(results, [true, true, false, false]);
   assert.equal(h.dialogCalls.length, 2);
   assert.equal(h.profile.check(null, "media", "https://blocked.example"), false);
+});
+
+test("Not Now turns down one camera request and asks again next time", async () => {
+  const h = harness();
+  const results = [];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  h.dialogResponse.value = 2;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio", "video"] });
+  await flush();
+  assert.deepEqual(results, [false]);
+  assert.deepEqual([...h.dialogCalls[0][1].buttons], ["Allow", "Block", "Not Now"]);
+  assert.equal(h.dialogCalls[0][1].cancelId, 2, "Escape is Not Now, never a remembered Block");
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), true, "nothing was remembered");
+  h.dialogResponse.value = 0;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.deepEqual(results, [false, true]);
+  assert.equal(h.dialogCalls.length, 2, "the site asked again and got the prompt again");
+});
+
+test("a site's remembered camera choice changes from the page's right-click menu", async () => {
+  const h = harness();
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://meet.google.com/abc-defg-hij";
+  const menuItem = () => {
+    wc.emit("context-menu", null, { mediaType: "none", linkURL: "", isEditable: false, selectionText: "" });
+    return h.menuTemplates.at(-1).find(item => /Camera and Microphone/.test(item.label || ""));
+  };
+  assert.equal(menuItem(), undefined, "no item before the site has asked");
+  h.dialogResponse.value = 1;
+  h.profile.request(wc, "media", () => {}, { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), false);
+  const allow = menuItem();
+  assert.equal(allow.label, "Allow Camera and Microphone for This Site");
+  allow.click();
+  assert.equal(wc.reloaded, true, "the page reloads so it can ask again");
+  assert.equal(h.profile.check(null, "media", "https://meet.google.com"), true);
+  const results = [];
+  h.profile.request(wc, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio"] });
+  await flush();
+  assert.deepEqual(results, [true]);
+  assert.equal(h.dialogCalls.length, 1, "the new choice is remembered");
+  assert.equal(menuItem().label, "Block Camera and Microphone for This Site");
+});
+
+test("on macOS an allowed site also asks the system for the kinds it wants, every time", async () => {
+  const asked = [];
+  const answers = { camera: true, microphone: true };
+  const h = harness({
+    process: Object.create(process, { platform: { value: "darwin" } }),
+    systemPreferences: { askForMediaAccess: async kind => { asked.push(kind); return answers[kind]; } },
+  });
+  const results = [];
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["video"] });
+  await flush();
+  assert.deepEqual(asked, ["camera"], "only the camera was asked for");
+  // A remembered Allow still checks the system answer, which a reinstall clears.
+  answers.microphone = false;
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: ["audio"] });
+  await flush();
+  assert.deepEqual(asked, ["camera", "microphone"]);
+  assert.deepEqual(results, [true, false]);
+  const notice = h.dialogCalls.at(-1)[1];
+  assert.match(notice.message, /isn't allowed to use your microphone/);
+  assert.match(notice.detail, /Privacy & Security > Microphone/);
+  await flush();
+  assert.deepEqual(h.opened, ["x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"]);
+});
+
+test("screen sharing lists screens and windows; the choice is for this request only", async () => {
+  const sources = [
+    { id: "window:7:0", name: "Notes" },
+    { id: "screen:1:0", name: "Screen 1" },
+  ];
+  const h = harness({ desktopCapturer: { getSources: async () => sources } });
+  const results = [];
+  // The screen-share request carries no camera or microphone and needs no camera prompt.
+  h.profile.request(null, "media", allowed => results.push(allowed), { securityOrigin: "https://meet.google.com/", mediaTypes: [] });
+  assert.deepEqual(results, [true]);
+  assert.equal(h.dialogCalls.length, 0);
+  assert.equal(h.profile.displayMediaOpts.useSystemPicker, true, "macOS 15 and later keep the system picker");
+  const share = request => new Promise(resolve => h.profile.displayMedia(request, resolve));
+  h.dialogResponse.value = 1;
+  const chosen = await share({ securityOrigin: "https://meet.google.com", videoRequested: true, audioRequested: false });
+  assert.deepEqual([...h.dialogCalls[0][1].buttons], ["Entire Screen", "Notes", "Cancel"]);
+  assert.equal(chosen.video, sources[0], "the picked window is shared");
+  h.dialogResponse.value = 2;
+  assert.deepEqual(Object.keys(await share({ securityOrigin: "https://meet.google.com", videoRequested: true })), [], "Cancel shares nothing");
+  assert.deepEqual(Object.keys(await share({ securityOrigin: "http://insecure.example", videoRequested: true })), [], "insecure pages can't ask");
+  assert.equal(h.dialogCalls.length, 2);
 });
 
 test("Cmd+click opens a background tab next to its page; tabs can be moved", () => {
@@ -2338,7 +2431,7 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   page.executeJavaScript = script => { page.emit("focus"); return original(script); }; // The page focuses a box.
   const before = app.focusCalls || 0;
   await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250)); // Past the wait for a late press.
   assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
 
   // A press into the page is the person's own: focus stays there.
@@ -2347,7 +2440,7 @@ test("bot tab groups: a bot working in the tab in front gives the person's focus
   page.executeJavaScript = script => { page.emit("focus"); return original(script); };
   const afterPress = app.focusCalls;
   await h.controller.protocol("read", { tab_id: opened.tab_id, actor_session: "s-a" });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(app.focusCalls, afterPress, "the page keeps focus the person gave it");
 });
 
@@ -2371,8 +2464,17 @@ test("a click from the chat into the page in front keeps the focus it gives the 
   app.emit("focus");
   await pause();
   page.emit("focus");
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setTimeout(resolve, 250)); // Past the wait for a late press.
   assert.equal(app.focusCalls, before + 1, "focus goes back to the chat");
+
+  // A press that lands a little after the focus still counts as the person's.
+  app.emit("focus");
+  await pause();
+  page.emit("focus");
+  await new Promise(resolve => setTimeout(resolve, 60));
+  page.emit("before-mouse-event", {}, { type: "mouseDown", x: 400, y: 600 });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(app.focusCalls, before + 1, "the late press keeps the focus in the page");
 });
 
 test("bot tab groups: a failing lookup rejects without touching the tab in front", async () => {
@@ -3522,4 +3624,186 @@ test("a bot command on a sleeping tab loads the page first", async () => {
   assert.equal(h.command("state").tabs[0].asleep, false);
   assert.ok(h.views.at(-1).webContents.restored, "the page was loaded before the read");
   assert.equal(result.url ?? "https://site0.example/", "https://site0.example/");
+});
+
+// Split view: two tabs side by side or four in a grid. The area here is 706 x
+// 600 CSS px, so two panes are 347 px wide each, 6 px apart and 3 px in from
+// the edge.
+const SPLIT_AREA = { x: 0, y: 100, width: 706, height: 600 };
+const splitOf = h => JSON.parse(JSON.stringify(h.command("state").split));
+function splitHarness(count) {
+  const h = harness();
+  const ids = openTabs(h, count);
+  h.command("layout", { visible: true, bounds: SPLIT_AREA });
+  const view = id => h.views[ids.indexOf(id)];
+  return { h, ids, view };
+}
+
+test("one page stays exactly as before: the active tab fills the area and nothing else shows", () => {
+  const { h, ids, view } = splitHarness(3);
+  assert.equal(JSON.stringify(splitOf(h)), JSON.stringify({ mode: 1, slots: [], rects: [] }));
+  assert.equal(JSON.stringify(view(ids[2]).bounds), JSON.stringify({ x: 0, y: 100, width: 706, height: 600 }));
+  assert.deepEqual(ids.map(id => view(id).visible), [false, false, true]);
+  assert.equal(view(ids[0]).bounds.x, -(706 + 10000), "a tab in the back waits off the window as before");
+});
+
+test("two side by side shows the active tab first, then the tab used last", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 2 });
+  const split = splitOf(h);
+  assert.equal(JSON.stringify(split.slots), JSON.stringify([ids[2], ids[1]]));
+  assert.equal(split.focus, 0);
+  assert.equal(JSON.stringify(split.rects), JSON.stringify([{ x: 3, y: 3, width: 347, height: 594 }, { x: 356, y: 3, width: 347, height: 594 }]));
+  assert.equal(JSON.stringify(view(ids[2]).bounds), JSON.stringify({ x: 3, y: 103, width: 347, height: 594 }));
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 356, y: 103, width: 347, height: 594 }));
+  assert.deepEqual(ids.map(id => view(id).visible), [false, true, true]);
+  assert.equal(view(ids[0]).bounds.x < 0, true, "a tab in no pane stays off the window");
+  assert.equal(h.command("state").activeId, ids[2], "the active tab is unchanged");
+});
+
+test("four in a grid with too few tabs leaves the rest of the panes empty", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 4 });
+  const split = splitOf(h);
+  assert.equal(JSON.stringify(split.slots), JSON.stringify([ids[1], ids[0], null, null]));
+  assert.equal(split.rects.length, 4);
+  assert.deepEqual(ids.map(id => view(id).visible), [true, true]);
+  assert.equal(JSON.stringify(view(ids[0]).bounds), JSON.stringify({ x: 356, y: 103, width: 347, height: 294 }));
+  // A new tab in front takes the first empty pane.
+  const next = h.command("new").activeId;
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[1], ids[0], next, null]));
+  assert.equal(splitOf(h).focus, 2);
+});
+
+test("a blank tab is never pulled into a pane by itself", () => {
+  const h = harness();
+  const ids = openTabs(h, 1);
+  h.command("new");
+  const blank = h.command("state").activeId;
+  h.command("select", { id: ids[0] });
+  h.command("split", { mode: 2 });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[0], null]));
+  h.command("select", { id: blank });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[0], blank]), "picked, it fills the empty pane");
+});
+
+test("picking a tab on show moves the focus; picking another replaces the focused pane", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 2 });
+  h.command("select", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[2], ids[1]]), "the panes stay as they were");
+  assert.equal(splitOf(h).focus, 1);
+  assert.equal(h.command("state").activeId, ids[1]);
+  h.command("select", { id: ids[0] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[2], ids[0]]), "it takes the focused pane");
+  assert.deepEqual(ids.map(id => view(id).visible), [true, false, true]);
+});
+
+test("pressing in another pane's page makes its tab the active one", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  view(ids[0]).webContents.emit("before-mouse-event", {}, { type: "mouseDown", x: 10, y: 10 });
+  assert.equal(h.command("state").activeId, ids[0]);
+  assert.equal(splitOf(h).focus, 1);
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[1], ids[0]]));
+});
+
+test("closing or docking a tab on show refills its pane with the next tab used, else leaves it empty", () => {
+  const { h, ids, view } = splitHarness(4);
+  h.command("split", { mode: 2 });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[2]]));
+  h.command("close", { id: ids[2] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[1]]));
+  assert.equal(view(ids[1]).visible, true);
+  h.command("dock", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[0]]), "the docked tab leaves its pane");
+  h.command("close", { id: ids[0] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], null]), "no tab left to show");
+  // Closing the active tab: the tab after it takes the front and its pane.
+  h.command("undock");
+  h.command("select", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[1]]));
+  h.command("close", { id: ids[1] });
+  const after = h.command("state");
+  assert.equal(after.activeId, ids[3]);
+  assert.equal(JSON.stringify(after.split.slots), JSON.stringify([ids[3], null]));
+});
+
+test("going back to one page shows only the active tab, over the whole area", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 4 });
+  h.command("select", { id: ids[0] });
+  h.command("split", { mode: 1 });
+  assert.equal(JSON.stringify(splitOf(h)), JSON.stringify({ mode: 1, slots: [], rects: [] }));
+  assert.equal(h.command("state").activeId, ids[0]);
+  assert.deepEqual(ids.map(id => view(id).visible), [true, false, false]);
+  assert.equal(JSON.stringify(view(ids[0]).bounds), JSON.stringify({ x: 0, y: 100, width: 706, height: 600 }));
+  assert.equal(h.command("split", { mode: 3 }).split.mode, 1, "an unknown choice is one page");
+});
+
+test("tabs on show in split view never sleep", () => {
+  // Eight tabs: four on show, two kept awake as the ones used last, two asleep.
+  const { h, ids } = splitHarness(8);
+  h.command("split", { mode: 4 });
+  h.controller.sleepIdleTabs(LATER());
+  const asleep = Object.fromEntries(h.command("state").tabs.map(tab => [tab.id, tab.asleep]));
+  for (const id of splitOf(h).slots) assert.equal(asleep[id], false, `tab ${id} is on show`);
+  assert.equal(asleep[ids[0]], true, "a tab in no pane still sleeps");
+});
+
+test("only the focused pane's tab counts as the person viewing it", () => {
+  const { h, ids } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  const state = h.command("state");
+  assert.equal(state.tabs.filter(tab => tab.active).length, 1);
+  assert.equal(state.tabs.find(tab => tab.active).id, ids[1]);
+});
+
+test("page fullscreen covers the window, then the split comes back", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  view(ids[1]).webContents.emit("enter-html-full-screen");
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 0, y: 0, width: 1000, height: 800 }));
+  assert.equal(view(ids[0]).visible, false);
+  view(ids[1]).webContents.emit("leave-html-full-screen");
+  h.command("layout", { visible: true, bounds: SPLIT_AREA });
+  assert.deepEqual(ids.map(id => view(id).visible), [true, true]);
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 3, y: 103, width: 347, height: 594 }));
+});
+
+test("a still for a menu covers each pane in split view", async () => {
+  const { h } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  const still = await h.command("snapshot");
+  assert.equal(still.panes.length, 2);
+  assert.equal(JSON.stringify(still.panes[1].rect), JSON.stringify({ x: 356, y: 3, width: 347, height: 594 }));
+  assert.match(still.panes[0].dataUrl, /^data:image\/jpeg;base64,/);
+});
+
+test("the split menu offers the three layouts and marks the current one", () => {
+  const { h } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  h.command("splitMenu", { x: 10, y: 20 });
+  const template = h.menuTemplates.at(-1);
+  assert.equal(JSON.stringify(template.map(item => item.label)), JSON.stringify(["One page", "Two side by side", "Four in a grid"]));
+  assert.equal(JSON.stringify(template.map(item => item.checked)), JSON.stringify([false, true, false]));
+  template[2].click();
+  assert.equal(splitOf(h).mode, 4);
+});
+
+test("each workspace keeps its own split view while Mia runs", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-split-"));
+  try {
+    const h = harness({ statePath: path.join(directory, "browser.json") });
+    const ids = openTabs(h, 2);
+    h.command("layout", { visible: true, bounds: SPLIT_AREA });
+    h.command("split", { mode: 2 });
+    assert.equal(h.command("workspace", { key: "multiplayer_test" }).split.mode, 1, "a workspace with no choice shows one page");
+    h.command("new");
+    const back = h.command("workspace", { key: "solo" });
+    assert.equal(back.split.mode, 2);
+    assert.equal(JSON.stringify(back.split.slots), JSON.stringify([ids[1], ids[0]]));
+    assert.equal(back.tabs.find(tab => tab.id === ids[0]).asleep, false, "a restored tab on show is awake");
+    h.window.emit("closed");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

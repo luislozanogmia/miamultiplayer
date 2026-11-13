@@ -1506,3 +1506,60 @@ test('while its own Hermes is still starting, the client waits instead of starti
   await client.ensureGateway();
   assert.equal(spawns.length, 1, 'once it has exited, a new one starts');
 });
+
+// A model that ends its turn with nothing written is asked once more in the
+// same session; only a second empty ending reaches the chat as a failure.
+function noReplyClient(replies) {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {} });
+  const prompts = [];
+  client.request = async (method, params) => {
+    if (method === 'session.create') {
+      setImmediate(() => {
+        const info = { model: 'deepseek-flash', provider: 'deepseek' };
+        client.sessionInfo.set('live', info);
+        client.sessionReadyWaiters.get('live')?.resolve(info);
+      });
+      return { session_id: 'live', stored_session_id: 'stored', info: { model: 'deepseek-flash', provider: 'deepseek' } };
+    }
+    if (method === 'prompt.submit') {
+      prompts.push(params.text);
+      const turn = client.turns.get('live');
+      if (prompts.length === 1) client.routeSessionEvent('live', 'tool.start', { name: 'read_file' });
+      setImmediate(() => client.handleTurnEvent(turn, 'message.complete', { text: replies.shift(), status: 'complete' }));
+      return { status: 'streaming' };
+    }
+    return {};
+  };
+  return { client, prompts };
+}
+
+test('a turn that ends with no reply is asked once more in the same session', async () => {
+  const { client, prompts } = noReplyClient(['', 'Here is what I did.']);
+  const result = await client.run({ message: 'do the work', options: { model: 'deepseek-flash', provider: 'deepseek' } });
+  assert.equal(result.text, 'Here is what I did.');
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[0], 'do the work');
+  assert.match(prompts[1], /ended without a reply/);
+  client.close();
+});
+
+test('a second empty ending fails with the step count, and is not asked a third time', async () => {
+  const { client, prompts } = noReplyClient(['', '']);
+  await assert.rejects(
+    client.run({ message: 'do the work', options: { model: 'deepseek-flash', provider: 'deepseek' } }),
+    (error) => error.code === 'HERMES_NO_REPLY_TEXT' && error.steps === 1
+  );
+  assert.equal(prompts.length, 2);
+  client.close();
+});
+
+test("Hermes' own no-reply notice fails the turn without asking again", async () => {
+  const notice = "⚠️ No reply: deepseek-flash didn't produce a reply this time, even after retries. Send `continue` to try again, or switch models with /model.";
+  const { client, prompts } = noReplyClient([notice]);
+  await assert.rejects(
+    client.run({ message: 'do the work', options: { model: 'deepseek-flash', provider: 'deepseek' } }),
+    (error) => error.code === 'HERMES_NO_REPLY_TEXT' && error.steps === 1
+  );
+  assert.equal(prompts.length, 1);
+  client.close();
+});

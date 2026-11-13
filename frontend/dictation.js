@@ -74,5 +74,42 @@
     return {value: before + text + after, caret: before.length + text.length};
   }
 
-  return {TARGET_RATE: TARGET_RATE, mixToMono: mixToMono, resample: resample, encodeWav: encodeWav, toWav16k: toWav16k, insertText: insertText};
+  // The speech engine on this computer, shared by the composer's mic and a
+  // shared session's transcript. options: fetch(path, init), workspace().
+  function createEngine(options){
+    function call(path, init){
+      init = init || {};
+      init.credentials = 'include';
+      init.headers = Object.assign({'X-MiaOS-Workspace': options.workspace()}, init.headers || {});
+      return options.fetch(path, init).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(data){ return {status: r.status, data: data}; });
+      });
+    }
+    return {
+      // Engine/model gate. The model download only ever starts from this
+      // explicit confirmation, and goes to the user's Mia data folder.
+      // hooks: confirm(text) -> boolean, onDownloading(). Resolves false when the person says no.
+      ready: function(hooks){
+        return call('/api/speech/status').then(function(res){
+          var status = res.data || {};
+          if(!status.binaryReady) throw new Error('Dictation is missing from this copy of Mia. Reinstall Mia to get it back.');
+          if(status.modelReady) return true;
+          if(!hooks.confirm('Dictation runs on this computer with the whisper.cpp "' + status.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')) return false;
+          if(hooks.onDownloading) hooks.onDownloading();
+          return call('/api/speech/model', {method: 'POST'}).then(function(done){
+            if(done.status !== 200) throw new Error((done.data && done.data.message) || 'Model download failed.');
+            return true;
+          });
+        });
+      },
+      transcribe: function(wav){
+        return call('/api/speech/transcribe', {method: 'POST', headers: {'Content-Type': 'audio/wav'}, body: wav}).then(function(res){
+          if(res.status !== 200) throw new Error((res.data && res.data.message) || 'Transcription failed.');
+          return String((res.data && res.data.text) || '').trim();
+        });
+      }
+    };
+  }
+
+  return {createEngine: createEngine, TARGET_RATE: TARGET_RATE, mixToMono: mixToMono, resample: resample, encodeWav: encodeWav, toWav16k: toWav16k, insertText: insertText};
 });

@@ -16,7 +16,7 @@
     for(var id in state.pending) if(Object.prototype.hasOwnProperty.call(state.pending, id)) pending[id] = state.pending[id];
     return {
       dispatchId: state.dispatchId, agentName: state.agentName, startedAt: state.startedAt,
-      label: state.label, files: state.files.slice(), pending: pending
+      label: state.label, steps: state.steps || 0, files: state.files.slice(), pending: pending
     };
   }
 
@@ -37,9 +37,11 @@
     if(!activity || typeof activity.dispatchId !== 'string' || !activity.dispatchId) return state || null;
     var at = Number(activity.at) || Date.now();
     var next = state && state.dispatchId === activity.dispatchId ? cloneState(state) : {
-      dispatchId: activity.dispatchId, agentName: activity.agentName || '', startedAt: at, label: '', files: [], pending: {}
+      dispatchId: activity.dispatchId, agentName: activity.agentName || '', startedAt: at, label: '', steps: 0, files: [], pending: {}
     };
     if(activity.phase === 'start' && activity.label) next.label = String(activity.label);
+    // The sender's count wins: a window opened mid-run missed the earlier steps.
+    if(activity.phase === 'start') next.steps = Number(activity.step) > 0 ? Number(activity.step) : next.steps + 1;
     var toolId = typeof activity.toolId === 'string' ? activity.toolId : '';
     var files = Array.isArray(activity.files) ? activity.files : [];
     var isEdit = activity.kind === 'edit';
@@ -85,5 +87,16 @@
     return minutes > 0 ? minutes + 'm ' + (seconds < 10 ? '0' : '') + seconds + 's' : seconds + 's';
   }
 
-  return {reduceActivity: reduceActivity, fileStatus: fileStatus, basename: basename, formatElapsed: formatElapsed, MAX_FILES: MAX_FILES};
+  // The chat's "working" line: what the bot is doing now, which step it is
+  // on, and for how long. Before the first tool reports, it says only that
+  // work has started. -> "Reading files · step 3 · 1m 05s"
+  function workingLine(state, startedAt, now){
+    var parts = [state && state.label && state.label !== 'Working' ? state.label : 'Working through this'];
+    if(state && state.steps > 0) parts.push('step ' + state.steps);
+    var elapsed = Number(now || Date.now()) - Number(startedAt || 0);
+    if(Number(startedAt) > 0 && elapsed >= 5000) parts.push(formatElapsed(elapsed));
+    return parts.join(' · ');
+  }
+
+  return {reduceActivity: reduceActivity, fileStatus: fileStatus, basename: basename, formatElapsed: formatElapsed, workingLine: workingLine, MAX_FILES: MAX_FILES};
 });

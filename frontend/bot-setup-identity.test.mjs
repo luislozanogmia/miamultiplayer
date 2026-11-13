@@ -27,6 +27,7 @@ function harness({ bots = [], storage = new Map(), user = 'tester@example.com' }
     chatRoster: {}, chatInfo: {},
     rememberChatBack() {}, closeManageAgentsPane() {}, closeMentionPopover() {},
     renderChatSidebar() {}, refreshChatMain() {}, renderChatThread() {}, renderDeptAgentSelector() {}, renderChatHeaderBar() {},
+    moteColorFilterFor: (name, color) => `filter:${name}:${color}`,
     chatModelSelectionMetadata: () => null,
     selectedConnectedBotModel: () => 'model-a',
     guessDepartmentsFor: () => [],
@@ -43,7 +44,7 @@ function harness({ bots = [], storage = new Map(), user = 'tester@example.com' }
     fn('swapChatDraft'),
     source.slice(blockStart, blockEnd),
     fn('clearAgentSetupRequest'), fn('agentSetupOnScreen'), fn('finishAgentSetupFailure'),
-    fn('captureAgentSetupDraft'), fn('agentSetupCreatePayload'),
+    fn('captureAgentSetupDraft'), fn('agentSetupCreatePayload'), fn('setAgentSetupColor'),
     fn('agentSetupStorageKey'), fn('agentSetupSnapshots'), fn('restoreAgentSetups'),
     fn('parkAgentSetup'), fn('startAgentSetupChat'), fn('submitAgentSetupIntent'),
     'this.state = function(){ return agentSetup; };',
@@ -75,12 +76,33 @@ test('a starter bot keeps its own icon in the setup chat and after it is created
   assert.equal(ctx.chatWs.activeLabel, 'Inbox triage');
 });
 
-test('a plain New Bot settles its color up front by the server rule', () => {
+test('a plain New Bot gets a random color up front and keeps it', () => {
   const { context: ctx } = harness({ bots: [{ avatarColor: '#3478d4' }] });
   ctx.startAgentSetupChat();
   assert.equal(ctx.agentSetupIdentity().name, 'New Bot');
-  assert.equal(ctx.agentSetupIdentity().color, '#e5484d', 'second bot is red, as backend newBotColor gives');
-  assert.match(ctx.newSetupBotColor([{}, {}, {}, {}], () => 0.5), /^#[0-9a-f]{6}$/);
+  const color = ctx.agentSetupIdentity().color;
+  assert.match(color, /^#[0-9a-f]{6}$/);
+  assert.notEqual(ctx.newSetupBotColor(() => 0), ctx.newSetupBotColor(() => 0.5), 'the color follows the random draw');
+  ctx.state().draft = { name: 'Helper', instructions: 'Help.' };
+  assert.equal(ctx.agentSetupIdentity().color, color, 'naming the bot does not change its color');
+  assert.equal(ctx.agentSetupCreatePayload(ctx.state(), 'intent').payload.avatarColor, color, 'the created bot keeps it');
+});
+
+test('a color picked on the setup card is the color the bot is created with', () => {
+  const { context: ctx } = harness();
+  ctx.startAgentSetupChat();
+  const flow = ctx.state();
+  flow.phase = 'review';
+  flow.draft = { name: 'Helper', instructions: 'Help.' };
+  const painted = [];
+  const thread = { querySelectorAll: () => [{ style: {} }].map((img) => (painted.push(img), img)) };
+  ctx.setAgentSetupColor(flow, '#8957E5', thread);
+  assert.equal(ctx.agentSetupIdentity().color, '#8957e5');
+  assert.equal(painted[0].style.filter, 'filter:Helper:#8957e5', 'the icon on screen changes at once');
+  assert.equal(ctx.agentSetupCreatePayload(flow, 'intent').payload.avatarColor, '#8957e5');
+  flow.creation = { payload: { avatarColor: '#8957e5' } };
+  ctx.setAgentSetupColor(flow, '#63a64f', thread);
+  assert.equal(flow.avatarColor, '#8957e5', 'a bot already being created keeps its color');
 });
 
 test('no setup avatar is drawn from a hardcoded New Bot seed', () => {

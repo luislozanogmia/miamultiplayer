@@ -1,9 +1,11 @@
 /* Direct connections between the computers in a shared session, for the live
-   minimap. Pixels and pointers never pass through the Hub: hidden channel
-   messages only carry the offer and answer that introduce two computers. */
+   minimap and the spoken transcript. Pixels, pointers and transcript lines
+   never pass through the Hub: hidden channel messages only carry the offer and
+   answer that introduce two computers. */
 (function(root){
   'use strict';
   var ICE_SERVERS = [{urls: 'stun:stun.l.google.com:19302'}];
+  var LIVE = 'mia-space-live', TALK = 'mia-space-talk';
   var GATHER_MS = 2500, RETRY_MS = 20000, MAX_BUFFERED = 512 * 1024, MAX_MESSAGE = 256 * 1024;
 
   function sessionId(){
@@ -20,7 +22,8 @@
     });
   }
 
-  // options: selfId, signal(toId, {sid, kind, sdp}), onMessage(fromId, object), and for tests RTC, gatherMs, now.
+  // options: selfId, signal(toId, {sid, kind, sdp}), onMessage(fromId, object), onOpen(id) once
+  // the kept channel to someone opens, and for tests RTC, gatherMs, now.
   function createMesh(options){
     var RTC = options.RTC || root.RTCPeerConnection, peers = {}, closed = false;
     var now = options.now || Date.now, gatherMs = options.gatherMs === undefined ? GATHER_MS : options.gatherMs;
@@ -31,8 +34,12 @@
       try { peer.pc.close(); } catch(_error) {}
     }
     function isOpen(peer){ return !!(peer.channel && peer.channel.readyState === 'open'); }
+    // Two channels per pair: frames may be lost, transcript lines may not.
     function wire(id, peer, channel){
-      peer.channel = channel;
+      if(channel.label === TALK){
+        peer.talk = channel;
+        channel.onopen = function(){ if(peers[id] === peer && options.onOpen) options.onOpen(id); };
+      } else peer.channel = channel;
       channel.onmessage = function(event){
         if(peers[id] !== peer || typeof event.data !== 'string' || event.data.length > MAX_MESSAGE) return;
         var message;
@@ -52,7 +59,8 @@
     function call(id){
       var peer = open(id, sessionId());
       // A lost frame is replaced a second later, so nothing is resent.
-      wire(id, peer, peer.pc.createDataChannel('mia-space-live', {ordered: false, maxRetransmits: 0}));
+      wire(id, peer, peer.pc.createDataChannel(LIVE, {ordered: false, maxRetransmits: 0}));
+      wire(id, peer, peer.pc.createDataChannel(TALK));
       return peer.pc.createOffer().then(function(offer){ return peer.pc.setLocalDescription(offer); })
         .then(function(){ return gathered(peer.pc, gatherMs); }).then(function(){
           if(peers[id] === peer && !closed) options.signal(id, {sid: peer.sid, kind: 'offer', sdp: peer.pc.localDescription.sdp});
@@ -103,6 +111,16 @@
           // A slow connection skips frames rather than falling behind.
           if(!isOpen(peer) || peer.channel.bufferedAmount > MAX_BUFFERED) return;
           try { peer.channel.send(text); } catch(_error) {}
+        });
+      },
+      // Delivered in order and resent until it arrives. `toId` picks one person; without it, everyone.
+      sendKept: function(message, toId){
+        var text = JSON.stringify(message);
+        if(text.length > MAX_MESSAGE) return;
+        (toId ? [toId] : Object.keys(peers)).forEach(function(id){
+          var talk = peers[id] && peers[id].talk;
+          if(!talk || talk.readyState !== 'open') return;
+          try { talk.send(text); } catch(_error) {}
         });
       },
       openCount: function(){ return Object.keys(peers).filter(function(id){ return isOpen(peers[id]); }).length; },

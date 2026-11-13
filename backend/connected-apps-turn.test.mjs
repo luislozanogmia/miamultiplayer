@@ -142,7 +142,7 @@ test('busy Mia refreshes each follow-up and queues changed connections instead o
     },
   };
   vm.createContext(ctx); vm.runInContext(fn, ctx);
-  const dispatch = { id: 'followup', companyId: 'company', conversationId: 'chat', eventId: 'event' };
+  const dispatch = { id: 'followup', targetType: 'gateway', companyId: 'company', conversationId: 'chat', eventId: 'event' };
   const active = { sessionId: 'live', capabilityRevision: revision };
   assert.equal(await ctx.trySteerNativeConversationDispatch(dispatch, active), true);
   assert.equal(checks, 1);
@@ -160,16 +160,18 @@ test('a message sent while a bot works in its own chat reaches the running turn 
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const schedule = source.slice(source.indexOf('function scheduleNativeConversationDispatch('), source.indexOf('const nativeConversationDispatch = {'));
   assert.match(schedule, /const activeGateway = nativeActiveGatewaySessions\.get\(key\) \|\| null;/, 'not only Mia');
-  assert.match(source, /activeBotRecord = \{ dispatchId: dispatch\.id, sessionId: session\.sessionId, capabilityRevision: connectionInventory\.revision, agentId: agent\.id \};/);
+  assert.match(source, /activeBotRecord = \{ dispatchId: dispatch\.id, sessionId: session\.sessionId, capabilityRevision: connectionInventory\.revision, agentId: agent\.id, agentName: agent\.name \};/);
 
   const start = source.indexOf('function postMidRunAnswer(');
-  const posted = [];
+  const posted = [], settled = [];
   const ctx = {
     redactHermesChatDetail: (text) => String(text || ''),
     stripAgentActionBlocks: (text) => text,
     cleanBotReplyText: (_name, text) => ({ text: String(text).trim() }),
     nativeReplyParentEventId: () => null,
     createNativeDispatchReplyEvent: (dispatch, _trigger, input) => { posted.push({ dispatchId: dispatch.id, ...input }); },
+    nativeDispatchWasStopped: () => false,
+    settleNativeFollowUp: (pending, outcome) => { settled.push([pending.dispatch.id, outcome.answered]); },
   };
   vm.createContext(ctx);
   vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), ctx);
@@ -186,6 +188,103 @@ test('a message sent while a bot works in its own chat reaches the running turn 
   assert.equal(posted[0].dispatchId, 'question', 'its own dispatch, so the run keeps its working row');
   assert.equal(posted[0].type, 'bot_message');
   assert.equal(posted[0].content.text, 'I can compare reach by topic.');
+  assert.deepEqual(settled, [['question', true]], 'the answered message stops showing as working');
+});
+
+// The follow-up helpers of server.js, run against a small stand-in store.
+function followUpHarness() {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function postNativeFollowUpWorking(');
+  const end = source.indexOf('async function trySteerNativeConversationDispatch(', start);
+  const log = { posted: [], removed: [], completed: [] };
+  const ctx = {
+    Map, Set, Promise, setTimeout, clearTimeout, String,
+    stopped: false,
+    humanTaskStatus: () => 'Working',
+    nativeReplyParentEventId: () => null,
+    createNativeDispatchReplyEvent: (dispatch, _trigger, input) => { log.posted.push({ dispatchId: dispatch.id, ...input }); },
+    removeNativeDispatchEvent: (dispatch, key) => { log.removed.push(key); },
+    nativeConversationRepository: { completeDispatch: ({ id, claimToken }) => { log.completed.push([id, claimToken]); } },
+  };
+  ctx.nativeDispatchWasStopped = () => ctx.stopped;
+  vm.createContext(ctx);
+  vm.runInContext(`${source.slice(start, end)}
+this.working = postNativeFollowUpWorking; this.settle = settleNativeFollowUp; this.runEnd = settleNativeFollowUpAtRunEnd;`, ctx);
+  return { ctx, log };
+}
+
+test('a message sent mid-run shows its own working line and stays open until answered', async () => {
+  const { ctx, log } = followUpHarness();
+  const pending = { dispatch: { id: 'follow', companyId: 'c', targetType: 'bot' }, trigger: { id: 'e' }, claimToken: 'token' };
+  ctx.working(pending, 'Compiler');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(log.posted[0].clientIdempotencyKey, 'native-dispatch-progress-follow');
+  assert.equal(log.posted[0].metadata.status, 'working');
+  assert.equal(log.posted[0].metadata.dispatchId, 'follow');
+  assert.deepEqual(log.completed, [], 'still open: nothing has answered it');
+
+  ctx.settle(pending, { answered: true });
+  ctx.settle(pending, { answered: false });
+  assert.deepEqual(log.completed, [['follow', 'token']], 'closed once');
+  assert.deepEqual(log.removed, [], 'its reply replaces the working line');
+});
+
+// Hermes drops what the run was doing and answers the new message, so the
+// run's own reply is the answer: the message's working line must not outlive it.
+test('a run that ends closes a mid-run message with it, and a stop stands', async () => {
+  const { ctx, log } = followUpHarness();
+  const pending = { dispatch: { id: 'follow', companyId: 'c', targetType: 'bot' }, trigger: { id: 'e' }, claimToken: 'token' };
+  const active = { sessionId: 'run', midRunMessage: pending };
+  ctx.runEnd(active);
+  assert.equal(active.midRunMessage, null);
+  assert.deepEqual(log.removed, ['native-dispatch-progress-follow'], 'no working line is left behind');
+  assert.deepEqual(log.completed, [['follow', 'token']], 'its turn closes with the run');
+  ctx.runEnd(active);
+  assert.deepEqual(log.completed.length, 1, 'closed once');
+
+  // Stopped by the person: the working line goes, and the stop stands.
+  const stopped = harnessStopped();
+  assert.deepEqual(stopped.removed, ['native-dispatch-progress-late']);
+  assert.deepEqual(stopped.completed, []);
+});
+function harnessStopped() {
+  const { ctx, log } = followUpHarness();
+  ctx.stopped = true;
+  ctx.runEnd({ sessionId: 'run', midRunMessage: { dispatch: { id: 'late', companyId: 'c', targetType: 'bot' }, trigger: {}, claimToken: 't' } });
+  return log;
+}
+
+test('a person\'s mid-run message stays claimed instead of being closed at once', async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function trySteerNativeConversationDispatch(');
+  const fn = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const completed = [], working = [];
+  const ctx = {
+    crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', MID_RUN_APP_NOTE_RULE: 'No reply needed.',
+    nativeSlashCommand: () => false, nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
+    googleWorkspaceAgentContextForOwner: async () => ({ status: {} }),
+    connectedAppsForTurn: () => ({ revision: 'r', note: 'Current connections' }),
+    steerHermesGatewaySession: async () => ({ status: 'queued' }),
+    postNativeFollowUpWorking: (pending, name) => { working.push([pending.dispatch.id, name]); },
+    nativeConversationRepository: {
+      getEvent: () => ({ senderType: 'user', senderId: base.ownerEmail, type: 'message', text: 'and the totals?' }),
+      getConversation: () => ({ id: 'chat', companyId: 'company', type: 'agent' }),
+      claimDispatch: () => ({ idempotent: false, dispatch: {} }),
+      completeDispatch: ({ id }) => { completed.push(id); },
+    },
+  };
+  vm.createContext(ctx); vm.runInContext(fn, ctx);
+  const active = { sessionId: 'live', capabilityRevision: 'r', agentName: 'Compiler' };
+  const dispatch = (id) => ({ id, targetType: 'bot', companyId: 'company', conversationId: 'chat', eventId: 'e' });
+  assert.equal(await ctx.trySteerNativeConversationDispatch(dispatch('first'), active), true);
+  assert.equal(active.midRunMessage.dispatch.id, 'first');
+  assert.ok(active.midRunMessage.claimToken);
+  assert.deepEqual(working, [['first', 'Compiler']]);
+  assert.deepEqual(completed, [], 'open until it has its reply');
+
+  assert.equal(await ctx.trySteerNativeConversationDispatch(dispatch('second'), active), true);
+  assert.equal(active.midRunMessage.dispatch.id, 'first', 'one answer covers both');
+  assert.deepEqual(completed, ['second']);
 });
 
 test('a tool started before a mid-run answer is asked once to yield', async () => {
