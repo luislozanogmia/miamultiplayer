@@ -10376,11 +10376,19 @@
     'new-artifact': LOCAL_BROWSER_SUGGEST_ARTIFACT,
     'new-tab': LOCAL_BROWSER_SUGGEST_GLOBE
   };
+  var LOCAL_BROWSER_SUGGEST_PLACE_ICONS = {
+    apps: LOCAL_BROWSER_SUGGEST_START_ICONS['new-app'],
+    artifacts: LOCAL_BROWSER_SUGGEST_ARTIFACT,
+    chats: LOCAL_BROWSER_SUGGEST_CHAT,
+    automations: LOCAL_BROWSER_SUGGEST_AUTOMATION
+  };
   function localBrowserSuggestRow(item, i, query){
     var icon, line;
-    if(item.kind === 'start' || item.kind === 'artifact'){
-      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'start' ? LOCAL_BROWSER_SUGGEST_START_ICONS[item.target.id] : LOCAL_BROWSER_SUGGEST_ARTIFACT) + '</span>';
-      var from = item.kind === 'artifact' ? item.target.from || item.target.type : '';
+    if(item.kind === 'start' || item.kind === 'artifact' || item.kind === 'app' || item.kind === 'place'){
+      icon = '<span class="local-browser-suggest-icon">' + (item.kind === 'start' ? LOCAL_BROWSER_SUGGEST_START_ICONS[item.target.id]
+        : item.kind === 'place' ? LOCAL_BROWSER_SUGGEST_PLACE_ICONS[item.target.id]
+        : item.kind === 'app' ? LOCAL_BROWSER_SUGGEST_START_ICONS['new-app'] : LOCAL_BROWSER_SUGGEST_ARTIFACT) + '</span>';
+      var from = item.kind === 'artifact' ? item.target.from || item.target.type : item.kind === 'app' ? item.target.sub : '';
       line = '<span class="local-browser-suggest-title">' + localBrowserSuggestMarkup(item.target.name, query) + '</span>' +
         (from ? '<span class="local-browser-suggest-sep"> – </span><span class="local-browser-suggest-hint">' + esc(from) + '</span>' : '');
     } else if(item.kind === 'person' || item.kind === 'chat' || item.kind === 'automation' || item.kind === 'step' || item.kind === 'message'){
@@ -10570,7 +10578,34 @@
     var automations = automationsBoardRows().map(function(row){
       return {botId:row.botId, automationId:row.automationId, name:row.name, botName:row.botName, steps:row.steps || []};
     });
-    return {browser:browserRows, people:people, chats:chats, automations:automations, artifacts:artifactsPage.items, start:localBrowserStartItems(), current:localBrowserCurrentChat()};
+    return {browser:browserRows, people:people, chats:chats, automations:automations, artifacts:artifactsPage.items, apps:localBrowserApps(), places:LOCAL_BROWSER_PLACES,
+      start:localBrowserStartItems(), current:localBrowserCurrentChat()};
+  }
+  // Mia's own places, found by name from the bar.
+  var LOCAL_BROWSER_PLACES = [{id:'apps', name:'Apps'}, {id:'artifacts', name:'Artifacts'}, {id:'chats', name:'Chats'}, {id:'automations', name:'Automations'}];
+  // The apps you can open: yours, your saved addresses, and the company's live ones.
+  function localBrowserApps(){
+    return appsPage.local.map(function(app){ return {source:'local', id:app.id, name:String(app.name || 'App'), sub:'On this computer'}; })
+      .concat(appsPage.links.map(function(link){ return {source:'link', id:link.id, name:String(link.name || link.url || 'App'), sub:String(link.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}; }))
+      .concat(appsPage.catalog.filter(function(app){ return app.live; }).map(function(app){ return {source:'team', id:app.id, name:app.name, sub:'Company app'}; }));
+  }
+  function openLocalBrowserApp(app){
+    if(app.source === 'link'){
+      var link = appsPage.links.filter(function(entry){ return entry.id === app.id; })[0];
+      if(link) openAppAddress(link.url);
+      return;
+    }
+    runToolsAction('apps');
+    if(app.source === 'team') openTeamApp(app.id);
+    else openLocalApp(app.id);
+  }
+  // Back to the chat you had open, from the browser or any page.
+  function showChatsFromBar(){
+    closeBrowserSidebarDrawer();
+    closeLocalBrowser();
+    closeAutomationsPage();
+    closeArtifactsPage();
+    closeAppsPage();
   }
   // The open chat's messages, newest first, for "In <chat>" results.
   function localBrowserCurrentChat(){
@@ -10635,6 +10670,15 @@
       if(input) input.blur();
       if(item.kind === 'start') runLocalBrowserStart(item.target.id);
       else openArtifact(item.target.id);
+      return;
+    }
+    if(item.kind === 'app' || item.kind === 'place'){
+      if(input) input.value = '';
+      closeLocalBrowserSuggest();
+      if(input) input.blur();
+      if(item.kind === 'app') openLocalBrowserApp(item.target);
+      else if(item.target.id === 'chats') showChatsFromBar();
+      else runToolsAction(item.target.id);
       return;
     }
     if(item.kind === 'message'){
@@ -10751,6 +10795,7 @@
       input.addEventListener('focus', function(){
         if(!chatSearchDirectory.loaded) loadChatSearchDirectory();
         if(!artifactsPage.open) loadArtifacts();
+        if(!appsPage.open && !appsPage.loading) loadApps();
         loadOtherTeamPeople();
         // History changes as you browse, so each visit to the bar reloads it.
         loadLocalBrowserHistory(true);

@@ -252,16 +252,19 @@
 
   // The bar searches everywhere. Groups come back in order of what you are
   // doing: the showing view's group first, then the rest in the mix order
-  // browser, chat, automation. Each group holds labelled parts of rows.
+  // browser, chat, automation. Away from the browser, its group goes last:
+  // you are looking for something in Mia, not on the web. Mia's own places
+  // (Apps, Artifacts, Chats, Automations) answer by name. Each group holds
+  // labelled parts of rows.
   //   sources: {browser:[rows from suggest()], people:[{name, sub}],
   //     chats:[{name}], automations:[{name, botName, steps:[text]}],
-  //     artifacts:[{name, from}],
+  //     artifacts:[{name, from}], apps:[{name, sub}], places:[{id, name}],
   //     current:{name, messages:[{id, text, author}]} (the open chat, newest first),
   //     start:[{id, name}] (ways to start something new)}
-  //   options.view: 'browser' | 'chat' | 'automations' | 'artifacts'; null with tabs mixed.
+  //   options.view: 'browser' | 'chat' | 'automations' | 'artifacts' | 'apps'; null with tabs mixed.
   // Every match is listed; the box scrolls. With nothing typed, only the ways
   // to start something show; typing matches them too, after the results.
-  var GROUP_ORDER = ['browser', 'chat', 'automations', 'artifacts'];
+  var GROUP_ORDER = ['browser', 'chat', 'automations', 'artifacts', 'apps'];
   function startGroup(items){
     return {key:'start', title:'Start something', parts:[{label:'', rows:items.map(function(item){ return {kind:'start', target:item}; })}]};
   }
@@ -283,15 +286,36 @@
       ]},
       artifacts: {key:'artifacts', title:'Artifacts', parts:[
         {label:'', rows:ranked(sources.artifacts, query, function(artifact){ return [artifact.name, artifact.from || '']; }).map(function(artifact){ return {kind:'artifact', target:artifact}; })}
+      ]},
+      apps: {key:'apps', title:'Apps', parts:[
+        {label:'', rows:ranked(sources.apps, query, function(app){ return app.name; }).map(function(app){ return {kind:'app', target:app}; })}
+      ]},
+      places: {key:'places', title:'Go to', parts:[
+        {label:'', rows:placeRows(sources.places, query)}
       ]}
     };
-    var order = GROUP_ORDER.indexOf(view) === -1 ? GROUP_ORDER : [view].concat(GROUP_ORDER.filter(function(key){ return key !== view; }));
+    var order = GROUP_ORDER;
+    if(view && view !== 'browser' && GROUP_ORDER.indexOf(view) !== -1){
+      order = [view].concat(GROUP_ORDER.filter(function(key){ return key !== view && key !== 'browser'; }), ['browser']);
+    }
+    // A place's name is the surest thing to type, so it leads, except in the
+    // browser, where Enter keeps going to the web.
+    order = order[0] === 'browser' ? ['browser', 'places'].concat(order.slice(1)) : ['places'].concat(order);
     var starts = ranked(sources.start, query, function(item){ return item.name; });
     return order.map(function(key){
       var group = groups[key];
       group.parts = group.parts.filter(function(part){ return part.rows.length; });
       return group;
     }).concat(starts.length ? [startGroup(starts)] : []).filter(function(group){ return group.parts.length; });
+  }
+
+  // A place answers only to the start of its name, from the second letter on,
+  // so one letter does not list them all.
+  function placeRows(places, query){
+    var typed = String(query || '').trim().toLowerCase();
+    if(typed.length < 2) return [];
+    return (places || []).filter(function(place){ return String(place.name || '').toLowerCase().indexOf(typed) === 0; })
+      .map(function(place){ return {kind:'place', target:place}; });
   }
 
   // A long message is shown from just before the match, so the match is visible.
