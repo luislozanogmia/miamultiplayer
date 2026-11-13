@@ -25,7 +25,8 @@
     follow:null, browser:null, pendingOpens:0, sent:{}, timers:{}, shareChannelId:null, ended:{}, notice:null,
     confirming:null, approveEach:false, approved:{}, approving:{}, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
     sharePicking:null, activeAt:0, aloneSince:0, ending:null, endingCard:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false,
-    talk: window.MiaSpaceTalk ? window.MiaSpaceTalk.createTranscript() : null, listener:null, listening:false, listenStarting:false};
+    talk: window.MiaSpaceTalk ? window.MiaSpaceTalk.createTranscript() : null, listener:null, listening:false, listenStarting:false,
+    ideas: window.MiaSpaceTalk ? window.MiaSpaceTalk.createIdeas() : null, suggester:null};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -609,12 +610,17 @@
       // Someone who connects late gets what this person has said so far.
       onOpen: function(id){
         if(s.talk && s.mesh) s.talk.by(self.id).slice(-200).forEach(function(line){ s.mesh.sendKept({t: 's', id: line.id, text: line.text, at: line.at}, id); });
+        if(s.ideas && s.mesh) s.ideas.waiting(self.id).forEach(function(idea){ s.mesh.sendKept({t: 'g', id: idea.id, title: idea.title, ask: idea.ask, at: idea.at}, id); });
       }
     });
+    if(s.mesh && s.ideas) s.suggester = window.MiaSpaceTalk.createSuggester({should: suggesting, ask: askForIdeas, onIdeas: propose});
   }
   function stopLive(){
     stopListening(true);
     if(s.talk) s.talk.clear();
+    if(s.suggester) s.suggester.stop();
+    s.suggester = null;
+    if(s.ideas) s.ideas.clear();
     if(s.mesh) s.mesh.close();
     s.mesh = null; s.frames = {}; s.pointers = {}; s.botPoints = {}; s.worked = {}; s.done = {}; s.lastBot = {};
     s.cursorSig = ''; s.frameTick = 0; s.viewSig = ''; s.viewAt = 0;
@@ -626,7 +632,15 @@
     if(!bound() || !s.participants[fromId] || !s.presence[fromId] || !message) return;
     // The name comes from the connection the line arrived on, never from the line itself.
     if(message.t === 's'){
-      if(s.talk && s.talk.add({id: message.id, by: fromId, name: s.presence[fromId].name, text: message.text, at: message.at})) render();
+      heard(s.talk && s.talk.add({id: message.id, by: fromId, name: s.presence[fromId].name, text: message.text, at: message.at}));
+      return;
+    }
+    if(message.t === 'g'){
+      if(s.ideas && s.ideas.add({id: message.id, by: fromId, name: s.presence[fromId].name, title: message.title, ask: message.ask, at: message.at})) render();
+      return;
+    }
+    if(message.t === 'ga'){
+      if(s.ideas && typeof message.by === 'string' && typeof message.id === 'string' && s.ideas.take(message.by + '|' + message.id, {id: fromId, name: s.presence[fromId].name})) render();
       return;
     }
     if(typeof message.tab !== 'string') return;
@@ -661,7 +675,55 @@
     var line = s.talk.add({id: key(), by: self.id, name: self.name, text: text, at: at});
     if(!line) return;
     if(s.mesh) s.mesh.sendKept({t: 's', id: line.id, text: line.text, at: line.at});
+    heard(line);
+  }
+  function heard(line){
+    if(!line) return;
+    if(s.suggester) s.suggester.heard(line);
     render();
+  }
+  // ---- Ideas ----------------------------------------------------------------
+  // From what was said, Mia proposes things to do. Only one computer asks the
+  // model, so a session gets one set of ideas: the first, by id, of the people
+  // being written down.
+  function suggesting(){
+    var self = me(), h = host();
+    if(!bound() || !self || !h || !h.suggest) return false;
+    return listeners().map(function(person){ return person.id; }).sort()[0] === self.id;
+  }
+  function askForIdeas(){
+    var self = me();
+    return host().suggest(s.talk.lines().slice(-30).map(function(line){ return {name: self && line.by === self.id ? self.name : line.name, text: line.text}; }), s.ideas.titles());
+  }
+  function propose(list){
+    var self = me();
+    if(!bound() || !self) return;
+    list.slice(0, 2).forEach(function(item){
+      var idea = s.ideas.add({id: key(), by: self.id, name: self.name, title: item && item.title, ask: item && item.ask, at: Date.now()});
+      if(idea && s.mesh) s.mesh.sendKept({t: 'g', id: idea.id, title: idea.title, ask: idea.ask, at: idea.at});
+    });
+    render();
+  }
+  // Taking an idea asks this person's own Mia to do it, and tells the others it is taken.
+  function takeIdea(ideaKey){
+    var self = me(), h = host();
+    if(!bound() || !self || !h || !h.ask) return;
+    var idea = s.ideas.take(ideaKey, {id: self.id, name: self.name});
+    if(!idea) return render();
+    if(s.mesh) s.mesh.sendKept({t: 'ga', by: idea.by, id: idea.id});
+    render();
+    h.ask(idea.ask);
+  }
+  function ideasHtml(){
+    if(!s.ideas) return '';
+    var self = me(), h = host(), mote = h && h.moteSrc ? h.moteSrc('Mia') : '';
+    return s.ideas.open().map(function(idea){
+      var taker = idea.taken && (self && idea.taken.id === self.id ? 'You asked Mia to do this' : idea.taken.name + ' asked Mia to do this');
+      return '<div class="mia-space-slim mia-space-idea' + (taker ? ' taken' : '') + '">' + (mote ? '<img class="mia-space-idea-mote" alt="" src="' + esc(mote) + '">' : '') +
+        '<span class="mia-space-text" title="' + esc(idea.ask) + '"><b>' + esc(idea.title) + '</b><span class="mia-space-hint">' + esc(taker || 'Mia suggests, from what was said') + '</span></span>' +
+        (taker ? '' : '<span class="mia-space-choices"><button type="button" class="mia-space-btn primary" data-space-idea-do="' + esc(idea.key) + '">Do it</button>' +
+          '<button type="button" class="mia-space-btn icon" data-space-idea-no="' + esc(idea.key) + '" aria-label="Dismiss" title="Dismiss">×</button></span>') + '</div>';
+    }).join('');
   }
   function toggleListening(){
     if(s.listening || s.listenStarting) return stopListening();
@@ -685,7 +747,7 @@
       if(!started || !s.listenStarting){ if(!s.listening) stopListening(); return; }
       s.listenStarting = false; s.listening = true;
       sendPresence(true);
-      toast('Mia is writing down what you say. Everyone in the session can read it.');
+      toast('Mia is writing down what you say. Everyone in the session can read it, and Mia suggests what to do next.');
       render();
     }).catch(function(error){
       stopListening();
@@ -1071,7 +1133,7 @@
         '<span class="mia-space-call-title"><i class="mia-space-live-dot" aria-hidden="true"></i><span class="mia-space-call-name">In a call: ' + esc(callName(s.channelId, s.space.name)) + '</span><b class="mia-space-clock">' + clockText() + '</b></span>' +
         '<span class="mia-space-faces">' + faces + '</span><span class="mia-space-call-follow-slot"></span>' +
         '<span class="mia-space-call-actions">' + (s.talk ? '<button type="button" class="mia-space-btn listen' + (s.listening ? ' on' : '') + '" data-space-listen aria-pressed="' + s.listening + '"' + (s.listenStarting ? ' disabled' : '') +
-          ' title="' + (s.listening ? 'Stop writing down what you say' : 'Mia writes down what you say, on this computer. Everyone in the session can read it.') + '">' + MIC_ICON + (s.listening ? 'Mia is listening' : s.listenStarting ? 'Starting…' : 'Mia listens') + '</button>' : '') +
+          ' title="' + (s.listening ? 'Stop writing down what you say' : 'Mia writes down what you say, on this computer. Everyone in the session can read it, and Mia suggests what to do next.') + '">' + MIC_ICON + (s.listening ? 'Mia is listening' : s.listenStarting ? 'Starting…' : 'Mia listens') + '</button>' : '') +
         '<button type="button" class="mia-space-btn" data-space-invite>Invite</button>' +
         '<button type="button" class="mia-space-btn icon" data-space-more aria-label="More" title="More">⋯</button>' +
         '<button type="button" class="mia-space-btn leave" data-space-leave>Leave</button></span>' + callMenuHtml();
@@ -1113,7 +1175,7 @@
         '<span class="mia-space-tile-label"><span class="mia-space-tile-title">' + esc(tile.title) + '</span><span class="mia-space-tile-check" aria-label="Done">✓</span></span></button>';
     }).join('') + '</div>' + mapToggle + '</div>';
     bar.hidden = !(approvals || map);
-    paint(approvals + talkHtml() + map);
+    paint(approvals + talkHtml() + ideasHtml() + map);
     if(s.mesh) s.mesh.sync(others.map(function(person){ return person.id; }));
     syncLive();
   }
@@ -1145,6 +1207,8 @@
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')){ s.callMenu = null; lookHere(); renderCall(); }
     else if(target.hasAttribute('data-space-listen')) toggleListening();
+    else if(target.hasAttribute('data-space-idea-do')) takeIdea(target.getAttribute('data-space-idea-do'));
+    else if(target.hasAttribute('data-space-idea-no')){ s.ideas.dismiss(target.getAttribute('data-space-idea-no')); render(); }
     else if(target.hasAttribute('data-space-transcript')){
       // The same click has already closed an open menu; pressing the button again leaves it closed.
       var reopened = s.closedMenu && s.closedMenu.event === event && s.closedMenu.menu === 'transcript';

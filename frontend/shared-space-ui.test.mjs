@@ -584,12 +584,16 @@ async function talkingBar() {
   page.window.AudioContext = function () {};
   page.window.MiaDictation = { toWav16k: () => 'wav' };
   page.window.MiaSpeech = { ready: async () => true, transcribe: async () => '' };
+  const ideas = { asked: [], did: [] };
+  page.window.MiaSpaceTalk.createSuggester = (options) => { ideas.options = options; ideas.heard = []; return { heard: (line) => ideas.heard.push(line.text), stop() { ideas.stopped = true; } }; };
+  page.window.MiaSpaceHost.suggest = async (lines, had) => { ideas.asked.push({ lines, had }); return [{ title: 'Book the venue', ask: 'Find three venues for 40 people and compare them.' }]; };
+  page.window.MiaSpaceHost.ask = (text) => ideas.did.push(text);
   page.window.MiaSpaceTalk.createListener = (options) => { heard.options = options; heard.stopped = false; return { start: async () => {}, stop() { heard.stopped = true; } }; };
   page.click('data-space-share');
   const tab = page.model.decode(page.sent[0]).tabs[0].k;
   const here = (id, name, extra = {}) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/', from: { id, name }, ...extra }), author_id: id, author_type: 'user', author_name: name });
   const presence = () => page.sent.map((text) => page.model.decode(text)).filter((message) => message.t === 'here').at(-1);
-  return { page, kept, heard, here, presence, live: () => live };
+  return { page, kept, heard, here, presence, ideas, live: () => live };
 }
 
 test('Mia listens only after this person turns it on, and tells everyone it is on', async () => {
@@ -690,4 +694,66 @@ test('leaving the session stops the microphone and clears the transcript', async
   page.click('data-space-share');
   assert.doesNotMatch(page.bar.innerHTML, /before leaving/);
   assert.match(page.call.innerHTML, /aria-pressed="false"/);
+});
+
+test('only the first of the people being written down asks the model for ideas', async () => {
+  const { page, heard, here, ideas, live } = await talkingBar();
+  assert.equal(ideas.options.should(), false, 'nobody is being written down');
+  page.click('data-space-listen');
+  await flush(); await flush();
+  assert.equal(ideas.options.should(), true);
+  heard.options.onLine('Let us book the venue', Date.now() - 2000);
+  joinPeer(page, 'user_zed', 'Zed');
+  here('user_zed', 'Zed', { listen: true });
+  live().onMessage('user_zed', { t: 's', id: 'l1', text: 'For forty people', at: Date.now() });
+  assert.deepEqual(ideas.heard, ['Let us book the venue', 'For forty people']);
+  assert.equal(ideas.options.should(), true, 'me sorts before user_zed');
+  joinPeer(page, 'ana', 'Ana');
+  here('ana', 'Ana', { listen: true });
+  assert.equal(ideas.options.should(), false, 'Ana\'s computer asks instead');
+  await ideas.options.ask();
+  assert.deepEqual(JSON.parse(JSON.stringify(ideas.asked[0].lines)), [{ name: 'Me', text: 'Let us book the venue' }, { name: 'Zed', text: 'For forty people' }]);
+});
+
+test('an idea shows as a card for everyone, and taking it asks this person\'s Mia and tells the others', async () => {
+  const { page, kept, ideas } = await talkingBar();
+  page.click('data-space-listen');
+  await flush(); await flush();
+  ideas.options.onIdeas(await ideas.options.ask());
+  assert.match(page.bar.innerHTML, /mia-space-idea[^>]*>.*<b>Book the venue<\/b>.*Mia suggests/);
+  const sent = kept.filter(([message]) => message.t === 'g');
+  assert.equal(sent.length, 1);
+  assert.deepEqual(Object.keys(sent[0][0]).sort(), ['ask', 'at', 'id', 't', 'title']);
+  assert.equal(ideas.asked.length, 1);
+  ideas.options.onIdeas([{ title: 'Second', ask: 'Do the second thing.' }]);
+  assert.deepEqual((await ideas.options.ask(), Array.from(ideas.asked.at(-1).had)), ['Book the venue', 'Second']);
+  page.click('data-space-idea-do', 'me|' + sent[0][0].id);
+  assert.deepEqual(ideas.did, ['Find three venues for 40 people and compare them.']);
+  assert.deepEqual(kept.filter(([message]) => message.t === 'ga').map(([message]) => [message.by, message.id]), [['me', sent[0][0].id]]);
+  assert.match(page.bar.innerHTML, /mia-space-idea taken.*You asked Mia to do this/);
+  page.click('data-space-idea-no', 'me|' + kept.filter(([message]) => message.t === 'g')[1][0].id);
+  assert.doesNotMatch(page.bar.innerHTML, /<b>Second<\/b>/);
+});
+
+test('an idea from someone else carries their connection, and one they took cannot be taken again', async () => {
+  const { page, here, ideas, kept, live } = await talkingBar();
+  joinPeer(page, 'user_ana', 'Ana');
+  here('user_ana', 'Ana', { listen: true });
+  live().onMessage('user_stranger', { t: 'g', id: 'i0', title: 'Not here', ask: 'x', at: Date.now() });
+  live().onMessage('user_ana', { t: 'g', id: 'i1', title: 'Draft <i>the</i> agenda', ask: 'Write an agenda.', at: Date.now(), by: 'user_tom' });
+  assert.doesNotMatch(page.bar.innerHTML, /Not here/);
+  assert.match(page.bar.innerHTML, /<b>Draft &#60;i&#62;the&#60;\/i&#62; agenda<\/b>/);
+  live().onMessage('user_ana', { t: 'ga', by: 'user_ana', id: 'i1' });
+  assert.match(page.bar.innerHTML, /Ana asked Mia to do this/);
+  assert.doesNotMatch(page.bar.innerHTML, /data-space-idea-do/);
+  assert.deepEqual(ideas.did, []);
+  // Someone who connects late is sent the ideas of mine nobody has taken yet.
+  ideas.options.onIdeas([{ title: 'Mine', ask: 'Do mine.' }]);
+  kept.length = 0;
+  live().onOpen('user_tom');
+  assert.deepEqual(kept.map(([message, to]) => [message.t, message.title, to]), [['g', 'Mine', 'user_tom']]);
+  page.click('data-space-leave');
+  assert.equal(ideas.stopped, true);
+  page.click('data-space-share');
+  assert.doesNotMatch(page.bar.innerHTML, /mia-space-idea/);
 });

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { createSegmenter, createTranscript, createListener } = require('./shared-space-talk.js');
+const { createSegmenter, createTranscript, createListener, createIdeas, createSuggester } = require('./shared-space-talk.js');
 
 const RATE = 16000, FRAME = 1600; // a tenth of a second per frame
 const quiet = () => new Float32Array(FRAME).fill(0.001);
@@ -129,4 +129,75 @@ test('a blocked microphone is reported and nothing is left running', async () =>
   const listener = createListener({ media: audio.media, AudioContext: audio.Context, toWav() {}, transcribe() {}, onLine() {} });
   await assert.rejects(listener.start(), { name: 'NotAllowedError' });
   assert.equal(listener.active(), false);
+});
+
+test('an idea is kept once, and the first person to take it has it', () => {
+  const ideas = createIdeas();
+  const idea = ideas.add({ id: 'a', by: 'u1', name: 'Ana', title: ' Draft  the plan ', ask: 'Write a first draft of the plan.', at: 1000 }, 2000);
+  assert.equal(idea.title, 'Draft the plan');
+  assert.equal(ideas.add({ id: 'a', by: 'u1', title: 'Other', ask: 'x', at: 1000 }, 2000), null, 'a repeat is ignored');
+  assert.equal(ideas.add({ id: 'b', by: 'u1', title: '', ask: 'x', at: 1000 }, 2000), null);
+  assert.equal(ideas.add({ id: 'b', by: 'u1', title: 'x', ask: '', at: 1000 }, 2000), null);
+  assert.ok(ideas.add({ id: 'a', by: 'u2', title: 'Same id, other person', ask: 'x', at: 1500 }, 2000));
+  assert.deepEqual(ideas.titles(), ['Draft the plan', 'Same id, other person']);
+  assert.equal(ideas.take('u1|a', { id: 'u2', name: 'Bo' }, 3000).taken.name, 'Bo');
+  assert.equal(ideas.take('u1|a', { id: 'u3', name: 'Cy' }, 3001), null);
+  assert.deepEqual(ideas.waiting('u1'), []);
+  assert.equal(ideas.waiting('u2').length, 1);
+});
+
+test('only the newest two ideas show, a dismissed one goes, and a taken one leaves after a minute', () => {
+  const ideas = createIdeas();
+  ['a', 'b', 'c'].forEach((id, i) => ideas.add({ id, by: 'u1', title: 'Idea ' + id, ask: 'Do ' + id, at: 1000 + i }, 5000));
+  assert.deepEqual(ideas.open(5000).map((idea) => idea.id), ['b', 'c']);
+  ideas.dismiss('u1|c');
+  assert.deepEqual(ideas.open(5000).map((idea) => idea.id), ['a', 'b']);
+  ideas.take('u1|b', { id: 'u2', name: 'Bo' }, 6000);
+  assert.deepEqual(ideas.open(6000 + 59000).map((idea) => idea.id), ['a', 'b']);
+  assert.deepEqual(ideas.open(6000 + 61000).map((idea) => idea.id), ['a']);
+  ideas.clear();
+  assert.deepEqual(ideas.open(5000), []);
+});
+
+test('Mia asks for ideas after a pause, only with enough new words, and only on the computer whose turn it is', async () => {
+  let asks = 0, mine = false;
+  const got = [];
+  const suggester = createSuggester({ minWords: 4, settleMs: 5, gapMs: 40, should: () => mine,
+    ask: async () => { asks++; return [{ title: 'T' + asks, ask: 'A' }]; }, onIdeas: (list) => got.push(list[0].title) });
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  suggester.heard({ text: 'one two three four five' });
+  await wait(20);
+  assert.equal(asks, 0, 'another computer is asking');
+  mine = true;
+  suggester.heard({ text: 'six' });
+  await wait(20);
+  assert.equal(asks, 1);
+  suggester.heard({ text: 'too short' });
+  await wait(60);
+  assert.equal(asks, 1, 'not enough new words');
+  suggester.heard({ text: 'now this is plenty' });
+  await wait(20);
+  assert.equal(asks, 2);
+  suggester.heard({ text: 'said again right after the last ask' });
+  await wait(20);
+  assert.equal(asks, 2, 'never more often than the gap');
+  await wait(50);
+  assert.equal(asks, 3);
+  assert.deepEqual(got, ['T1', 'T2', 'T3']);
+  suggester.heard({ text: 'this comes after everyone has left the session' });
+  suggester.stop();
+  await wait(60);
+  assert.equal(asks, 3);
+});
+
+test('a failed ask is dropped and the next thing said tries again', async () => {
+  let asks = 0;
+  const suggester = createSuggester({ minWords: 2, settleMs: 2, gapMs: 0, should: () => true,
+    ask: async () => { if (++asks === 1) throw new Error('offline'); return []; }, onIdeas() { assert.fail('nothing to show'); } });
+  suggester.heard({ text: 'hello there friend' });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  suggester.heard({ text: 'hello again friend' });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(asks, 2);
+  suggester.stop();
 });

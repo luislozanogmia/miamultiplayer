@@ -45,6 +45,7 @@ const { localDateString } = require('./local-date');
 const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisionHermesPrivateAgentProfile } = require('./hermes-bot-profile');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
+const meetingSuggestions = require('./meeting-suggestions');
 const nextStep = require('./next-step');
 const { reasoningRepeatsReply } = require('./reasoning-summary');
 const { safeBrowserContext } = require('./browser-context');
@@ -9428,6 +9429,25 @@ app.post('/api/chat/suggestions', requireAuth, async (req, res) => {
       .filter((l) => l && l.length <= 80)
       .slice(0, 3);
     res.status(200).json({ suggestions });
+  } catch (err) {
+    res.status(200).json({ suggestions: [] });
+  }
+});
+
+// What Mia proposes during a shared session, from what the people in it just
+// said. Body: {lines: [{name, text}], had: [titles already proposed]}. Same
+// best-effort 'suggestion' tier as the routes above: a failure proposes nothing.
+app.post('/api/space/suggestions', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const prompt = meetingSuggestions.buildPrompt({ lines: body.lines, had: body.had });
+  if (!prompt) return res.status(400).json({ error: 'lines must hold what was said' });
+  try {
+    const reply = await scheduleInference(
+      prompt,
+      'suggestion',
+      await inferenceOptionsForUser(req.userEmail)
+    );
+    res.status(200).json({ suggestions: meetingSuggestions.parseReply(reply, body.had) });
   } catch (err) {
     res.status(200).json({ suggestions: [] });
   }

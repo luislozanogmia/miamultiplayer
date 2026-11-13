@@ -6916,6 +6916,11 @@
       return members.map(function(member){return {id:member.clerk_user_id,name:member.display_name||displayNameForEmail(member.email)||member.email||'Colleague'};});
     },
     sharedSession:function(active){ api('/api/browser/shared-session',{method:'POST',body:{active:active===true}}).catch(function(){}); },
+    // What was said goes to this person's own model, which proposes what to do next.
+    suggest:function(lines,had){
+      return api('/api/space/suggestions',{method:'POST',body:{lines:lines,had:had}}).then(function(r){ return r.status===200 && r.data.suggestions || []; });
+    },
+    ask:function(text){ askBotFromBrowserSuggestion(text,null); },
     send:function(channelId,text){
       if(!hubWorkspace() || !hubChannel(channelId))return Promise.reject(new Error('That channel is no longer available.'));
       return hubCall('POST',hubPath()+'/channels/'+channelId+'/space-events',{text:text});
