@@ -3625,3 +3625,185 @@ test("a bot command on a sleeping tab loads the page first", async () => {
   assert.ok(h.views.at(-1).webContents.restored, "the page was loaded before the read");
   assert.equal(result.url ?? "https://site0.example/", "https://site0.example/");
 });
+
+// Split view: two tabs side by side or four in a grid. The area here is 706 x
+// 600 CSS px, so two panes are 347 px wide each, 6 px apart and 3 px in from
+// the edge.
+const SPLIT_AREA = { x: 0, y: 100, width: 706, height: 600 };
+const splitOf = h => JSON.parse(JSON.stringify(h.command("state").split));
+function splitHarness(count) {
+  const h = harness();
+  const ids = openTabs(h, count);
+  h.command("layout", { visible: true, bounds: SPLIT_AREA });
+  const view = id => h.views[ids.indexOf(id)];
+  return { h, ids, view };
+}
+
+test("one page stays exactly as before: the active tab fills the area and nothing else shows", () => {
+  const { h, ids, view } = splitHarness(3);
+  assert.equal(JSON.stringify(splitOf(h)), JSON.stringify({ mode: 1, slots: [], rects: [] }));
+  assert.equal(JSON.stringify(view(ids[2]).bounds), JSON.stringify({ x: 0, y: 100, width: 706, height: 600 }));
+  assert.deepEqual(ids.map(id => view(id).visible), [false, false, true]);
+  assert.equal(view(ids[0]).bounds.x, -(706 + 10000), "a tab in the back waits off the window as before");
+});
+
+test("two side by side shows the active tab first, then the tab used last", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 2 });
+  const split = splitOf(h);
+  assert.equal(JSON.stringify(split.slots), JSON.stringify([ids[2], ids[1]]));
+  assert.equal(split.focus, 0);
+  assert.equal(JSON.stringify(split.rects), JSON.stringify([{ x: 3, y: 3, width: 347, height: 594 }, { x: 356, y: 3, width: 347, height: 594 }]));
+  assert.equal(JSON.stringify(view(ids[2]).bounds), JSON.stringify({ x: 3, y: 103, width: 347, height: 594 }));
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 356, y: 103, width: 347, height: 594 }));
+  assert.deepEqual(ids.map(id => view(id).visible), [false, true, true]);
+  assert.equal(view(ids[0]).bounds.x < 0, true, "a tab in no pane stays off the window");
+  assert.equal(h.command("state").activeId, ids[2], "the active tab is unchanged");
+});
+
+test("four in a grid with too few tabs leaves the rest of the panes empty", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 4 });
+  const split = splitOf(h);
+  assert.equal(JSON.stringify(split.slots), JSON.stringify([ids[1], ids[0], null, null]));
+  assert.equal(split.rects.length, 4);
+  assert.deepEqual(ids.map(id => view(id).visible), [true, true]);
+  assert.equal(JSON.stringify(view(ids[0]).bounds), JSON.stringify({ x: 356, y: 103, width: 347, height: 294 }));
+  // A new tab in front takes the first empty pane.
+  const next = h.command("new").activeId;
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[1], ids[0], next, null]));
+  assert.equal(splitOf(h).focus, 2);
+});
+
+test("a blank tab is never pulled into a pane by itself", () => {
+  const h = harness();
+  const ids = openTabs(h, 1);
+  h.command("new");
+  const blank = h.command("state").activeId;
+  h.command("select", { id: ids[0] });
+  h.command("split", { mode: 2 });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[0], null]));
+  h.command("select", { id: blank });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[0], blank]), "picked, it fills the empty pane");
+});
+
+test("picking a tab on show moves the focus; picking another replaces the focused pane", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 2 });
+  h.command("select", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[2], ids[1]]), "the panes stay as they were");
+  assert.equal(splitOf(h).focus, 1);
+  assert.equal(h.command("state").activeId, ids[1]);
+  h.command("select", { id: ids[0] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[2], ids[0]]), "it takes the focused pane");
+  assert.deepEqual(ids.map(id => view(id).visible), [true, false, true]);
+});
+
+test("pressing in another pane's page makes its tab the active one", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  view(ids[0]).webContents.emit("before-mouse-event", {}, { type: "mouseDown", x: 10, y: 10 });
+  assert.equal(h.command("state").activeId, ids[0]);
+  assert.equal(splitOf(h).focus, 1);
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[1], ids[0]]));
+});
+
+test("closing or docking a tab on show refills its pane with the next tab used, else leaves it empty", () => {
+  const { h, ids, view } = splitHarness(4);
+  h.command("split", { mode: 2 });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[2]]));
+  h.command("close", { id: ids[2] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[1]]));
+  assert.equal(view(ids[1]).visible, true);
+  h.command("dock", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[0]]), "the docked tab leaves its pane");
+  h.command("close", { id: ids[0] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], null]), "no tab left to show");
+  // Closing the active tab: the tab after it takes the front and its pane.
+  h.command("undock");
+  h.command("select", { id: ids[1] });
+  assert.equal(JSON.stringify(splitOf(h).slots), JSON.stringify([ids[3], ids[1]]));
+  h.command("close", { id: ids[1] });
+  const after = h.command("state");
+  assert.equal(after.activeId, ids[3]);
+  assert.equal(JSON.stringify(after.split.slots), JSON.stringify([ids[3], null]));
+});
+
+test("going back to one page shows only the active tab, over the whole area", () => {
+  const { h, ids, view } = splitHarness(3);
+  h.command("split", { mode: 4 });
+  h.command("select", { id: ids[0] });
+  h.command("split", { mode: 1 });
+  assert.equal(JSON.stringify(splitOf(h)), JSON.stringify({ mode: 1, slots: [], rects: [] }));
+  assert.equal(h.command("state").activeId, ids[0]);
+  assert.deepEqual(ids.map(id => view(id).visible), [true, false, false]);
+  assert.equal(JSON.stringify(view(ids[0]).bounds), JSON.stringify({ x: 0, y: 100, width: 706, height: 600 }));
+  assert.equal(h.command("split", { mode: 3 }).split.mode, 1, "an unknown choice is one page");
+});
+
+test("tabs on show in split view never sleep", () => {
+  // Eight tabs: four on show, two kept awake as the ones used last, two asleep.
+  const { h, ids } = splitHarness(8);
+  h.command("split", { mode: 4 });
+  h.controller.sleepIdleTabs(LATER());
+  const asleep = Object.fromEntries(h.command("state").tabs.map(tab => [tab.id, tab.asleep]));
+  for (const id of splitOf(h).slots) assert.equal(asleep[id], false, `tab ${id} is on show`);
+  assert.equal(asleep[ids[0]], true, "a tab in no pane still sleeps");
+});
+
+test("only the focused pane's tab counts as the person viewing it", () => {
+  const { h, ids } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  const state = h.command("state");
+  assert.equal(state.tabs.filter(tab => tab.active).length, 1);
+  assert.equal(state.tabs.find(tab => tab.active).id, ids[1]);
+});
+
+test("page fullscreen covers the window, then the split comes back", () => {
+  const { h, ids, view } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  view(ids[1]).webContents.emit("enter-html-full-screen");
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 0, y: 0, width: 1000, height: 800 }));
+  assert.equal(view(ids[0]).visible, false);
+  view(ids[1]).webContents.emit("leave-html-full-screen");
+  h.command("layout", { visible: true, bounds: SPLIT_AREA });
+  assert.deepEqual(ids.map(id => view(id).visible), [true, true]);
+  assert.equal(JSON.stringify(view(ids[1]).bounds), JSON.stringify({ x: 3, y: 103, width: 347, height: 594 }));
+});
+
+test("a still for a menu covers each pane in split view", async () => {
+  const { h } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  const still = await h.command("snapshot");
+  assert.equal(still.panes.length, 2);
+  assert.equal(JSON.stringify(still.panes[1].rect), JSON.stringify({ x: 356, y: 3, width: 347, height: 594 }));
+  assert.match(still.panes[0].dataUrl, /^data:image\/jpeg;base64,/);
+});
+
+test("the split menu offers the three layouts and marks the current one", () => {
+  const { h } = splitHarness(2);
+  h.command("split", { mode: 2 });
+  h.command("splitMenu", { x: 10, y: 20 });
+  const template = h.menuTemplates.at(-1);
+  assert.equal(JSON.stringify(template.map(item => item.label)), JSON.stringify(["One page", "Two side by side", "Four in a grid"]));
+  assert.equal(JSON.stringify(template.map(item => item.checked)), JSON.stringify([false, true, false]));
+  template[2].click();
+  assert.equal(splitOf(h).mode, 4);
+});
+
+test("each workspace keeps its own split view while Mia runs", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-split-"));
+  try {
+    const h = harness({ statePath: path.join(directory, "browser.json") });
+    const ids = openTabs(h, 2);
+    h.command("layout", { visible: true, bounds: SPLIT_AREA });
+    h.command("split", { mode: 2 });
+    assert.equal(h.command("workspace", { key: "multiplayer_test" }).split.mode, 1, "a workspace with no choice shows one page");
+    h.command("new");
+    const back = h.command("workspace", { key: "solo" });
+    assert.equal(back.split.mode, 2);
+    assert.equal(JSON.stringify(back.split.slots), JSON.stringify([ids[1], ids[0]]));
+    assert.equal(back.tabs.find(tab => tab.id === ids[0]).asleep, false, "a restored tab on show is awake");
+    h.window.emit("closed");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

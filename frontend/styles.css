@@ -4294,6 +4294,18 @@ body.chat-pip-resizing { cursor: row-resize; user-select: none; }
 .chat-pip-view { flex: none; max-width: 100%; border-radius: 10px; overflow: hidden; background: var(--sand-fill-secondary); }
 .chat-pip[data-mode="video"] .chat-pip-view { background: #000; }
 .local-browser-toolbar:not([data-view="browser"]) .local-browser-pip-btn { display: none; }
+/* Split view: two pages side by side or four in a grid. Native views cover
+   the panes, so the focused pane's outline sits in the gap around it; a pane
+   without a page shows a quiet hint. */
+.local-browser-toolbar:not([data-view="browser"]) .local-browser-split-btn { display: none; }
+.local-browser-split-btn[aria-pressed="true"] { color: #0b57d0 !important; }
+.local-browser-screen.split { background: #ededeb; }
+.local-browser-panes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.local-browser-panes[hidden] { display: none; }
+.local-browser-pane { position: absolute; box-sizing: border-box; border-radius: 4px; }
+.local-browser-pane.focused { outline: 2px solid color-mix(in srgb, var(--sand-fill-accent) 70%, transparent); outline-offset: 1px; }
+.local-browser-pane.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 16px; background: #fff; color: #5f6368; font-size: 13px; text-align: center; pointer-events: auto; overflow: hidden; }
+.local-browser-pane.empty .local-browser-empty-title { font-size: 15px; color: #1f1f1f; }
 
 /* Human-only Chrome security-key sign-in handoff. */
 .local-browser-chrome-signin-btn{flex:none;border:1px solid #dadce0;border-radius:8px;background:#fff;color:#174ea6;padding:6px 9px;font:600 12px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}

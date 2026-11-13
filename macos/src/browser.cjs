@@ -18,6 +18,7 @@ const { createClosedTabs } = require("./closed-tabs.cjs");
 const { bindActorWithDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { randomUUID } = require("node:crypto");
 const { resolveFolderOpenTarget, showInFileManager } = require("./folder-open.cjs");
+const { splitMode, splitRects, enterSplit, pickSlot, removeFromSlots, refillSlots } = require("./browser-split.cjs");
 
 const MAX_PROTOCOL_PAGE_TEXT = 100000;
 // Longer fill values are inserted in one go rather than key by key.
@@ -253,6 +254,13 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // (laid out as in the browser, so the bot sees the same page). The renderer
   // reports where the dock is; `area` is the browser's own page area.
   const docked = { id: null, mode: "page", bounds: null, visible: false, area: null, applied: "" };
+  // Split view: the browser area shows two tabs side by side or four in a
+  // grid. `slots` holds the tab id in each pane (null for an empty one) and
+  // `focus` the pane of the active tab, the one the address bar and bots'
+  // default target follow. Each workspace keeps its own choice while Mia
+  // runs; one with none shows one page.
+  const splitByWorkspace = new Map();
+  let split = { mode: 1, slots: [], focus: 0 };
   let nextId = 1;
   let visible = false;
   // Hidden only while a menu or dialog covers the page: still showing, so it keeps playing.
@@ -987,7 +995,7 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   // mode when it goes up. A blank tab still replaces the closed one.
   let lastTabCloses = 0;
   let sessionGroupId = null;
-  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
+  const state = () => ({ chromeSignInAvailable: chromeHandoff.available(), chromeSignIn: chromeHandoff.status(), workspace: baseStatePath ? workspaceKey : null, groups: groupList().map(group => ({ ...group, tabIds: groupTabs(group.id).map(tab => tab.id) })), selectedGroupId: tabs.get(activeId)?.groupId || null, actors: actorRuntime.list(), ownership: actorRuntime.list(), workProposal, activeId, dock: docked.id === null ? null : { id: docked.id, mode: docked.mode, aspect: dockAspect() }, split: splitState(), lastTabCloses, download: downloadNotices.get(workspaceKey) || "", downloads: downloadList(), tabs: [...tabs.values()].map(tab => ({
     id: tab.id, url: tab.url, title: tab.title, error: tab.error, favicon: tab.favicon || null,
     groupId: tab.groupId || null,
     private: tab.private === true,
@@ -1113,6 +1121,36 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     if (group) group.collapsed = false;
   }
 
+  // The tabs a pane can take by itself: pages not in the dock, used most
+  // recently first. Tabs are fenced per workspace, so all are this one's.
+  function splitCandidates() {
+    return [...tabs.values()].filter(tab => tab.url && tab.id !== docked.id && tab.id !== activeId)
+      .sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0) || b.id - a.id).map(tab => tab.id);
+  }
+  function inPane(id) { return split.mode > 1 && split.slots.includes(id); }
+  // Keeps the panes in step with the tabs: a closed or docked tab leaves its
+  // pane, the active tab always has one (picking a tab not on show puts it in
+  // the first empty pane, else in the focused one), empty panes take the next
+  // tabs used, and every page on show is awake.
+  function settleSplit() {
+    if (split.mode === 1 || restoring) return;
+    split.slots = split.slots.map(id => (tabs.has(id) && id !== docked.id ? id : null));
+    if (tabs.has(activeId) && activeId !== docked.id) Object.assign(split, pickSlot(split.slots, split.focus, activeId));
+    split.slots = refillSlots(split.slots, splitCandidates());
+    for (const id of split.slots) if (id !== null) wakeTab(tabs.get(id));
+  }
+  function setSplitMode(value) {
+    const mode = splitMode(value);
+    split = mode === 1 ? { mode: 1, slots: [], focus: 0 }
+      : { mode, ...enterSplit(mode, tabs.has(activeId) ? activeId : null, splitCandidates()) };
+    splitByWorkspace.set(workspaceKey, split);
+    settleSplit();
+  }
+  function splitState() {
+    if (split.mode === 1) return { mode: 1, slots: [], rects: [] };
+    const slots = split.slots.map(id => (tabs.has(id) && id !== docked.id ? id : null));
+    return { mode: split.mode, slots, focus: Math.max(0, slots.indexOf(activeId)), rects: splitRects(bounds, split.mode) };
+  }
   function exitPageFullscreen() {
     const tab = tabs.get(fullscreenId);
     if (tab && !tab.view.webContents.isDestroyed()) {
@@ -1156,8 +1194,23 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       if (shown) { dockTab.dockBox = box; dockTab.view.setBounds(box); dockTab.view.setVisible(true); void applyDockScale(dockTab, box); }
       else hide(dockTab, dockTab.dockBox || dockTab.captureBounds || { width: Math.max(1, width), height: Math.max(1, height) });
     }
+    // Split view: each tab in a pane is shown in its own part of the area.
+    settleSplit();
+    const panes = split.mode > 1 ? splitRects(bounds, split.mode) : null;
     for (const tab of tabs.values()) {
       if (tab === dockTab) continue;
+      const pane = panes ? split.slots.indexOf(tab.id) : -1;
+      if (pane >= 0) {
+        const rect = panes[pane];
+        const box = place({ x: bounds.x + rect.x, y: bounds.y + rect.y, width: rect.width, height: rect.height });
+        const room = box.width > 0 && box.height > 0;
+        if (room) tab.captureBounds = box;
+        if (visible && !!tab.url && !tab.error && room) {
+          tab.view.setBounds(box);
+          tab.view.setVisible(true);
+        } else hide(tab, room ? box : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) }));
+        continue;
+      }
       if (area.width > 0 && area.height > 0) tab.captureBounds = area;
       const size = area.width > 0 && area.height > 0 ? area : (tab.captureBounds || { x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
       if (visible && tab.id === activeId && !!tab.url && !tab.error && area.width > 0 && area.height > 0) {
@@ -2751,7 +2804,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // comes to the front or a bot uses it. A tab that is playing, docked,
   // shared in a session or being worked on never sleeps.
   function canSleep(tab) {
-    if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId) return false;
+    if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId || inPane(tab.id)) return false;
     if (sessionGroupId && tab.groupId === sessionGroupId) return false;
     if ((tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0 || heldByRenderer.has(tab.id)) return false;
     if (actorRuntime.list().some(actor => actor.tabId === tab.id)) return false;
@@ -2826,6 +2879,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // Where this person's pointer is, for teammates in a shared session.
       if (mouse.type === "mouseMove" || mouse.type === "mouseDown") tab.pointer = { x: mouse.x, y: mouse.y, at: Date.now() };
       if (mouse.type === "mouseDown") tab.personPressedAt = Date.now();
+      // Pressing in another pane's page makes that tab the active one.
+      if (mouse.type === "mouseDown" && tab.id !== activeId && inPane(tab.id)) {
+        activateTab(tab.id); layout(); persistTabs(); publish();
+      }
       if (mouse.type !== "mouseDown" || tab.id !== activeId) return;
       if (heldByRenderer.has(tab.id) || (tab.botWork || 0) > 0 || tab.actorOperationCount > 0) {
         groupBotEvent({ action: "page-click", tabId: tab.id });
@@ -2855,7 +2912,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         const botAtWork = (tab.botWork || 0) > 0;
         const inFront = tab.id === activeId;
         if (inFront && (theirs || (!botAtWork && userFocus !== window.webContents))) { userFocus = wc; return; }
-        if (inFront && !botAtWork && !waited) { setTimeout(() => decide(true), PERSON_PRESS_WAIT_MS); return; }
+        // A page in another pane waits for its press too: the press makes it
+        // the active tab, and then the focus is the person's.
+        if ((inFront || inPane(tab.id)) && !botAtWork && !waited) { setTimeout(() => decide(true), PERSON_PRESS_WAIT_MS); return; }
         // The person moved on while this waited: nothing to give back.
         if (waited && wc.isFocused && !wc.isFocused()) return;
         giveFocusBack();
@@ -3275,6 +3334,15 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     items.push({ type: "separator" }, ...closedTabMenuItems());
     Menu.buildFromTemplate(items).popup({ window });
   }
+  // One page, two side by side or four in a grid, under the bar's button.
+  // The renderer draws the line icons (in the bar's style and theme) as PNGs.
+  function showSplitMenu({ icons, x, y } = {}) {
+    const icon = mode => menuIcon(icons && typeof icons === "object" ? icons[mode] : undefined);
+    const item = (mode, label) => ({ label, type: "radio", checked: split.mode === mode, icon: icon(mode),
+      click: menuAction(() => setSplitMode(mode)) });
+    const at = Number.isFinite(x) && Number.isFinite(y) ? { x: Math.round(x), y: Math.round(y) } : {};
+    Menu.buildFromTemplate([item(1, "One page"), item(2, "Two side by side"), item(4, "Four in a grid")]).popup({ window, ...at });
+  }
   // Gives a group to a bot (or back to Mia with null). An unnamed group takes
   // the bot's name so the label says who works there.
   function assignGroupBot(groupId, bot) {
@@ -3521,6 +3589,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     }
     activeId = null;
+    splitByWorkspace.clear();
+    split = { mode: 1, slots: [], focus: 0 };
     historyEntries = [];
     historyIcons = new Map();
     downloadEntries = downloadEntries.filter(entry => entry.state === "progressing");
@@ -3665,6 +3735,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         const b = command.bounds;
         if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
         const wasShowing = visible || coveredForMenu;
+        // The renderer draws split view's outline from the panes in the tab state.
+        const resized = b.width !== bounds.width || b.height !== bounds.height;
         bounds = b; visible = command.visible === true;
         const d = command.dock;
         docked.bounds = d && [d.x, d.y, d.width, d.height].every(Number.isFinite) ? d : null;
@@ -3677,13 +3749,25 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         // person works elsewhere in Mia.
         coveredForMenu = wasShowing && !visible && command.menu === true;
         if (wasShowing && !visible && command.menu !== true) { exitPageFullscreen(); void captureMediaState(); }
-        layout(); return;
+        layout();
+        if (resized && split.mode > 1) publish();
+        return;
       }
       if (command.action === "snapshot") {
         // A still of the page in front, shown under an app menu while the
         // live view steps aside.
         const tab = active();
         if (!tab || !visible || tab.view.webContents.isDestroyed()) return { error: "No page to capture." };
+        // Split view: a still of each pane, which the renderer lays out as the panes are.
+        if (split.mode > 1) {
+          const rects = splitRects(bounds, split.mode);
+          return Promise.all(split.slots.map((id, index) => {
+            const item = tabs.get(id);
+            if (!item || !item.url || item.error || item.view.webContents.isDestroyed()) return null;
+            return item.view.webContents.capturePage().then(image => (image.isEmpty() ? null
+              : { rect: rects[index], dataUrl: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}` })).catch(() => null);
+          })).then(panes => (panes.some(Boolean) ? { panes: panes.filter(Boolean) } : { error: "No page to capture." }));
+        }
         return tab.view.webContents.capturePage().then(image => (image.isEmpty()
           ? { error: "No page to capture." }
           : { dataUrl: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}` }));
@@ -3953,6 +4037,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         normalizeGroups(); persistTabs();
       }
       if (command.action === "tabMenu") showTabMenu(command.id);
+      if (command.action === "split") { setSplitMode(command.mode); layout(); }
+      if (command.action === "splitMenu") showSplitMenu(command);
       if (command.action === "groupMenu") showGroupMenu(command.groupId);
       if (command.action === "groupOverflowMenu") showGroupOverflowMenu(command.groupIds);
       if (command.action === "groupNewTab" && groups.has(command.groupId)) {
@@ -4093,6 +4179,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     sessionGroupId = null;
     workspaceKey = key;
     workspaceChangedAt = Date.now();
+    // Split view comes back as this workspace last had it while Mia ran.
+    split = splitByWorkspace.get(key) || { mode: 1, slots: [], focus: 0 };
     statePath = workspaceStatePath(key);
     historyPath = statePath ? `${statePath.replace(/\.json$/, "")}-history.json` : "";
     loadHistory();

@@ -124,6 +124,94 @@
     if (chatRightPane()) { chatRightPane().toggle(); syncRightToggle(); return; }
     miaPane.collapsed = !miaPane.collapsed; applyMiaPane(); saveMiaPane();
   };
+  // Split view: one page, two side by side or four in a grid. The native
+  // side holds which tab is in each pane and sends the panes' rectangles in
+  // the tab state; this draws the button's icon, the focused pane's outline
+  // (in the gap, since pages draw above the HTML) and the empty panes.
+  var SPLIT_FRAME = '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>';
+  var SPLIT_ICONS = { 1: SPLIT_FRAME, 2: SPLIT_FRAME + '<path d="M12 4.5v15"></path>', 4: SPLIT_FRAME + '<path d="M12 4.5v15M3.5 12h17"></path>' };
+  var SPLIT_LABELS = { 1: 'One page', 2: 'Two side by side', 4: 'Four in a grid' };
+  var splitBtn = document.getElementById('localBrowserSplitBtn');
+  var splitLayer = document.createElement('div');
+  splitLayer.className = 'local-browser-panes';
+  splitLayer.hidden = true;
+  screen.append(splitLayer);
+  // The choices open as a native menu, which draws above the pages. Its
+  // icons are the bar's own line icons, drawn once per theme as small PNGs.
+  var splitIconCache = {};
+  function splitMenuIcon(mode, color) {
+    var key = mode + '|' + color;
+    if (splitIconCache[key]) return splitIconCache[key];
+    splitIconCache[key] = new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = 32; canvas.height = 32;
+          canvas.getContext('2d').drawImage(img, 0, 0, 32, 32);
+          resolve(canvas.toDataURL('image/png'));
+        } catch (_splitIconError) { resolve(''); }
+      };
+      img.onerror = function () { resolve(''); };
+      img.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="' + color + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + SPLIT_ICONS[mode] + '</svg>');
+    });
+    return splitIconCache[key];
+  }
+  if (splitBtn) splitBtn.onclick = function () {
+    // The native menu follows the app's theme.
+    var color = developerModeEnabled() ? '#e8e6e3' : '#474747';
+    var rect = splitBtn.getBoundingClientRect();
+    Promise.all([1, 2, 4].map(function (mode) { return splitMenuIcon(mode, color); })).then(function (icons) {
+      command('splitMenu', { icons: { 1: icons[0], 2: icons[1], 4: icons[2] }, x: rect.left, y: rect.bottom + 4 });
+    });
+  };
+  // Returns whether panes are showing, so the page's own empty and error
+  // states step aside for them.
+  function renderSplit() {
+    var split = state.split || { mode: 1 };
+    var mode = SPLIT_ICONS[split.mode] ? split.mode : 1;
+    if (splitBtn) {
+      var icon = splitBtn.querySelector('svg');
+      if (icon && icon.getAttribute('data-mode') !== String(mode)) { icon.innerHTML = SPLIT_ICONS[mode]; icon.setAttribute('data-mode', String(mode)); }
+      splitBtn.title = 'Split view: ' + SPLIT_LABELS[mode].toLowerCase();
+      splitBtn.setAttribute('aria-label', splitBtn.title);
+      splitBtn.setAttribute('aria-pressed', String(mode > 1));
+    }
+    var rects = split.rects || [];
+    var on = mode > 1 && rects.length === mode;
+    screen.classList.toggle('split', on);
+    splitLayer.hidden = !on;
+    if (!on) { if (splitLayer.firstChild) splitLayer.replaceChildren(); splitLayer.drawn = ''; return false; }
+    var byId = {};
+    state.tabs.forEach(function (t) { byId[t.id] = t; });
+    var panes = rects.map(function (rect, index) {
+      var t = byId[split.slots[index]] || null;
+      return { rect: rect, focused: index === split.focus, tab: t && { id: t.id, url: !!t.url, error: t.error || '' } };
+    });
+    var drawn = JSON.stringify(panes);
+    if (drawn === splitLayer.drawn) return true;
+    splitLayer.drawn = drawn;
+    splitLayer.replaceChildren.apply(splitLayer, panes.map(function (pane) {
+      var node = document.createElement('div');
+      node.className = 'local-browser-pane' + (pane.focused ? ' focused' : '');
+      node.style.left = pane.rect.x + 'px'; node.style.top = pane.rect.y + 'px';
+      node.style.width = pane.rect.width + 'px'; node.style.height = pane.rect.height + 'px';
+      var t = pane.tab;
+      // A page covers its pane; only a pane without one says something.
+      if (t && t.url && !t.error) return node;
+      node.classList.add('empty');
+      var title = document.createElement('span');
+      title.className = 'local-browser-empty-title';
+      var line = document.createElement('span');
+      if (!t) { title.textContent = 'Pick a tab'; line.textContent = 'Choose a tab above to show it here.'; }
+      else if (t.error) { title.textContent = 'Could not load this page'; line.textContent = t.error; }
+      else { title.textContent = 'New tab'; line.textContent = 'Type an address above.'; }
+      node.append(title, line);
+      if (t) node.onclick = function () { command('select', { id: t.id }); };
+      return node;
+    }));
+    return true;
+  }
   var miaResize = document.createElement('div');
   miaResize.className = 'local-browser-mia-resize';
   miaResize.setAttribute('role', 'separator');
@@ -791,9 +879,10 @@
     renderPip();
     layout();
     overlay.setAttribute('data-loading', tab && tab.loading ? 'true' : 'false');
-    document.getElementById('localBrowserEmpty').hidden = !!url;
+    var splitOn = renderSplit();
+    document.getElementById('localBrowserEmpty').hidden = !!url || splitOn;
     var blocked = document.getElementById('localBrowserBlocked');
-    blocked.hidden = !(tab && tab.error);
+    blocked.hidden = !(tab && tab.error) || splitOn;
     if (tab && tab.error) {
       document.getElementById('localBrowserBlockedTitle').textContent = 'Could not load this page';
       document.getElementById('localBrowserBlockedMessage').textContent = tab.error;
@@ -1552,21 +1641,43 @@
     }
     var pending = command('snapshot').then(function (result) {
       if (!current()) return false;
-      if (!result || !result.dataUrl) return true;
-      // Decode away from the displayed image: a dismissed capture must not
-      // mutate its source or become visible after a later page takes over.
-      var image = new Image();
-      image.src = result.dataUrl;
-      return image.decode().then(function () {
+      if (!result || !(result.dataUrl || result.panes)) return true;
+      return (result.panes ? paneStill(result.panes) : Promise.resolve(result.dataUrl)).then(function (dataUrl) {
         if (!current()) return false;
-        snapshot.src = result.dataUrl;
-        snapshot.hidden = false;
-        return true;
+        if (!dataUrl) return true;
+        // Decode away from the displayed image: a dismissed capture must not
+        // mutate its source or become visible after a later page takes over.
+        var image = new Image();
+        image.src = dataUrl;
+        return image.decode().then(function () {
+          if (!current()) return false;
+          snapshot.src = dataUrl;
+          snapshot.hidden = false;
+          return true;
+        });
       });
     }).catch(function () { return current(); });
     stillPending = pending;
     pending.then(function () { if (stillPending === pending) stillPending = null; });
     return pending;
+  }
+  // Split view sends a still of each pane; they are drawn into one picture
+  // where the panes are, over the gap color.
+  function paneStill(panes) {
+    var box = screen.getBoundingClientRect(), scale = window.devicePixelRatio || 1;
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(box.width * scale));
+    canvas.height = Math.max(1, Math.round(box.height * scale));
+    var context = canvas.getContext('2d');
+    context.fillStyle = getComputedStyle(screen).backgroundColor || '#ededeb';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return Promise.all(panes.map(function (pane) {
+      var image = new Image();
+      image.src = pane.dataUrl;
+      return image.decode().then(function () {
+        context.drawImage(image, pane.rect.x * scale, pane.rect.y * scale, pane.rect.width * scale, pane.rect.height * scale);
+      }).catch(function () {});
+    })).then(function () { return canvas.toDataURL('image/jpeg', 0.85); }, function () { return ''; });
   }
   function hideStill() {
     if (downloadsRequested || suggestRequested || tabsListRequested || followMenuRequested || callMenuRequested || tipsRequested) return;
