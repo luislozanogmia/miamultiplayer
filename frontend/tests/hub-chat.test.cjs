@@ -426,10 +426,15 @@ test('a shared channel alert names the sender and channel, not "replied"',()=>{
   assert.deepEqual(shown.map(s=>[s.title,s.body]),[['ana in #general','hello team'],['Helper in #general','New message'],['ana in #general','Sent an image'],
     ['ana in #general','see this'],['ana in #general','Shared a Google Drive file']]);
 });
-test('Edit says the edited text is sent as a new message',()=>{
+test('Edit and resend deletes the original, then sends the edited text',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
   assert.match(html,/id="chatCtxEdit">&#9998; Edit and resend</);
-  assert.match(source,/appPrompt\(original, \{title: 'Edit and resend', message: 'Your edited text is sent as a new message\. The original stays\.', submitLabel: 'Send'\}\)/);
+  assert.match(source,/appPrompt\(original, \{title: 'Edit and resend', message: 'Your edited text replaces this message\.', submitLabel: 'Send'\}\)/);
+  // From a bot's reply it is the request that goes, never the reply.
+  assert.match(source,/var originalId = asked && asked\.hubReplyTo \? asked\.hubReplyTo : eventId;[\s\S]{0,160}?Promise\.resolve\(removeChatMessage\(roomId, originalId\)\)\.then\(function\(\)\{\n\s+if\(chatWs\.activeRoomId === roomId\) sendActiveRoomMessage\(result\.text\.trim\(\)\);/);
+  // Delete and Edit share one deletion path, for company channels and Solo.
+  assert.match(source,/function removeChatMessage\(roomId, eventId\)\{\n\s+if\(inHubRoom\(roomId\)\) return deleteHubMessage\(roomId, eventId\);/);
+  assert.match(source,/appConfirm\('Delete this message\?'\)\.then\(function\(ok\)\{\n\s+if\(ok\) removeChatMessage\(roomId, eventId\);/);
 });
 test('a shared channel shows placeholder bars, not "No messages yet", before its history arrives',()=>{
   // The placeholder comes first; a company bot chat's intro, then the empty state, only once history is in.

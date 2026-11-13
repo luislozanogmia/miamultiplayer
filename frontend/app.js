@@ -12966,8 +12966,8 @@
   }
 
   // Editing is deliberately narrower than deletion: only a human-authored
-  // prompt belonging to the signed-in user may be re-sent. The original
-  // event is not changed; the edit action creates a new root prompt.
+  // prompt belonging to the signed-in user may be re-sent. The edit action
+  // deletes the original and sends the edited text as a new root prompt.
   function chatMsgEditable(m){
     if(m.system || m.pending || m.sendFailed || !isHumanSender(m.sender)) return false;
     var senderEmail = parseSignedHumanBody(m.body).agent;
@@ -14535,32 +14535,40 @@
     var roomId = chatWs.activeRoomId;
     if(!roomId || !eventId) return;
     appConfirm('Delete this message?').then(function(ok){
-      if(!ok) return;
-      if(inHubRoom(roomId)) return deleteHubMessage(roomId, eventId);
-      var state = chatRoomState(roomId);
-      if(state.messages.some(function(m){ return m.id === eventId && m.sendFailed; })){
-        state.messages = state.messages.filter(function(m){ return m.id !== eventId; });
-        renderChatSidebar(); renderChatThread();
-        return;
-      }
-      api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId)), {method:'DELETE'}).then(function(res){
-        if(res.status !== 200) return;
-        if(res.data && res.data.event) applyNativeEvent(res.data.event);
-      }).catch(function(){});
+      if(ok) removeChatMessage(roomId, eventId);
     });
   }
+  // Deletes one message the user may delete; the promise settles either way.
+  function removeChatMessage(roomId, eventId){
+    if(inHubRoom(roomId)) return deleteHubMessage(roomId, eventId);
+    var state = chatRoomState(roomId);
+    if(state.messages.some(function(m){ return m.id === eventId && m.sendFailed; })){
+      state.messages = state.messages.filter(function(m){ return m.id !== eventId; });
+      renderChatSidebar(); renderChatThread();
+      return Promise.resolve();
+    }
+    return api(nativeConversationPath(roomId, '/events/' + encodeURIComponent(eventId)), {method:'DELETE'}).then(function(res){
+      if(res.status === 200 && res.data && res.data.event) applyNativeEvent(res.data.event);
+    }).catch(function(){});
+  }
 
-  // Opens the editable copy of a user's prompt. A confirmed edit is sent as
-  // a new root message so Mia/the team see it at the end of the conversation;
-  // no stored event is rewritten and no automatic redo is triggered.
+  // Opens the editable copy of a user's prompt. A confirmed edit takes the
+  // original's place: the original is deleted and the edited text is sent as
+  // a new message at the end of the conversation. A reply already given to
+  // the original stays.
   function handleEditChatMessage(eventId){
     var roomId = chatWs.activeRoomId;
     var original = inHubRoom(roomId) ? hubEditablePrompt(roomId, eventId) : editableChatPromptForEvent(roomId, eventId);
     if(!roomId || !original) return;
-    appPrompt(original, {title: 'Edit and resend', message: 'Your edited text is sent as a new message. The original stays.', submitLabel: 'Send'}).then(function(result){
+    appPrompt(original, {title: 'Edit and resend', message: 'Your edited text replaces this message.', submitLabel: 'Send'}).then(function(result){
       if(!result || !result.ok || !result.text.trim()) return;
-      if(chatWs.activeRoomId !== roomId) return;
-      sendActiveRoomMessage(result.text.trim());
+      // From a bot's reply, the message replaced is the request behind it.
+      var asked = (chatRoomState(roomId).messages || []).filter(function(m){ return m.id === eventId; })[0];
+      var originalId = asked && asked.hubReplyTo ? asked.hubReplyTo : eventId;
+      // The edited text is sent even when the original could not be deleted.
+      Promise.resolve(removeChatMessage(roomId, originalId)).then(function(){
+        if(chatWs.activeRoomId === roomId) sendActiveRoomMessage(result.text.trim());
+      });
     });
   }
 
