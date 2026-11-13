@@ -25,7 +25,7 @@ function fixture(t,localOwner=owner,bundleSkills=()=>[]) {
       if(fail) throw new Error('connection interrupted');
       const id=url.split('/').at(-1);
       if(options.method==='PUT') return placed?new Response(JSON.stringify({bot:{id,is_owner:true}})):new Response(JSON.stringify({error:'not_found'}),{status:404});
-      if(options.method==='GET') return definition?new Response(JSON.stringify({bot:{id,is_owner:definition.owner!==false},definition})):new Response(JSON.stringify({error:'not_found'}),{status:404});
+      if(options.method==='GET') return definition?new Response(JSON.stringify({bot:{id,is_owner:definition.owner!==false,can_publish:definition.canPublish===true||definition.owner!==false},definition})):new Response(JSON.stringify({error:'not_found'}),{status:404});
       const body=JSON.parse(options.body);
       if(url.endsWith('/versions')) return versionAnswer?versionAnswer():new Response(JSON.stringify({bot:{id:url.split('/').at(-2)},version:2}));
       return shareAnswer?shareAnswer():new Response(JSON.stringify({bot:{id:body.id,name:body.name,shared_by:'user_owner',is_owner:true}}));
@@ -91,6 +91,8 @@ test('an edit made inside the company is live for everyone at once, and only whe
   assert.match(versions()[0].url,new RegExp('/v1/teams/'+teamId+'/market/bots/'+shared.bot.id+'/versions$'));
   f.setDefinition({version:2,name:'Helper',instructions:'Something else',skills:[skill],owner:false});
   assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[]},'only an owner of the company bot changes it');
+  f.setDefinition({version:2,name:'Helper',instructions:'Something else',skills:[skill],owner:false,canPublish:true});
+  assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[{botId:shared.bot.id,version:2}]},'a workspace admin can publish without being a bot owner');
   assert.deepEqual(await f.client.update(owner,{teamId:'b'.repeat(32),localBotId:f.bot.id},'fixture.token'),{updated:[]},'another company keeps its own copy');
 });
 
