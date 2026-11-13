@@ -223,8 +223,9 @@ function existingProfileModel(config) {
 }
 
 // Every Mia profile (Mia, bots, private agents, scheduled runs) compresses at
-// the same point, so a long chat behaves the same wherever it runs.
-const COMPRESSION_THRESHOLD_TOKENS = 64000;
+// the same point, so a long chat behaves the same wherever it runs. This is a
+// ceiling: Hermes compresses sooner for a model whose window calls for less.
+const COMPRESSION_THRESHOLD_TOKENS = 300000;
 function runtimeProfileConfig({
   toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null, mcpApps = [],
   disabledToolsets = [],
@@ -252,10 +253,10 @@ function runtimeProfileConfig({
     'auxiliary:',
     '  background_review:',
     `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
-    // Long chats stay fast: Hermes summarizes older turns once a request
-    // passes this size, before sending it, and keeps working. Its default
-    // waits for half the model's window (up to 256k tokens), so a large
-    // window resent ~170k tokens every step and each one took 10-40 s.
+    // Hermes summarizes older turns once a request passes this size or its
+    // own share of the model's window, whichever is smaller, before sending
+    // it, and keeps working. A lower fixed size (64k) cut long chats short
+    // on models with room for far more.
     // The last turns stay word for word, including the last few requests.
     'compression:',
     '  enabled: true',
