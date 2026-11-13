@@ -170,7 +170,7 @@ const { colorFromHue, botColorForName } = require('./bot-colors');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
-const { extractToolActivity } = require('./agent-activity');
+const { extractToolActivity, toolActivityLine } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
 const turnFiles = require('./turn-files');
 const { createConversationRouter } = require('./conversation-router');
@@ -7718,6 +7718,9 @@ function redactHermesChatDetail(value) {
   return text;
 }
 
+// Any other event shows at most this much of its detail.
+const HERMES_DEBUG_EVENT_CHARS = 600;
+
 function hermesDebugEventText(type, payload) {
   const eventType = String(type || '').trim();
   const event = payload && typeof payload === 'object' ? payload : {};
@@ -7743,6 +7746,10 @@ function hermesDebugEventText(type, payload) {
     const kind = String(event.kind || '').trim();
     return status ? `Status${kind ? ` — ${kind}` : ''}\n${status}` : '';
   }
+
+  // A tool call is one plain line. Its command, code and output stay out of
+  // the chat: a single file write would otherwise fill the screen.
+  if (eventType.startsWith('tool.')) return toolActivityLine(eventType, event);
 
   const name = String(event.name || event.tool || '').trim();
   const lines = [`Debug · ${eventType}${name ? ` — ${name}` : ''}`];
@@ -7773,7 +7780,8 @@ function hermesDebugEventText(type, payload) {
     delete details.tool;
     if (Object.keys(details).length) lines.push(`Details:\n${redactHermesChatDetail(JSON.stringify(details, null, 2))}`);
   }
-  return lines.join('\n');
+  const text = lines.join('\n');
+  return text.length > HERMES_DEBUG_EVENT_CHARS ? `${text.slice(0, HERMES_DEBUG_EVENT_CHARS)}…` : text;
 }
 
 function splitHermesDebugText(text, maxLength = 7000) {
