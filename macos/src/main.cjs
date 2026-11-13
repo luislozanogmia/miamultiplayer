@@ -346,6 +346,14 @@ function updateMessage(options) {
   return dialog.showMessageBox(window, options);
 }
 
+// Where an update stands, for the page to show while it downloads.
+let updateState = { phase: "idle" };
+let offerUpdateInstall = null;
+function showUpdateState(state) {
+  updateState = state;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("miaos-update-state", state);
+}
+
 function configureAutoUpdates() {
   if (autoUpdateConfigured) return true;
   // electron-updater covers both desktop targets: signed zip/dmg feeds on
@@ -362,8 +370,9 @@ function configureAutoUpdates() {
   const updateReadiness = attachUpdateReadiness({
     updater: autoUpdater, nativeUpdater: nativeAutoUpdater, platform: process.platform,
     directories: [app.getPath("userData"), app.getPath("temp"), path.dirname(app.getPath("exe"))],
-    notify: updateMessage, log: desktopLog,
+    notify: updateMessage, log: desktopLog, onState: showUpdateState,
   });
+  offerUpdateInstall = updateReadiness.offerInstall;
   autoUpdater.on("update-not-available", () => {
     if (!autoUpdateCheckInteractive) return;
     updateMessage({
@@ -2453,6 +2462,12 @@ createDesktopNotifications({
   },
   log: message => desktopLog(message),
 }).register(ipcMain);
+
+ipcMain.handle("miaos-update", (event, action) => {
+  if (!isMainWindowSender(event)) return { phase: "idle" };
+  if (action === "install" && updateState.phase === "ready" && offerUpdateInstall) void offerUpdateInstall();
+  return updateState;
+});
 
 ipcMain.handle("miaos-retry-connection", async (event) => {
   if (!isMainWindowSender(event)) return false;

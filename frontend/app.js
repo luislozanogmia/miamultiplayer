@@ -1964,6 +1964,7 @@
     Promise.resolve(window.miaDesktop.defaultBrowser.get()).then(renderSettingsDefaultBrowserState).catch(function(){ row.hidden = true; });
   }
   if(window.miaDesktop && window.miaDesktop.onOpenSettings) window.miaDesktop.onOpenSettings(function(){ openSettingsDrawer(); });
+  MiaUpdateCue.mount(el('#miaUpdateCue'), window.miaDesktop && window.miaDesktop.updates);
   function openSettingsDrawer(pane){
     // Same constraint as openHarnessOnboarding: the native browser view
     // covers HTML overlays, so close its panel before showing the sheet.

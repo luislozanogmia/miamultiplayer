@@ -1168,6 +1168,20 @@
   .chat-pre-reasoning-toggle.expanded .chat-pre-reasoning-chevron,.chat-expandable-toggle.expanded .chat-expandable-chevron{transform:rotate(225deg) translate(-1px,-1px);}
   .chat-pre-reasoning-full .chat-md-p:last-child,.chat-pre-reasoning-full .chat-md-list:last-child,.chat-expandable-full .chat-md-p:last-child,.chat-expandable-full .chat-md-list:last-child{margin-bottom:0;}
   .chat-msg-thinking{display:inline-block;color:var(--sand-text-secondary);background:transparent;padding:0;}
+  /* The sidebar's sign that a new version is downloading; it fills as the download goes. */
+  .update-cue{position:relative;flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;overflow:hidden;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:default;}
+  .update-cue[hidden]{display:none;}
+  /* At rail width only the mark fits. */
+  @media (max-width:1100px){.update-cue{margin:4px auto;padding:7px;}.update-cue-text,.update-cue-detail{display:none;}}
+  .update-cue-bar{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--sand-fill-ghost-hover);transition:width .4s ease;pointer-events:none;}
+  .update-cue-icon,.update-cue-text,.update-cue-detail{position:relative;}
+  .update-cue-icon{flex:0 0 auto;}
+  .update-cue-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .update-cue-detail{flex:0 0 auto;font-variant-numeric:tabular-nums;color:var(--sand-text-tertiary);}
+  .update-cue.is-ready{cursor:pointer;color:var(--sand-text-primary);border-color:var(--sand-border-default);}
+  .update-cue.is-ready .update-cue-bar{display:none;}
+  .update-cue.is-ready:hover{background:var(--sand-fill-ghost-hover);}
+  .update-cue.is-ready:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:2px;}
   /* A run's thinking and tool calls, folded into one muted line the user can open. */
   .chat-steps-row{padding-top:0;padding-bottom:0;}
   .chat-steps-row:hover{background:transparent;}

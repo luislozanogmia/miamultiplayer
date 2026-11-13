@@ -126,3 +126,56 @@ test("large update reports its calculated space requirement", async () => {
   await tick();
   assert.match(notices[0].detail, /6\.0 GB/);
 });
+
+test("the window hears a download's progress, then that it is ready, and can reopen the restart offer", async () => {
+  const updater = new EventEmitter();
+  const states = [], installs = [];
+  let prompts = 0;
+  updater.downloadUpdate = async () => {
+    updater.emit("download-progress", { percent: 41.6 });
+    updater.emit("download-progress", { percent: 180 });
+  };
+  updater.quitAndInstall = (...args) => installs.push(args);
+  const readiness = attachUpdateReadiness({ updater, platform: "win32", directories: ["/app"],
+    statfs: async () => ({ bavail: 100 * 1024 ** 3, bsize: 1 }),
+    notify: async () => ({ response: ++prompts === 1 ? 1 : 0 }), log: () => {}, onState: state => states.push(state) });
+  updater.emit("download-progress", { percent: 5 });
+  updater.emit("update-available", { version: "9.9.9" });
+  await tick(); await tick();
+  updater.emit("update-downloaded", { version: "9.9.9" });
+  await tick();
+  assert.deepEqual(states, [
+    { phase: "downloading", version: "9.9.9", percent: 0 },
+    { phase: "downloading", version: "9.9.9", percent: 42 },
+    { phase: "downloading", version: "9.9.9", percent: 100 },
+    { phase: "ready", version: "9.9.9" },
+  ]);
+  assert.deepEqual(installs, []);
+  await readiness.offerInstall();
+  assert.deepEqual(installs, [[true, true]]);
+});
+
+test("macOS shows preparing between the download and the native ready signal, and a failure clears the cue", async () => {
+  const updater = new EventEmitter(), nativeUpdater = new EventEmitter();
+  const states = [];
+  updater.downloadUpdate = async () => {};
+  updater.quitAndInstall = () => {};
+  attachUpdateReadiness({ updater, nativeUpdater, platform: "darwin", directories: ["/app"],
+    statfs: async () => ({ bavail: 100 * 1024 ** 3, bsize: 1 }),
+    notify: async () => ({ response: 1 }), log: () => {}, onState: state => states.push(state.phase) });
+  updater.emit("update-available", { version: "9.9.9" });
+  await tick(); await tick();
+  updater.emit("update-downloaded", { version: "9.9.9" });
+  nativeUpdater.emit("update-downloaded");
+  await tick();
+  assert.deepEqual(states, ["downloading", "preparing", "ready"]);
+
+  const failing = new EventEmitter(), failed = [];
+  failing.downloadUpdate = async () => { throw new Error("network"); };
+  attachUpdateReadiness({ updater: failing, platform: "win32", directories: ["/app"],
+    statfs: async () => ({ bavail: 100 * 1024 ** 3, bsize: 1 }),
+    notify: async () => ({ response: 0 }), log: () => {}, onState: state => failed.push(state.phase) });
+  failing.emit("update-available", { version: "9.9.9" });
+  await tick(); await tick();
+  assert.deepEqual(failed, ["downloading", "idle"]);
+});

@@ -34,7 +34,10 @@ async function assertUpdateSpace(info, directories, statfs = fs.promises.statfs)
   }
 }
 
-function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, notify, log, statfs }) {
+// onState tells the window where an update stands, so the app can show it:
+// { phase: "downloading", version, percent } | { phase: "preparing", version }
+// | { phase: "ready", version } | { phase: "idle" }.
+function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, notify, log, statfs, onState = () => {} }) {
   let downloading = false;
   let preparing = false;
   let promptOpen = false;
@@ -43,7 +46,12 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
   let nativeReady = false;
   let failureShown = false;
   const reportedErrors = new WeakSet();
+  let version = "";
   updater.autoDownload = false;
+
+  function tell(state) {
+    try { onState(state); } catch (error) { log(`update state not shown: ${error?.message || error}`); }
+  }
 
   function report(error) {
     if (error && typeof error === "object") reportedErrors.add(error);
@@ -51,6 +59,7 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
     installRequested = false;
     pendingInfo = undefined;
     nativeReady = false;
+    tell({ phase: "idle" });
     if (failureShown) return;
     failureShown = true;
     const diskFull = error?.code === "ENOSPC" || /ENOSPC|no space left|disk.*full/i.test(error?.message || "");
@@ -70,6 +79,7 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
     if (!pendingInfo || promptOpen || installRequested || (platform === "darwin" && !nativeReady)) return;
     preparing = false;
     promptOpen = true;
+    tell({ phase: "ready", version });
     try {
       const result = await notify({
         type: "info", title: "Mia update ready",
@@ -95,13 +105,23 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
     try {
       await assertUpdateSpace(info, directories, statfs);
       preparing = true;
+      version = String(info?.version || "");
+      tell({ phase: "downloading", version, percent: 0 });
       await updater.downloadUpdate();
     } catch (error) { report(error); }
     finally { downloading = false; }
   });
+  updater.on("download-progress", progress => {
+    if (!preparing || failureShown || pendingInfo) return;
+    const percent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
+    tell({ phase: "downloading", version, percent });
+  });
   updater.on("update-downloaded", info => {
     if (failureShown) return;
     pendingInfo = info;
+    version = String(info?.version || version);
+    // On macOS the download still has to be unpacked before it can install.
+    if (platform === "darwin" && !nativeReady) tell({ phase: "preparing", version });
     void offerInstall();
   });
   if (platform === "darwin") {
@@ -116,7 +136,7 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
   updater.on("error", error => {
     if (downloading || preparing || installRequested) report(error);
   });
-  return { handledError: error => Boolean(error && typeof error === "object" && reportedErrors.has(error)) };
+  return { handledError: error => Boolean(error && typeof error === "object" && reportedErrors.has(error)), offerInstall };
 }
 
 module.exports = {
