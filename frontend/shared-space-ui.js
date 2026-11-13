@@ -26,7 +26,7 @@
     confirming:null, approveEach:false, approved:{}, approving:{}, ignored:{}, joined:false, resumeChecked:false, dismissed:{}, rung:{}, invited:{}, callMenu:null, joinedAt:0,
     sharePicking:null, activeAt:0, aloneSince:0, ending:null, endingCard:null, zoomed:false, covered:false, mapHidden:false, mesh:null, frames:{}, pointers:{}, botPoints:{}, worked:{}, done:{}, lastBot:{}, frameBusy:false, frameTick:0, cursorSig:'', cursorTab:null, pillSig:'', sendQueue:null, joinReady:false,
     talk: window.MiaSpaceTalk ? window.MiaSpaceTalk.createTranscript() : null, listener:null, listening:false, listenStarting:false,
-    ideas: window.MiaSpaceTalk ? window.MiaSpaceTalk.createIdeas() : null, suggester:null};
+    ideas: window.MiaSpaceTalk ? window.MiaSpaceTalk.createIdeas() : null, suggester:null, reviewingIdea:null};
 
   function key(){ return Array.from(crypto.getRandomValues(new Uint8Array(8)), function(b){ return b.toString(16).padStart(2, '0'); }).join(''); }
   function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch){ return '&#' + ch.charCodeAt(0) + ';'; }); }
@@ -403,7 +403,7 @@
   // Tells this computer's backend a session is live, so Mia and bots are reminded on every turn.
   function announce(active){ var h = host(); if(h && h.sharedSession) h.sharedSession(active); }
   function start(channelId, space, groupId, links){
-    s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {};
+    s.space = space; s.teamKey = teamKey(); s.channelId = channelId; s.groupId = groupId; s.links = links || {}; s.reviewingIdea = null;
     s.presence = {}; s.participants = {}; s.follow = null; s.sent = {}; s.confirming = null; s.approveEach = false; s.approved = {}; s.approving = {}; s.ignored = {}; s.joined = false;
     s.sendQueue = null; s.joinReady = false;
     if(me()) s.participants[me().id] = true;
@@ -621,6 +621,7 @@
     if(s.suggester) s.suggester.stop();
     s.suggester = null;
     if(s.ideas) s.ideas.clear();
+    s.reviewingIdea = null;
     if(s.mesh) s.mesh.close();
     s.mesh = null; s.frames = {}; s.pointers = {}; s.botPoints = {}; s.worked = {}; s.done = {}; s.lastBot = {};
     s.cursorSig = ''; s.frameTick = 0; s.viewSig = ''; s.viewAt = 0;
@@ -707,7 +708,9 @@
   // Taking an idea asks this person's own Mia to do it, and tells the others it is taken.
   function takeIdea(ideaKey){
     var self = me(), h = host();
-    if(!bound() || !self || !h || !h.ask) return;
+    if(!bound() || !self || !h || !h.ask || !s.ideas ||
+      !s.ideas.open().some(function(idea){ return idea.key === ideaKey && idea === s.reviewingIdea; })) return;
+    s.reviewingIdea = null;
     var idea = s.ideas.take(ideaKey, {id: self.id, name: self.name});
     if(!idea) return render();
     if(s.mesh) s.mesh.sendKept({t: 'ga', by: idea.by, id: idea.id});
@@ -719,9 +722,13 @@
     var self = me(), h = host(), mote = h && h.moteSrc ? h.moteSrc('Mia') : '';
     return s.ideas.open().map(function(idea){
       var taker = idea.taken && (self && idea.taken.id === self.id ? 'You asked Mia to do this' : idea.taken.name + ' asked Mia to do this');
-      return '<div class="mia-space-slim mia-space-idea' + (taker ? ' taken' : '') + '">' + (mote ? '<img class="mia-space-idea-mote" alt="" src="' + esc(mote) + '">' : '') +
-        '<span class="mia-space-text" title="' + esc(idea.ask) + '"><b>' + esc(idea.title) + '</b><span class="mia-space-hint">' + esc(taker || 'Mia suggests, from what was said') + '</span></span>' +
-        (taker ? '' : '<span class="mia-space-choices"><button type="button" class="mia-space-btn primary" data-space-idea-do="' + esc(idea.key) + '">Do it</button>' +
+      var reviewing = !taker && s.reviewingIdea === idea;
+      return '<div class="mia-space-slim mia-space-idea' + (taker ? ' taken' : '') + (reviewing ? ' reviewing' : '') + '">' + (mote ? '<img class="mia-space-idea-mote" alt="" src="' + esc(mote) + '">' : '') +
+        '<span class="mia-space-text"><b>' + esc(idea.title) + '</b><span class="mia-space-hint">' + esc(taker || 'Mia suggests, from what was said') + '</span></span>' +
+        (reviewing ? '<p class="mia-space-idea-request"><span class="mia-space-hint">Request Mia will receive:</span><br>' + esc(idea.ask) + '</p>' : '') +
+        (taker ? '' : '<span class="mia-space-choices">' + (reviewing
+          ? '<button type="button" class="mia-space-btn primary" data-space-idea-do="' + esc(idea.key) + '">Ask Mia</button><button type="button" class="mia-space-btn" data-space-idea-cancel="' + esc(idea.key) + '">Cancel</button>'
+          : '<button type="button" class="mia-space-btn primary" data-space-idea-review="' + esc(idea.key) + '">Review request</button>') +
           '<button type="button" class="mia-space-btn icon" data-space-idea-no="' + esc(idea.key) + '" aria-label="Dismiss" title="Dismiss">×</button></span>') + '</div>';
     }).join('');
   }
@@ -1207,8 +1214,14 @@
     else if(target.hasAttribute('data-space-leave')) leave(false);
     else if(target.hasAttribute('data-space-look')){ s.callMenu = null; lookHere(); renderCall(); }
     else if(target.hasAttribute('data-space-listen')) toggleListening();
+    else if(target.hasAttribute('data-space-idea-review')){
+      var reviewKey = target.getAttribute('data-space-idea-review');
+      if(s.ideas) s.reviewingIdea = s.ideas.open().find(function(idea){ return idea.key === reviewKey && !idea.taken; }) || null;
+      render();
+    }
     else if(target.hasAttribute('data-space-idea-do')) takeIdea(target.getAttribute('data-space-idea-do'));
-    else if(target.hasAttribute('data-space-idea-no')){ s.ideas.dismiss(target.getAttribute('data-space-idea-no')); render(); }
+    else if(target.hasAttribute('data-space-idea-cancel')){ s.reviewingIdea = null; render(); }
+    else if(target.hasAttribute('data-space-idea-no')){ s.ideas.dismiss(target.getAttribute('data-space-idea-no')); s.reviewingIdea = null; render(); }
     else if(target.hasAttribute('data-space-transcript')){
       // The same click has already closed an open menu; pressing the button again leaves it closed.
       var reopened = s.closedMenu && s.closedMenu.event === event && s.closedMenu.menu === 'transcript';
