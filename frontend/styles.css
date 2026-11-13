@@ -4040,6 +4040,23 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .mia-space-call-menu > button[role="menuitem"]:hover{background:var(--sand-fill-ghost-hover);}
 .mia-space-call-menu.invite{width:300px;gap:6px;padding:12px;}
 .mia-space-invitees{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;}
+/* What people say in a session, written down with their names. */
+.mia-space-call .mia-space-btn.listen{display:inline-flex;align-items:center;gap:6px;}
+.mia-space-call .mia-space-btn.listen svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;}
+.mia-space-call .mia-space-btn.listen.on{border-color:transparent;background:#d92d20;color:#fff;}
+.mia-space-call .mia-space-btn.listen.on:hover{background:#b42318;}
+.mia-space-faces .mia-space-chip.listening,.mia-space-faces .mia-space-person.listening .mia-space-chip{box-shadow:0 0 0 2px #d92d20;}
+.mia-space-talk{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.mia-space-talk-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;}
+.mia-space-talk-head .mia-space-hint{display:inline-flex;align-items:center;gap:6px;min-width:0;}
+.mia-space-talk-head .mia-space-live-dot{background:#d92d20;}
+.mia-space-talk-head .mia-space-btn{height:24px;padding:0 9px;font-size:12px;}
+.mia-space-lines{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.mia-space-line{margin:0;font-size:13px;line-height:1.4;color:var(--sand-text-primary);overflow-wrap:anywhere;}
+.mia-space-line b{font-weight:600;}
+.mia-space-line time{margin-right:6px;font-size:11px;font-variant-numeric:tabular-nums;color:var(--sand-text-secondary);}
+.mia-space-call-menu.transcript{width:380px;max-width:calc(100vw - 24px);gap:6px;padding:12px;}
+.mia-space-lines.full{gap:6px;max-height:min(360px,60vh);overflow-y:auto;}
 .mia-space-invitee{display:flex;align-items:center;gap:8px;min-height:28px;}
 .mia-space-invitee-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .mia-space-chat-invites{flex:none;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-bottom:1px solid var(--sand-border-subtle);}

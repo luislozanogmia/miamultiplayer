@@ -21152,14 +21152,11 @@
       micBtn.classList.toggle('recording', next === 'recording');
       micBtn.disabled = next === 'transcribing' || next === 'starting';
     }
-    function speechFetch(path, opts){
-      opts = opts || {};
-      opts.credentials = 'include';
-      opts.headers = Object.assign({'X-MiaOS-Workspace':activeWorkspaceKey}, opts.headers || {});
-      return fetch(path, opts).then(function(r){
-        return r.json().catch(function(){ return {}; }).then(function(data){ return {status:r.status, data:data}; });
-      });
-    }
+    // Also what a shared session's transcript listens with.
+    var engine = window.MiaSpeech = D.createEngine({
+      fetch: function(path, init){ return fetch(path, init); },
+      workspace: function(){ return activeWorkspaceKey; }
+    });
     function releaseMic(){
       if(stream){ stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
       recorder = null;
@@ -21169,23 +21166,10 @@
       show(message, {notice:true, autoHide:7000});
     }
 
-    // Engine/model gate. The model download only ever starts from this
-    // explicit confirmation, and goes to the user's Mia data folder.
     function ensureReady(){
-      return speechFetch('/api/speech/status').then(function(res){
-        var s = res.data || {};
-        if(!s.binaryReady){
-          throw new Error('Dictation is missing from this copy of Mia. Reinstall Mia to get it back.');
-        }
-        if(s.modelReady) return true;
-        if(!window.confirm('Dictation runs on this computer with the whisper.cpp "' + s.model + '" speech model (about 142 MB).\n\nDownload it once from huggingface.co into your Mia data folder? Your audio is never uploaded anywhere.')){
-          return false;
-        }
-        show('Downloading speech model… (one time, about 142 MB)');
-        return speechFetch('/api/speech/model', {method:'POST'}).then(function(done){
-          if(done.status !== 200) throw new Error((done.data && done.data.message) || 'Model download failed.');
-          return true;
-        });
+      return engine.ready({
+        confirm: function(text){ return window.confirm(text); },
+        onDownloading: function(){ show('Downloading speech model… (one time, about 142 MB)'); }
       });
     }
 
@@ -21222,10 +21206,8 @@
           return D.toWav16k(channels, audio.sampleRate);
         });
       }).then(function(wav){
-        return speechFetch('/api/speech/transcribe', {method:'POST', headers:{'Content-Type':'audio/wav'}, body:wav});
-      }).then(function(res){
-        if(res.status !== 200) throw new Error((res.data && res.data.message) || 'Transcription failed.');
-        var text = String((res.data && res.data.text) || '').trim();
+        return engine.transcribe(wav);
+      }).then(function(text){
         setState('idle');
         if(!text){ show('No speech detected.', {notice:true, autoHide:3000}); return; }
         var input = el('#ccInput');

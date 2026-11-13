@@ -27,7 +27,7 @@ async function sharedBar({ stored = new Map(), browserState = null, selfId = 'me
   };
   const context = vm.createContext({ window, document: window.document, crypto, setInterval() { return 1; }, clearInterval() {},
     setTimeout() { return 1; }, clearTimeout() {}, Date, Promise, JSON, Object, Array, Uint8Array, String, Number, URL, URLSearchParams });
-  for (const file of ['safe-page-url.js', 'shared-space.js', 'shared-space-live.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
+  for (const file of ['safe-page-url.js', 'shared-space.js', 'shared-space-live.js', 'shared-space-talk.js', 'shared-space-ui.js']) vm.runInContext(await readFile(new URL('./' + file, import.meta.url), 'utf8'), context);
   await new Promise((resolve) => setImmediate(resolve));
   const click = (attribute, value = '') => listeners.click({ target: { closest: () => ({ hasAttribute: (name) => name === attribute, getAttribute: () => value }) } });
   const model = window.MiaSharedSpace, ui = window.MiaSpaceUI;
@@ -400,7 +400,7 @@ test('a minimap tile follows its page title without sending an update', async ()
 
 test('the Invite list closes when you click away, press Escape or click the page', async () => {
   const source = await readFile(new URL('./shared-space-ui.js', import.meta.url), 'utf8');
-  assert.match(source, /document\.addEventListener\('click', function\(event\)\{ if\(!callBar\.contains\(event\.target\)\) closeCallMenu\(\); \}, true\)/);
+  assert.match(source, /document\.addEventListener\('click', function\(event\)\{ if\(!callBar\.contains\(event\.target\)\) closeCallMenu\(event\); \}, true\)/);
   assert.match(source, /event\.key === 'Escape'\) closeCallMenu\(\)/);
   assert.match(source, /window\.addEventListener\('blur', closeCallMenu\)/);
 });
@@ -571,4 +571,123 @@ test('a person is shown on the title their tab has now, not the one it had when 
 test('the live page also steps aside for confirm cards and the image viewer, and relays out when one opens', async () => {
   const browser = await readFile(new URL('./native-browser.js', import.meta.url), 'utf8');
   assert.match(browser, /new MutationObserver\(function \(\) \{ layout\(\); \}\)\.observe\(document\.body, \{ childList: true \}\)/);
+});
+
+// A session with a microphone, a speech engine and direct connections, all stand-ins.
+async function talkingBar() {
+  const page = await sharedBar();
+  const kept = [], heard = {};
+  let live;
+  page.window.RTCPeerConnection = function () {};
+  page.window.MiaSpaceLive = { createMesh: (options) => { live = options; return { send() {}, sync() {}, close() {}, sendKept: (message, to) => kept.push([message, to || null]) }; } };
+  page.window.navigator = { mediaDevices: {} };
+  page.window.AudioContext = function () {};
+  page.window.MiaDictation = { toWav16k: () => 'wav' };
+  page.window.MiaSpeech = { ready: async () => true, transcribe: async () => '' };
+  page.window.MiaSpaceTalk.createListener = (options) => { heard.options = options; heard.stopped = false; return { start: async () => {}, stop() { heard.stopped = true; } }; };
+  page.click('data-space-share');
+  const tab = page.model.decode(page.sent[0]).tabs[0].k;
+  const here = (id, name, extra = {}) => page.ui.receive(CHANNEL, { body: page.model.encode({ t: 'here', space: page.spaceId(), tab, url: 'https://example.com/', from: { id, name }, ...extra }), author_id: id, author_type: 'user', author_name: name });
+  const presence = () => page.sent.map((text) => page.model.decode(text)).filter((message) => message.t === 'here').at(-1);
+  return { page, kept, heard, here, presence, live: () => live };
+}
+
+test('Mia listens only after this person turns it on, and tells everyone it is on', async () => {
+  const { page, heard, presence } = await talkingBar();
+  assert.match(page.call.innerHTML, /data-space-listen aria-pressed="false"[^>]*>.*Mia listens</);
+  assert.equal(heard.options, undefined, 'the microphone is untouched until asked');
+  assert.doesNotMatch(page.bar.innerHTML, /mia-space-talk/);
+  page.click('data-space-listen');
+  await flush(); await flush();
+  assert.match(page.call.innerHTML, /data-space-listen aria-pressed="true"[^>]*>.*Mia is listening</);
+  assert.equal(presence().listen, true);
+  assert.match(page.bar.innerHTML, /Mia is writing down what you say/);
+  assert.match(page.toasts.at(-1), /Everyone in the session can read it/);
+  page.click('data-space-listen');
+  await flush();
+  assert.equal(heard.stopped, true);
+  assert.equal(presence().listen, false);
+  assert.match(page.call.innerHTML, /aria-pressed="false"/);
+});
+
+test('saying no to the speech model download leaves listening off', async () => {
+  const { page, heard, presence } = await talkingBar();
+  page.window.MiaSpeech.ready = async (hooks) => hooks.confirm('Download?');
+  page.window.confirm = () => false;
+  page.click('data-space-listen');
+  await flush(); await flush();
+  assert.equal(heard.options, undefined);
+  assert.match(page.call.innerHTML, /aria-pressed="false"[^>]*>.*Mia listens</);
+  assert.notEqual(presence().listen, true);
+});
+
+test('a blocked microphone says so and leaves listening off', async () => {
+  const { page } = await talkingBar();
+  page.window.MiaSpaceTalk.createListener = () => ({ start: async () => { throw Object.assign(new Error('no'), { name: 'NotAllowedError' }); }, stop() {} });
+  page.click('data-space-listen');
+  await flush(); await flush();
+  assert.match(page.toasts.at(-1), /Microphone access is blocked/);
+  assert.match(page.call.innerHTML, /aria-pressed="false"/);
+});
+
+test('what this person says is shown as theirs and sent straight to the others, never through the chat', async () => {
+  const { page, kept, heard } = await talkingBar();
+  page.click('data-space-listen');
+  await flush(); await flush();
+  const posted = page.sent.length;
+  heard.options.onLine('Let us book the venue', Date.now() - 2000);
+  assert.match(page.bar.innerHTML, /<b style="color:[^"]+">You<\/b> Let us book the venue/);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(Object.keys(kept[0][0]).sort(), ['at', 'id', 't', 'text']);
+  assert.equal(kept[0][0].text, 'Let us book the venue');
+  assert.equal(page.sent.length, posted, 'no line is posted to the Hub');
+  // Turned off, a piece still being written down is not added.
+  page.click('data-space-listen');
+  heard.options.onLine('after the switch', Date.now());
+  assert.doesNotMatch(page.bar.innerHTML, /after the switch/);
+});
+
+test('a line carries the name of the person whose computer sent it', async () => {
+  const { page, here, live } = await talkingBar();
+  joinPeer(page, 'user_ana', 'Ana');
+  here('user_ana', 'Ana', { listen: true });
+  assert.match(page.bar.innerHTML, /Mia is writing down what Ana says/);
+  assert.match(page.call.innerHTML, /mia-space-person[^"]* listening"/);
+  live().onMessage('user_ana', { t: 's', id: 'l1', text: 'I am <b>Tom</b>', at: Date.now(), name: 'Tom', by: 'user_tom' });
+  assert.match(page.bar.innerHTML, />Ana<\/b> I am &#60;b&#62;Tom&#60;\/b&#62;/);
+  live().onMessage('user_ana', { t: 's', id: 'l1', text: 'sent twice', at: Date.now() });
+  assert.doesNotMatch(page.bar.innerHTML, /sent twice/);
+  live().onMessage('user_stranger', { t: 's', id: 'l2', text: 'not in the session', at: Date.now() });
+  assert.doesNotMatch(page.bar.innerHTML, /not in the session/);
+  // Only the last few lines sit above the minimap; the rest are in the transcript.
+  for (let i = 0; i < 4; i++) live().onMessage('user_ana', { t: 's', id: 'm' + i, text: 'point ' + i, at: Date.now() + i });
+  assert.doesNotMatch(page.bar.innerHTML, /I am/);
+  assert.match(page.bar.innerHTML, /point 3/);
+  page.click('data-space-transcript');
+  assert.match(page.call.innerHTML, /role="dialog" aria-label="Transcript"/);
+  assert.match(page.call.innerHTML, /I am &#60;b&#62;Tom/);
+});
+
+test('someone who connects late is sent what this person has already said', async () => {
+  const { page, kept, heard, live } = await talkingBar();
+  page.click('data-space-listen');
+  await flush(); await flush();
+  joinPeer(page, 'user_ana', 'Ana');
+  heard.options.onLine('first', Date.now() - 3000);
+  heard.options.onLine('second', Date.now() - 1000);
+  kept.length = 0;
+  live().onOpen('user_tom');
+  assert.deepEqual(kept.map(([message, to]) => [message.text, to]), [['first', 'user_tom'], ['second', 'user_tom']]);
+});
+
+test('leaving the session stops the microphone and clears the transcript', async () => {
+  const { page, heard } = await talkingBar();
+  page.click('data-space-listen');
+  await flush(); await flush();
+  heard.options.onLine('before leaving', Date.now());
+  page.click('data-space-leave');
+  assert.equal(heard.stopped, true);
+  page.click('data-space-share');
+  assert.doesNotMatch(page.bar.innerHTML, /before leaving/);
+  assert.match(page.call.innerHTML, /aria-pressed="false"/);
 });
