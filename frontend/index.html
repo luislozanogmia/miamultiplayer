@@ -1040,16 +1040,23 @@
     <section class="styled-settings-pane" data-pane="instructions">
       <h1 class="styled-settings-h1">Instructions</h1>
 
-      <div class="styled-settings-group-label">Agents</div>
+      <div class="styled-settings-card">
+        <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Use the same rules for bots and agents</div><div class="styled-settings-row-desc">One set of instructions for Mia and every bot</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsInstructionsShared" aria-label="Use the same rules for bots and agents" /><span class="gt-track"></span></label>
+        </div>
+      </div>
+
+      <div class="styled-settings-group-label" id="settingsAgentInstructionsGroup">Agents</div>
       <div class="styled-settings-card styled-settings-instructions-card">
         <div class="styled-settings-row">
-          <div><div class="styled-settings-row-label">Agent Instructions</div><div class="styled-settings-row-desc">Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude</div></div>
+          <div><div class="styled-settings-row-label" id="settingsAgentInstructionsLabel">Agent Instructions</div><div class="styled-settings-row-desc" id="settingsAgentInstructionsDesc">Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude</div></div>
         </div>
         <textarea class="styled-settings-field styled-settings-instructions-text" id="settingsAgentInstructions" aria-label="Agent Instructions" placeholder="For example: Be concise, use short paragraphs, and ask before expanding the task." maxlength="8000"></textarea>
       </div>
 
-      <div class="styled-settings-group-label">Bots</div>
-      <div class="styled-settings-card styled-settings-instructions-card">
+      <div class="styled-settings-group-label" id="settingsBotInstructionsGroup">Bots</div>
+      <div class="styled-settings-card styled-settings-instructions-card" id="settingsBotInstructionsCard">
         <div class="styled-settings-row">
           <div><div class="styled-settings-row-label">Bot Instructions</div><div class="styled-settings-row-desc">Applied to every bot in addition to that bot’s own brief and automations</div></div>
         </div>

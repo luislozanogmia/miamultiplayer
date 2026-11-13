@@ -3543,6 +3543,9 @@ function normalizeInstructionSettings(value) {
     // On unless the user turned it off, including for anyone who saved
     // instructions before this setting existed.
     askBeforeDo: input.askBeforeDo !== false,
+    // "Use the same rules for bots and agents": bots get the agent text. The
+    // stored bot text is kept so turning this off brings it back.
+    shared: input.shared === true,
   };
 }
 
@@ -3558,9 +3561,11 @@ function currentInstructionSettings(email) {
 }
 
 // What the prompts receive: each kind's text plus the ask-before-do setting.
+// With shared rules on, bots receive the agent text; every prompt path reads
+// instructions through here, so none needs its own copy of that rule.
 function promptInstructions(email) {
-  const { agent, bot, askBeforeDo } = currentInstructionSettings(email);
-  return { agent: { text: agent, askBeforeDo }, bot: { text: bot, askBeforeDo } };
+  const { agent, bot, askBeforeDo, shared } = currentInstructionSettings(email);
+  return { agent: { text: agent, askBeforeDo }, bot: { text: shared ? agent : bot, askBeforeDo } };
 }
 
 // Gives the bot's folder a link to each skill it carries. The bot's turns read
@@ -4959,13 +4964,19 @@ app.post('/api/settings/instructions', requireAuth, async (req, res) => {
   if (body.agent.length > MAX_GLOBAL_INSTRUCTIONS_LENGTH || body.bot.length > MAX_GLOBAL_INSTRUCTIONS_LENGTH) {
     return res.status(400).json({ error: `instructions must be ${MAX_GLOBAL_INSTRUCTIONS_LENGTH} characters or fewer` });
   }
+  if (body.shared !== undefined && typeof body.shared !== 'boolean') {
+    return res.status(400).json({ error: 'shared must be true or false' });
+  }
   const owner = String(req.userEmail || '').trim().toLowerCase();
   const settings = db.loadSingleton(conn, 'settings', DEFAULT_SETTINGS);
   if (!settings.instructionsByUser || typeof settings.instructionsByUser !== 'object') settings.instructionsByUser = {};
+  const current = instructionSettingsForUser(settings, owner);
   const instructions = normalizeInstructionSettings({
     agent: body.agent,
     bot: body.bot,
-    askBeforeDo: instructionSettingsForUser(settings, owner).askBeforeDo,
+    askBeforeDo: current.askBeforeDo,
+    // A request without the flag keeps the person's current choice.
+    shared: typeof body.shared === 'boolean' ? body.shared : current.shared,
   });
   settings.instructionsByUser[owner] = instructions;
   db.saveSingleton(conn, 'settings', settings);

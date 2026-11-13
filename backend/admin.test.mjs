@@ -656,6 +656,75 @@ inference.runInferenceViaHermesGateway = async ({ seedMessages }) => {
   }
 });
 
+// With "Use the same rules for bots and agents" on, your bot chats get your
+// one set of instructions; turning it off brings your old Bot Instructions back.
+test('shared rules send your instructions to your bots, and turning them off restores the bot text', async () => {
+  const preloadScript = `
+const fs = require('node:fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async ({ seedMessages }) => {
+  fs.appendFileSync(process.env.MIAOS_TEST_GATE_READY, JSON.stringify(seedMessages[0].content) + '\\n');
+  return { text: 'Fixture bot reply' };
+};
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const headers = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const save = (body) => fetch(`${server.origin}/api/settings/instructions`, { method: 'POST', headers, body: JSON.stringify(body) });
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.' })).status, 200);
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: 'yes' })).status, 400);
+    const sharedOn = await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: true });
+    assert.equal(sharedOn.status, 200);
+    assert.deepEqual((await sharedOn.json()).instructions,
+      { agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', askBeforeDo: true, shared: true });
+
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ name: 'Shared Rules Fixture', instructions: 'Fixture brief.', model: 'fixture-model', status: 'draft', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const bot = (await created.json()).bot;
+    const made = await fetch(`${server.origin}/api/conversations?workspace=solo`, {
+      method: 'POST', headers, body: JSON.stringify({ type: 'bot', name: bot.name, metadata: { botId: bot.id, departments: [] } }),
+    });
+    assert.ok(made.status === 201 || made.status === 200, await made.clone().text());
+    const chatId = (await made.json()).conversation.id;
+    let sentCount = 0;
+    const ask = async () => {
+      const sent = await fetch(`${server.origin}/api/conversations/${chatId}/events?workspace=solo`, {
+        method: 'POST', headers, body: JSON.stringify({ content: { text: 'Who are you?' }, clientIdempotencyKey: `shared-${sentCount}` }),
+      });
+      assert.equal(sent.status, 201, await sent.clone().text());
+      sentCount += 1;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const seen = fs.existsSync(server.dispatchReadyPath) ? fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').length : 0;
+        if (seen >= sentCount) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const prompts = fs.readFileSync(server.dispatchReadyPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(prompts.length, sentCount, server.logs.join(''));
+      return prompts[sentCount - 1];
+    };
+    const sharedPrompt = await ask();
+    assert.match(sharedPrompt, /User-configured Bot Instructions:[\s\S]*Agent fixture rules\./);
+    assert.doesNotMatch(sharedPrompt, /Bot fixture rules\./);
+
+    // Turning it off brings the old bot text back untouched.
+    assert.equal((await save({ agent: 'Agent fixture rules.', bot: 'Bot fixture rules.', shared: false })).status, 200);
+    const settings = await (await fetch(`${server.origin}/api/settings`, { headers })).json();
+    assert.equal(settings.instructions.bot, 'Bot fixture rules.');
+    assert.equal(settings.instructions.shared, false);
+    const separatePrompt = await ask();
+    assert.match(separatePrompt, /User-configured Bot Instructions:[\s\S]*Bot fixture rules\./);
+    assert.doesNotMatch(separatePrompt, /Agent fixture rules\./);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('your own Solo bot can be changed while a company is open, and no one else\'s', async () => {
   const server = await startServer({ seedRows: [{ email: 'solo-owner@example.com', password: 'another-horse-battery', role: 'member' }] });
   try {

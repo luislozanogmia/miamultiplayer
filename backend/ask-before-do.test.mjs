@@ -152,7 +152,7 @@ test('a scheduled run never waits: a blocked action is skipped and reported as n
 test('each turn reads the setting where promptInstructions puts it', async () => {
   const { readFile } = await import('node:fs/promises');
   const server = await readFile(new URL('./server.js', import.meta.url), 'utf8');
-  assert.match(server, /return \{ agent: \{ text: agent, askBeforeDo \}, bot: \{ text: bot, askBeforeDo \} \};/);
+  assert.match(server, /return \{ agent: \{ text: agent, askBeforeDo \}, bot: \{ text: shared \? agent : bot, askBeforeDo \} \};/);
   assert.match(server, /enabled: globalInstructions\.bot\.askBeforeDo,/);
 });
 

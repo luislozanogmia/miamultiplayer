@@ -1709,6 +1709,24 @@
     if(bot) bot.value = String(instructions.bot || '');
     var askBeforeDo = el('#settingsAskBeforeDo');
     if(askBeforeDo) askBeforeDo.checked = instructions.askBeforeDo !== false;
+    var shared = el('#settingsInstructionsShared');
+    if(shared) shared.checked = instructions.shared === true;
+    applyInstructionsShared(instructions.shared === true);
+  }
+
+  // Shared rules show one box, the agent text, which bots receive too. The bot
+  // box is only hidden, so its text (saved or not) comes back when turned off.
+  function applyInstructionsShared(on){
+    var label = el('#settingsAgentInstructionsLabel');
+    var desc = el('#settingsAgentInstructionsDesc');
+    var agent = el('#settingsAgentInstructions');
+    if(label) label.textContent = on ? 'Instructions' : 'Agent Instructions';
+    if(desc) desc.textContent = on ? 'Applied to Mia and to every bot' : 'Applied to Mia and general agent conversations, like custom instructions in ChatGPT or Claude';
+    if(agent) agent.setAttribute('aria-label', on ? 'Instructions' : 'Agent Instructions');
+    ['#settingsAgentInstructionsGroup', '#settingsBotInstructionsGroup', '#settingsBotInstructionsCard'].forEach(function(selector){
+      var node = el(selector);
+      if(node) node.hidden = !!on;
+    });
   }
 
   function loadHarnessSettings(showFirstRun){
@@ -2841,16 +2859,22 @@
       settingsAskBeforeDo.disabled = false;
     });
   });
+  var settingsInstructionsShared = el('#settingsInstructionsShared');
+  if(settingsInstructionsShared) settingsInstructionsShared.addEventListener('change', function(){
+    applyInstructionsShared(settingsInstructionsShared.checked);
+  });
   var settingsInstructionsSave = el('#settingsInstructionsSave');
   if(settingsInstructionsSave) settingsInstructionsSave.addEventListener('click', function(){
     var agent = el('#settingsAgentInstructions');
     var bot = el('#settingsBotInstructions');
+    var shared = el('#settingsInstructionsShared');
     var saved = el('#settingsInstructionsSaved');
     settingsInstructionsSave.disabled = true;
     if(saved) saved.classList.remove('visible');
     api('/api/settings/instructions', {method:'POST', body:{
       agent: agent ? agent.value : '',
-      bot: bot ? bot.value : ''
+      bot: bot ? bot.value : '',
+      shared: !!(shared && shared.checked)
     }}).then(function(res){
       if(res.status !== 200 || !res.data) throw new Error(res.data && res.data.error || 'Could not save instructions.');
       renderInstructionSettings(res.data.instructions);
