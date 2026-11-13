@@ -133,6 +133,8 @@
     view.hidden = !open;
     tile.classList.toggle('active', open);
     document.body.classList.toggle('workspace-demo-open', open);
+    // Only one tile is marked: the demo while it is open, else the workspace.
+    renderWorkspaceSwitcher();
   }
   function wireDemoView(){
     var rail = el('#workspaceSwitcherMenu');
@@ -150,8 +152,9 @@
     if(companyName) companyName.textContent = workspace.switcherLabel || workspace.label;
     els('[data-workspace-key]').forEach(function(option){
       var active = option.getAttribute('data-workspace-key') === activeWorkspaceKey;
-      option.classList.toggle('active', active);
-      option.setAttribute('aria-current', active ? 'true' : 'false');
+      var marked = active && !document.body.classList.contains('workspace-demo-open');
+      option.classList.toggle('active', marked);
+      option.setAttribute('aria-current', marked ? 'true' : 'false');
       // Multiplayer Test gave way to the Multiplayer Demo tile. Its local data
       // is kept, so a workspace already open there still shows where it is.
       if(option.getAttribute('data-workspace-key') === 'multiplayer_test') option.hidden = !active;
