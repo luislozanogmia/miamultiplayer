@@ -1641,6 +1641,45 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       .sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
   }
 
+  // Mia sees every tab, but changes a page only where the work is hers.
+  // Reading, screenshots and scrolling stay open to her everywhere.
+  const MIA_CHANGES = new Set(["navigate", "click", "fill", "eval", "key", "back", "forward", "reload", "stop"]);
+  const MIA_EDITS = new Set(["click", "fill", "eval", "key"]);
+  const BOT_ON_PAGE_MS = 10 * 60 * 1000;
+  const miaTaskTabs = new Map(); // session -> ids of tabs the person confirmed for it
+  function requireMiaMayChange(tab, method, params, session) {
+    if (!MIA_CHANGES.has(method) && !(method === "vacuum" && params.url) && method !== "tab_close") return;
+    const label = `Tab ${tab.id} ("${String(tab.title || tab.url || "New tab").slice(0, 80)}")`;
+    // 1. A bot's tab is the bot's.
+    const owner = tabController(tab);
+    if (owner.kind === "bot") {
+      throw protocolError("TAB_OWNED", `${label} belongs to the bot ${groups.get(tab.groupId)?.name || owner.botId}. You can read it, but only that bot works in it. `
+        + "Tell the person; they can give the tab group back to Mia from the group's menu.");
+    }
+    if (method === "tab_close") return;
+    // 2. The same page in a bot's tab, while that bot is on it.
+    const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
+    const taken = MIA_EDITS.has(method) && /^https?:/i.test(tab.url || "") && [...tabs.values()].find(other => other !== tab
+      && tabController(other).kind === "bot" && key(other.url) === key(tab.url)
+      && (botWorkPending(other) || Date.now() - (other.botWorkAt || 0) < BOT_ON_PAGE_MS));
+    if (taken) {
+      throw protocolError("BOT_HAS_PAGE", `The bot ${groups.get(taken.groupId)?.name || "in another tab"} has this same page open in its own tab and is working on it. `
+        + "Do not change it here. Tell the person the bot is already on it and ask what they want.");
+    }
+    // 3. A tab Mia did not open for this conversation needs a look first.
+    // An empty tab has nothing of the person's on it.
+    if (!/^(https?|file):/i.test(tab.url || "")) return;
+    if (tab.miaSession === session || miaTaskTabs.get(session)?.has(tab.id)) return;
+    if (params.for_this_request === true) {
+      if (!miaTaskTabs.has(session)) miaTaskTabs.set(session, new Set());
+      miaTaskTabs.get(session).add(tab.id);
+      return;
+    }
+    throw protocolError("TAB_NOT_IN_TASK", `${label} was already open; you did not open it for this conversation. Read it first. `
+      + "If what the person asked is clearly about this page, repeat the call with \"for_this_request\": true. "
+      + "If the page is about something else, or you are unsure, ask the person before changing anything. To work on a new page, open your own tab with ghost_tab_open.");
+  }
+
   function protocolTabResult(tab) {
     return {
       tab_id: tab.id,
@@ -2490,6 +2529,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // doesn't touch the bot's other tabs, so they don't need to be idle.
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
+      else tab.miaSession = actorSession;
       touch(tab);
       if (params.url) navigate(tab, params.url);
       await waitForProtocolPage(tab, params.wait || "load", params.signal);
@@ -2509,6 +2549,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (method === "tab_close") {
       const tab = protocolTab(params.tab_id);
       if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", `Tab ${tab.id} is not one of your tabs.`);
+      if (!actor && params[actorCapability] !== true) requireMiaMayChange(tab, method, params, actorSession);
       closeTab(tab.id);
       return { closed: true, tab_id: tab.id };
     }
@@ -2549,6 +2590,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       const target = normalizeLocalFileTarget(filePath, workspaceRoot, { anyRoot });
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
+      else tab.miaSession = actorSession;
       openLocalFile(tab, target, { anyRoot });
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
@@ -2570,9 +2612,12 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (actor) {
       tab = botProtocolTab(actor, method, params.tab_id);
     } else {
-      if (!tabs.size) newTab();
+      if (!tabs.size) newTab().miaSession = actorSession;
       tab = protocolTab(params.tab_id);
+      // A worker bound to its tab is already held to that one tab.
+      if (params[actorCapability] !== true) requireMiaMayChange(tab, method, params, actorSession);
     }
+    delete params.for_this_request;
     touch(tab);
     // A bot's own navigation loads the page it wants; anything else needs
     // the page the tab was on, so a sleeping tab loads first.
