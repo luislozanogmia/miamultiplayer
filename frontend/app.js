@@ -14777,36 +14777,14 @@
     return agentHasLiveWork({id: row.agentId, name: row.name});
   }
 
-  function chatRosterAgentCountLabel(rows){
-    var agents = rows || [];
-    if(agents.length === 1){
-      return agents[0].principalType === 'bot' ? '1 bot' : '1 agent';
-    }
-    return agents.length + ' agents &amp; bots';
-  }
-
-  function chatRosterPeopleCountLabel(rows){
-    var count = (rows || []).length;
-    return count + (count === 1 ? ' user' : ' users');
-  }
-
   // Solo has only you and your own agents, so the roster says nothing new.
-  function renderChatRosterChips(data){
-    if(!data || activeWorkspaceKey === 'solo') return '';
-    var html = '';
-    if(data.peopleUnavailable){
-      html += '<span class="ch-roster-chip ch-roster-unavailable" title="Human membership unavailable" aria-label="Human membership unavailable">' +
-        '<span class="ch-roster-count">users unavailable</span></span>';
-    }
-    if(data.people.length){
-      html += '<button type="button" class="ch-roster-chip' + (chatRoster.open === 'people' ? ' open' : '') + '" id="chatRosterPeopleBtn" title="People in this chat">' +
-        '<span class="ch-roster-count">' + chatRosterPeopleCountLabel(data.people) + '</span></button>';
-    }
-    if(data.agents.length){
-      html += '<button type="button" class="ch-roster-chip' + (chatRoster.open === 'agents' ? ' open' : '') + '" id="chatRosterAgentsBtn" title="Agents and bots in this chat">' +
-        '<span class="ch-roster-count">' + chatRosterAgentCountLabel(data.agents) + '</span></button>';
-    }
-    return html;
+  // Elsewhere the two lists open from the chat's menu, not from counts in the bar.
+  function chatRosterMenuKinds(data){
+    if(!data || activeWorkspaceKey === 'solo') return [];
+    var kinds = [];
+    if(data.people.length) kinds.push('people');
+    if(data.agents.length) kinds.push('agents');
+    return kinds;
   }
 
   // Working agents get the same blinking orange task dot used in the
@@ -14840,17 +14818,15 @@
   }
 
   function wireChatRosterControls(header, rosterData){
-    var peopleBtn = el('#chatRosterPeopleBtn', header);
-    if(peopleBtn) peopleBtn.addEventListener('click', function(e){
-      e.stopPropagation();
-      chatRoster.open = chatRoster.open === 'people' ? null : 'people';
-      renderChatHeaderBar();
-    });
-    var agentsBtn = el('#chatRosterAgentsBtn', header);
-    if(agentsBtn) agentsBtn.addEventListener('click', function(e){
-      e.stopPropagation();
-      chatRoster.open = chatRoster.open === 'agents' ? null : 'agents';
-      renderChatHeaderBar();
+    // The menu can sit on the page itself, outside the header, while open.
+    ['people', 'agents'].forEach(function(kind){
+      var item = document.getElementById(kind === 'people' ? 'chatRosterPeopleItem' : 'chatRosterAgentsItem');
+      if(item) item.addEventListener('click', function(e){
+        e.stopPropagation();
+        resetChannelMenuState();
+        chatRoster.open = kind;
+        renderChatHeaderBar();
+      });
     });
     var closeBtn = el('#chatRosterCloseBtn', header);
     if(closeBtn) closeBtn.addEventListener('click', function(e){
@@ -16206,19 +16182,18 @@
       : '<span class="ch-mark dm">' + ((chatWs.activeKind === 'agent' || chatWs.activeKind === 'agent-setup') ? (chatWs.activeKind === 'agent-setup' ? agentSetupAvatarHtml(24, headerMiaIsWorking ? 'activity' : null, true) : agentAvatarHtml(chatWs.activeLabel, null, 24, headerMiaIsWorking ? 'activity' : null, null, !channelMenuKind())) : esc(benchMark(chatWs.activeLabel || '?'))) + '</span>';
     var title = chatWs.activeLabel;
     var rosterData = chatRosterData();
-    var rosterChips = renderChatRosterChips(rosterData);
     var rosterOverlay = chatRoster.open ? renderChatRosterPanel(rosterData) : '';
     var conversationActions = renderConversationHeaderActions();
     var titleHtml = '<span class="channel-header-title" role="heading" aria-level="1">' + esc(title) + '</span>';
     var menuHtml = channelMenuKind() ? '<div class="channel-menu' + (channelMenu.open ? ' open' : '') + '" id="channelMenu" role="menu">' + (channelMenu.open ? renderChannelMenuHtml() : '') + '</div>' : '';
-    var titleButtonHtml = channelMenuKind()
+    var titleButtonHtml = channelMenuKind() || chatRosterMenuKinds(rosterData).length
       ? '<button type="button" class="ch-title-btn" id="channelTitleBtn" aria-haspopup="menu" aria-controls="channelMenu" aria-expanded="' + (channelMenu.open ? 'true' : 'false') + '">' + markHtml + titleHtml + '<span class="ch-title-caret" aria-hidden="true">&#9662;</span></button>'
       : markHtml + titleHtml;
     if(STYLED_SKIN){
       var mobileBackBtn = '<button type="button" class="ch-mobile-back" id="chatMobileBack" aria-label="Back to chats">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>';
       header.innerHTML = '<div class="ch-left">' + mobileBackBtn + '<div class="ch-title-row">' + titleButtonHtml + '</div></div>' +
-        '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '</div>';
+        '<div class="ch-right">' + conversationActions + rosterOverlay + '</div>';
       var mobileBack = el('#chatMobileBack', header);
       if(mobileBack) mobileBack.addEventListener('click', closeMobileChatRoom);
       wireChannelMenu(header);
@@ -16231,7 +16206,7 @@
     // Export sits in the header per the mock, but there's nothing to export
     // yet — it's a quiet no-op, never a fake download.
     header.innerHTML = '<div class="ch-left"><div class="ch-title-row">' + titleButtonHtml + menuHtml + '</div></div>' +
-      '<div class="ch-right">' + rosterChips + conversationActions + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
+      '<div class="ch-right">' + conversationActions + rosterOverlay + '<button type="button" class="ch-export-btn" id="chatExportBtn">Export</button></div>';
     wireChannelMenu(header);
     wireChatRosterControls(header, rosterData);
     wireConversationHeaderActions(header);
@@ -20094,6 +20069,11 @@
       ? item('chatShareConversation', 'Copy conversation ID', '<rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>') +
         item('chatBookmarkConversation', pinned ? 'Remove bookmark' : 'Bookmark conversation', '<path d="M18 20l-6-4-6 4V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1z"></path>', ' aria-pressed="' + (pinned ? 'true' : 'false') + '"') +
         (activeBotTabsAvailable(activeConversation) ? item('chatShowBotTabsBtn', 'Show this bot\'s tabs', '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 9h18M9 5v4"></path>') : '') +
+        chatRosterMenuKinds(chatRosterData()).map(function(kind){
+          return kind === 'people'
+            ? item('chatRosterPeopleItem', 'People in this chat', '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>')
+            : item('chatRosterAgentsItem', 'Agents and bots in this chat', '<path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path>');
+        }).join('') +
         item('chatHistoryBtn', 'History', '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l3 2"></path>') +
         item('chatNewConversationBtn', 'New conversation', '<path d="M12 5v14M5 12h14"></path>', ' title="' + esc(freshTitle) + '"' + (freshDisabled ? ' disabled' : '')) +
         (activeConversation && activeMetadata.botId ? item('chatBotSettingsBtn', 'Bot settings', '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>') : '') +

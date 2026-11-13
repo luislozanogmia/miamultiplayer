@@ -31,7 +31,7 @@ test('conversation actions sit behind one More button with a Chrome-style menu',
   const actions = source.slice(actionStart, actionEnd);
 
   assert.match(actions, /channelMenuKind\(\) \? '<div class="conv-more-sep" role="separator"><\/div>' \+ renderChannelMenuHtml\(\)/, 'restart or reset lives in the same menu');
-  assert.equal((actions.match(/item\('/g) || []).length, 6);
+  assert.equal((actions.match(/item\('/g) || []).length, 8);
   assert.match(styles, /\.conv-more-item svg\{[^}]*width:18px;[^}]*height:18px;[^}]*stroke:#474747;[^}]*stroke-width:2;/, 'the bar\'s own icon weight and color');
   assert.match(styles, /\.local-browser-view-tools \.channel-header \.channel-header-title\{display:none!important;\}/, 'the chat name stays out of the bar, its icon stays');
 });
