@@ -43,3 +43,13 @@ test('the picker has every emoji, popular ones first, each once', () => {
   assert.deepEqual(emoji.search('boom')[0].items[0], ['💥', 'collision boom explosion bang kaboom'], 'found by the word people use');
   assert.match(emoji.search('fire')[0].items.map(item => item[1]).join(' '), /fire hot great/, 'popular picks keep their own words');
 });
+
+test('emoji fall back to a font that ships with Mia', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(css, /font-family:"Mia Emoji";[^}]*local\("Apple Color Emoji"\),local\("Segoe UI Emoji"\),local\("Noto Color Emoji"\),url\("assets\/fonts\/NotoColorEmoji\.ttf"\)/);
+  assert.ok(fs.statSync(new URL('./assets/fonts/NotoColorEmoji.ttf', import.meta.url)).size > 1000000);
+  for (const name of ['--sans', '--mono', '--styled-sans']) assert.match(css, new RegExp(name + ':[^;]*"Mia Emoji";'));
+  assert.match(css, /\.mia-emoji-grid button\{[^}]*font-family:var\(--styled-sans\)/);
+  assert.match(css, /\.chat-msg-reaction\{[^}]*font-family:var\(--styled-sans\)/);
+});

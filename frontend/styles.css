@@ -6,6 +6,12 @@
     font-family:"JetBrains Mono";font-style:normal;font-weight:400 700;
     font-display:swap;src:url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2");
   }
+  /* Emoji on a computer that has no emoji font of its own. The computer's
+     font is used when there is one, so the file loads only where it is needed. */
+  @font-face{
+    font-family:"Mia Emoji";font-display:swap;
+    src:local("Apple Color Emoji"),local("Segoe UI Emoji"),local("Noto Color Emoji"),url("assets/fonts/NotoColorEmoji.ttf") format("truetype");
+  }
   .chat-drive-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chat-drive-file{display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:7px 10px;border:1px solid currentColor;border-radius:9px;color:inherit!important;text-decoration:none!important;font-size:13px;line-height:1.4}
   .chat-drive-file img{flex:none}
@@ -40,9 +46,9 @@
     --danger-border:#F0C9C2;
     --bar-h:96px;
     --sidebar-w:248px;
-    --serif:"Instrument Sans",system-ui,sans-serif;
-    --sans:"Instrument Sans",system-ui,sans-serif;
-    --mono:"JetBrains Mono",ui-monospace,monospace;
+    --serif:"Instrument Sans",system-ui,sans-serif,"Mia Emoji";
+    --sans:"Instrument Sans",system-ui,sans-serif,"Mia Emoji";
+    --mono:"JetBrains Mono",ui-monospace,monospace,"Mia Emoji";
     /* dk-* tokens: declared globally (not just under .dk-wrap) so the drawer,
        which renders dk-* classes outside the kanban board container, resolves them too. */
     --dk-bg2:#F2F0EC;--dk-border:#E6E2DC;--dk-hair:#EDEAE4;--dk-ink:#111111;--dk-ink2:#6B6560;
@@ -62,7 +68,7 @@
        menu) and anywhere else this skin was applied — not a replacement
        for the --paper/--ink/--accent tokens above, which the rest of the
        app shell uses these shared tokens. */
-    --styled-sans:-apple-system, system-ui, "Segoe UI", sans-serif;
+    --styled-sans:-apple-system, system-ui, "Segoe UI", sans-serif, "Mia Emoji";
     --sand-bg-base:#ffffff;
     --sand-bg-subtle:#ffffff;
     --sand-bg-elevated:#ffffff;
@@ -4276,12 +4282,12 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .mia-emoji-list{flex:1;min-height:0;overflow-y:auto;}
 .mia-emoji-title{padding:8px 2px 4px;font-size:11px;font-weight:600;color:var(--sand-text-secondary);}
 .mia-emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));}
-.mia-emoji-grid button{appearance:none;height:36px;border:0;border-radius:8px;background:transparent;font-size:20px;line-height:1;cursor:pointer;}
+.mia-emoji-grid button{appearance:none;font-family:var(--styled-sans);height:36px;border:0;border-radius:8px;background:transparent;font-size:20px;line-height:1;cursor:pointer;}
 .mia-emoji-grid button:hover,.mia-emoji-grid button:focus-visible{background:var(--sand-fill-ghost-hover);}
 .mia-emoji-empty{padding:24px 8px;text-align:center;font-size:13px;color:var(--sand-text-secondary);}
 .chat-msg-row{position:relative;}
 .chat-msg-reactions{display:flex;flex-wrap:wrap;gap:4px;}
-.chat-msg-reaction{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);color:var(--sand-text-secondary);font:inherit;font-size:13px;line-height:1;cursor:pointer;}
+.chat-msg-reaction{appearance:none;font-family:var(--styled-sans);display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);color:var(--sand-text-secondary);font:inherit;font-size:13px;line-height:1;cursor:pointer;}
 .chat-msg-reaction em{font-style:normal;font-size:12px;}
 .chat-msg-reaction:hover:not(:disabled){background:var(--sand-fill-ghost-hover);}
 .chat-msg-reaction.on{border-color:var(--sand-text-primary);color:var(--sand-text-primary);}
