@@ -111,5 +111,57 @@
     };
   }
 
-  return {createEngine: createEngine, TARGET_RATE: TARGET_RATE, mixToMono: mixToMono, resample: resample, encodeWav: encodeWav, toWav16k: toWav16k, insertText: insertText};
+  // One recording from the microphone, written down when it ends. Shared by
+  // the composer's mic and AI mode's. options: media (navigator.mediaDevices),
+  // MediaRecorder, AudioContext, transcribe(wav) -> Promise of text.
+  function createRecorder(options){
+    var recorder = null, stream = null, chunks = [], finish = null;
+    function release(){
+      if(stream){ stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
+      recorder = null; finish = null;
+    }
+    function written(){
+      var blob = new Blob(chunks, {type: (recorder && recorder.mimeType) || 'audio/webm'});
+      release();
+      return blob.arrayBuffer().then(function(bytes){
+        var ctx = new options.AudioContext();
+        return ctx.decodeAudioData(bytes).then(function(audio){
+          ctx.close();
+          var channels = [];
+          for(var c = 0; c < audio.numberOfChannels; c++) channels.push(audio.getChannelData(c));
+          return toWav16k(channels, audio.sampleRate);
+        }, function(error){ ctx.close(); throw error; });
+      }).then(function(wav){
+        return options.transcribe(wav);
+      });
+    }
+    return {
+      start: function(){
+        return options.media.getUserMedia({audio:true}).then(function(media){
+          stream = media; chunks = [];
+          recorder = new options.MediaRecorder(media);
+          recorder.ondataavailable = function(ev){ if(ev.data && ev.data.size) chunks.push(ev.data); };
+          recorder.onstop = function(){ if(finish) finish(); };
+          recorder.start();
+        });
+      },
+      // Ends the recording; resolves with what was said ('' when nothing was).
+      stop: function(){
+        return new Promise(function(resolve, reject){
+          if(!recorder) return resolve('');
+          finish = function(){ written().then(resolve, reject); };
+          try { recorder.stop(); } catch(error) { release(); reject(error); }
+        });
+      },
+      // Lets go of the microphone without writing anything down.
+      cancel: function(){
+        var old = recorder;
+        release();
+        if(old){ old.onstop = null; try { old.stop(); } catch(_error) { /* already stopped */ } }
+      },
+      active: function(){ return !!recorder; }
+    };
+  }
+
+  return {createEngine: createEngine, createRecorder: createRecorder, TARGET_RATE: TARGET_RATE, mixToMono: mixToMono, resample: resample, encodeWav: encodeWav, toWav16k: toWav16k, insertText: insertText};
 });

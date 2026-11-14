@@ -44,8 +44,7 @@ test('insertText adds spaces only where words would glue together', () => {
 test('the composer mic is wired to local dictation, not the old stub', () => {
   assert.match(index, /dictation\.js[^>]*>[\s\S]*app\.js/);
   assert.match(app, /window\.MiaSpeech = D\.createEngine\(/);
-  assert.match(app, /engine\.transcribe\(wav\)/);
-  assert.match(app, /getUserMedia\(\{audio:true\}\)/);
+  assert.match(app, /D\.createRecorder\(\{[^}]*transcribe: engine\.transcribe\}\)/);
   assert.match(app, /engine\.ready\(\{\s*confirm: function\(text\)\{ return window\.confirm\(text\); \}/, 'model download needs explicit confirmation');
   assert.doesNotMatch(app, /var recording = false;\s*micBtn\.addEventListener/);
 });
@@ -83,4 +82,27 @@ test('transcribing posts the recording to this computer and returns the words', 
   assert.equal(ok.calls[0][1].headers['Content-Type'], 'audio/wav');
   assert.equal(ok.calls[0][1].body, 'wav-bytes');
   await assert.rejects(engineWith({ '/api/speech/transcribe': [409, { message: 'The speech model has not been downloaded yet.' }] }).engine.transcribe('x'), /not been downloaded/);
+});
+
+test('the recorder gives the mic back and returns what was said', async () => {
+  const stopped = [], heard = [];
+  class Recorder {
+    constructor(stream) { this.stream = stream; this.mimeType = 'audio/webm'; }
+    start() { this.ondataavailable({ data: new Blob(['sound']) }); }
+    stop() { if (this.onstop) this.onstop(); }
+  }
+  class Context {
+    decodeAudioData() { return Promise.resolve({ numberOfChannels: 1, sampleRate: 16000, getChannelData: () => new Float32Array(160) }); }
+    close() {}
+  }
+  const media = { getUserMedia: async (ask) => { assert.deepEqual(ask, { audio: true }); return { getTracks: () => [{ stop: () => stopped.push(1) }] }; } };
+  const recorder = D.createRecorder({ media, MediaRecorder: Recorder, AudioContext: Context, transcribe: async (wav) => { heard.push(wav.byteLength); return 'open the report'; } });
+  assert.equal(await recorder.stop(), '');
+  await recorder.start();
+  assert.equal(recorder.active(), true);
+  assert.equal(await recorder.stop(), 'open the report');
+  assert.deepEqual([recorder.active(), stopped.length, heard[0] > 44], [false, 1, true]);
+  await recorder.start();
+  recorder.cancel();
+  assert.deepEqual([recorder.active(), stopped.length, heard.length], [false, 2, 1]);
 });

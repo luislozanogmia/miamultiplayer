@@ -113,7 +113,11 @@ function validateWav(buf) {
 function runWhisper({ bin, model, wavFile, spawnImpl = spawn, timeoutMs = TRANSCRIBE_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     // -nt: no timestamps, -np: no progress/info output on stdout, auto language.
-    const child = spawnImpl(bin, ['-m', model, '-f', wavFile, '-nt', '-np', '-l', 'auto'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // One core is left free and the writer runs at low priority, so the rest
+    // of the computer keeps moving while it works.
+    const threads = String(Math.max(1, Math.min(4, os.cpus().length - 1)));
+    const child = spawnImpl(bin, ['-m', model, '-f', wavFile, '-nt', '-np', '-l', 'auto', '-t', threads], { stdio: ['ignore', 'pipe', 'pipe'] });
+    try { if (child.pid) os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch (_error) { /* runs at normal priority */ }
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Transcription timed out.')); }, timeoutMs);

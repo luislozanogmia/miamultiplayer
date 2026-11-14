@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-11">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-12">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -55,6 +55,7 @@ var MARKUP=
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
+      '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
     '</form></div>'+
   '</div>'+
@@ -269,7 +270,7 @@ function draw(){
   var live=s===2&&R&&R.running;
   $('stop').hidden=!live;$('drive').hidden=s!==2;
   if(pane())sitePlace();
-  $('box').placeholder=live?'Guide or redirect':s===2?'Say what is next':'Say what you want';
+  if(!earState)$('box').placeholder=boxHint();
 }
 // Signals arrive in bursts while Mia writes; the stage redraws at most a few times a second.
 function redraw(){if(!drawTimer)drawTimer=setTimeout(function(){if(open)draw();},120);}
@@ -655,7 +656,7 @@ function siteWire(){
 var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
 // Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
 function speak(t){
-  if(muted||!t||drive)return;
+  if(muted||!t||drive||earState==='on')return;
   lines.push(String(t).slice(0,600));if(lines.length>2)lines.shift();
   if(!busy)sayNext();
 }
@@ -684,6 +685,48 @@ function hush(){
   speakId++;lines=[];busy=false;
   try{if(speaking){speaking.onended=null;speaking.stop();speaking=null;}}catch(e){}
   try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
+}
+// Speaking to Mia: one press starts the mic, the next sends what was said to her as a direction.
+// The words are written down on this computer by the same recorder the chat box uses.
+// Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
+var ear=null,earState='';
+function boxHint(){return R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function earParts(){
+  var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
+  return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
+}
+function earShow(state,note){
+  earState=state;
+  var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
+  $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
+  if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,0.1);
+}
+function earStop(note){
+  if(ear)ear.cancel();
+  if(host)earShow('',note);
+}
+function earToggle(){
+  var parts=earParts();if(!parts||earState==='wait')return;
+  if(earState==='on'){
+    earShow('wait');
+    return ear.stop().then(function(t){
+      if(earState!=='wait')return;
+      earShow('',t?'':'I did not catch that. Press the mic and try again.');
+      if(t&&open)direct(t.slice(0,2000));
+    },function(){earStop('I could not write down what you said. Type it here.');});
+  }
+  if(!ear)ear=parts.D.createRecorder({media:parts.media,MediaRecorder:window.MediaRecorder,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe});
+  hush();earShow('wait','Getting the mic ready\u2026');
+  window.MiaSpeech.ready({
+    confirm:function(text){return window.confirm(text);},
+    onDownloading:function(){earShow('wait','Downloading the speech model\u2026 (one time, about 142 MB)');}
+  }).then(function(ok){
+    if(!ok||!open||earState!=='wait')return earStop();
+    return ear.start().then(function(){if(open&&earState==='wait'){hush();earShow('on');}else earStop();});
+  }).catch(function(error){
+    var denied=error&&(error.name==='NotAllowedError'||error.name==='SecurityError');
+    earStop(denied?'The microphone is blocked. Allow Mia to use it in your computer\'s settings.':'The mic could not start. Type it here.');
+  });
 }
 // Sound: wind is shaped noise; each drop is a short rising tone, placed left or right where it lands.
 var ac=null,master=null,muted=false;
@@ -736,6 +779,7 @@ function build(){
   $('leave').onclick=leave;
   $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t)return;$('box').value='';direct(t.slice(0,2000));};
   $('stop').onclick=function(){hush();halt('');};
+  $('mic').onclick=earToggle;
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
   $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
   siteWire();
@@ -783,6 +827,7 @@ function enter(){
   host.classList.remove('driving');$('back').hidden=true;
   host.hidden=false;draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
+  $('mic').hidden=!earParts();
   if(pane()&&!webOff)webOff=web.onState(siteState);
   if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
@@ -799,7 +844,7 @@ function enter(){
 function leave(){
   if(!open)return;
   if(R&&R.running)halt('');
-  open=false;clearTimeout(drawTimer);drawTimer=null;hush();seedId++;
+  open=false;clearTimeout(drawTimer);drawTimer=null;hush();earStop();seedId++;
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
   host.classList.remove('driving');$('back').hidden=true;drive=false;

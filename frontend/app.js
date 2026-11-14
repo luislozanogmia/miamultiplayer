@@ -21223,7 +21223,7 @@
     var D = window.MiaDictation;
     if(!micBtn || !D) return;
     var state = 'idle'; // idle | starting | recording | transcribing
-    var recorder = null, stream = null, chunks = [], hideTimer = null;
+    var hideTimer = null;
 
     function show(message, opts){
       opts = opts || {};
@@ -21246,12 +21246,10 @@
       fetch: function(path, init){ return fetch(path, init); },
       workspace: function(){ return activeWorkspaceKey; }
     });
-    function releaseMic(){
-      if(stream){ stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
-      recorder = null;
-    }
+    var recording = D.createRecorder({media: navigator.mediaDevices, MediaRecorder: window.MediaRecorder,
+      AudioContext: window.AudioContext || window.webkitAudioContext, transcribe: engine.transcribe});
     function fail(message){
-      releaseMic(); setState('idle');
+      recording.cancel(); setState('idle');
       show(message, {notice:true, autoHide:7000});
     }
 
@@ -21266,12 +21264,7 @@
       setState('starting');
       ensureReady().then(function(ok){
         if(!ok){ setState('idle'); hide(); return; }
-        return navigator.mediaDevices.getUserMedia({audio:true}).then(function(media){
-          stream = media; chunks = [];
-          recorder = new MediaRecorder(media);
-          recorder.ondataavailable = function(ev){ if(ev.data && ev.data.size) chunks.push(ev.data); };
-          recorder.onstop = onRecorded;
-          recorder.start();
+        return recording.start().then(function(){
           setState('recording');
           show('Recording… click the mic again to stop');
         });
@@ -21282,21 +21275,9 @@
     }
 
     function onRecorded(){
-      var blob = new Blob(chunks, {type: (recorder && recorder.mimeType) || 'audio/webm'});
-      releaseMic();
       setState('transcribing');
       show('Transcribing…');
-      blob.arrayBuffer().then(function(bytes){
-        var ctx = new (window.AudioContext || window.webkitAudioContext)();
-        return ctx.decodeAudioData(bytes).then(function(audio){
-          ctx.close();
-          var channels = [];
-          for(var c = 0; c < audio.numberOfChannels; c++) channels.push(audio.getChannelData(c));
-          return D.toWav16k(channels, audio.sampleRate);
-        });
-      }).then(function(wav){
-        return engine.transcribe(wav);
-      }).then(function(text){
+      recording.stop().then(function(text){
         setState('idle');
         if(!text){ show('No speech detected.', {notice:true, autoHide:3000}); return; }
         var input = el('#ccInput');
@@ -21312,7 +21293,7 @@
     }
 
     micBtn.addEventListener('click', function(){
-      if(state === 'recording'){ try { recorder.stop(); } catch(_){ fail('Recording stopped unexpectedly.'); } return; }
+      if(state === 'recording'){ onRecorded(); return; }
       if(state === 'idle') start();
     });
   })();
