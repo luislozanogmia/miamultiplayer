@@ -8,7 +8,9 @@
 //
 // It never enters AI mode itself; the caller does that on 'try'.
 // opts (all optional): parent (default document.body), reducedMotion (force
-// true/false; default follows the system), speed (timeline multiplier, 1).
+// true/false; default follows the system), speed (timeline multiplier, 1),
+// sound (false for silence), say (called with Mia's welcome when the ending
+// arrives; may return a function that stops it).
 //
 // Drawn in its own shadow root, CSS transitions and one small canvas only.
 (function(root, factory){
@@ -19,27 +21,32 @@
   'use strict';
 
   var COPY = {
-    label: 'AI mode preview',
-    title: 'AI mode',
+    label: 'AI Mode preview',
+    title: 'Welcome to AI Mode.',
     tag: 'Preview',
-    line: 'Our take on where collaboration between people and AI is going.',
-    note: 'Mia stays just as it is. You can switch between the two at any time.',
+    line: 'You set the direction. I\'ll handle the execution.',
+    sub: 'An experimental preview of the next generation of human-AI collaboration.',
+    note: 'Your familiar Mia workspace is always one click away.',
+    spoken: 'Welcome to AI Mode. You set the direction. I\'ll handle the execution.',
     skip: 'Skip',
-    later: 'Not now',
-    go: 'Try AI mode',
+    later: 'Stay in Mia',
+    go: 'Enter AI Mode',
     typed: 'Plan next week\'s launch',
     placeholder: 'Say what you want',
     captions: {
-      app: 'Mia, as you know it.',
-      soften: 'It stays right where it is.',
-      dissolve: 'Now, just say what you want.',
-      work: 'Mia and your bots do the work.',
+      app: 'This is Mia, as you know it.',
+      soften: 'But what if you didn\'t have to navigate it?',
+      dissolve: 'What if you just shared your intent?',
+      work: 'And watched intelligence work.',
       final: ''
     },
+    // Cards are put together in front of the person: each starts as a bot at
+    // work and settles into the finished piece. The last one is still being
+    // worked on when the ending arrives.
     cards: [
-      {title: 'Launch checklist', text: 'Drafted and ready to review', mote: 'research'},
-      {title: 'Team update', text: 'Written from this week\'s chats', mote: 'inbox'},
-      {title: 'Friday review', text: 'Booked with everyone free', mote: 'calendar'}
+      {title: 'Launch checklist', working: 'Scout is drafting it…', text: 'Drafted, ready for your review', mote: 'research'},
+      {title: 'Team update', working: 'Inbox is writing it…', text: 'Written from this week\'s chats', mote: 'inbox'},
+      {title: 'Friday review', working: 'Finding a time for everyone…', text: '', mote: 'calendar'}
     ],
     chats: ['Launch plan', 'Team notes', 'Customer calls', 'Ideas'],
     bots: [{name: 'Scout', mote: 'research'}, {name: 'Ledger', mote: 'sales'}, {name: 'Inbox', mote: 'inbox'}]
@@ -49,12 +56,12 @@
   // the classes of the ones before it, so the CSS only says what changes.
   var STEPS = [
     {at: 0, phase: 'app'},
-    {at: 3600, phase: 'soften'},
-    {at: 6600, phase: 'dissolve'},
-    {at: 10200, phase: 'work'},
-    {at: 14800, phase: 'final'}
+    {at: 3000, phase: 'soften'},
+    {at: 6000, phase: 'dissolve'},
+    {at: 9000, phase: 'work'},
+    {at: 13000, phase: 'final'}
   ];
-  var TOTAL_MS = 15800; // buttons are fully settled by here
+  var TOTAL_MS = 15000; // buttons are fully settled by here
   var LEAVE_MS = 240;
 
   function esc(value){
@@ -121,7 +128,14 @@
     '.card .pic img{height:52px;width:auto}',
     '.card .t{padding:10px 14px 13px}.card b{display:block;font:600 14px/1.3 var(--sans,system-ui,sans-serif);color:var(--ink)}.card p{margin:3px 0 0;font-size:12px;color:var(--soft)}',
     '.is-work .card{opacity:1;transform:none}',
-    '.card:nth-child(2){transition-delay:.9s}.card:nth-child(3){transition-delay:1.8s}',
+    '.card{transition-delay:1.1s}.card:nth-child(2){transition-delay:1.9s}.card:nth-child(3){transition-delay:2.7s}',
+    // a card is a bot at work first, then the finished piece
+    '.card .t{position:relative}.card p{min-height:1.4em}.card .w{color:var(--accent-text)}.card .d{position:absolute;left:14px;right:14px;bottom:13px;opacity:0}',
+    '.card .bar{height:2px;background:rgba(255,255,255,.08);overflow:hidden}.card .bar i{display:block;height:100%;width:0;background:var(--accent)}',
+    '.is-work .card .bar i{animation:fill 1.5s ease-out 1.2s forwards}.is-work .card:nth-child(2) .bar i{animation-delay:2s}.is-work .card:nth-child(3) .bar i{animation:fill3 6s ease-out 2.8s forwards}',
+    '.is-work .card.ends .w{animation:gone .4s ease 2.7s forwards}.is-work .card.ends .d{animation:here .5s ease 2.9s forwards}',
+    '.is-work .card.ends:nth-child(2) .w{animation-delay:3.5s}.is-work .card.ends:nth-child(2) .d{animation-delay:3.7s}',
+    '@keyframes fill{to{width:100%}}@keyframes fill3{to{width:70%}}@keyframes gone{to{opacity:0}}@keyframes here{to{opacity:1}}',
     '.is-work .card img{animation:bob 2.6s ease-in-out infinite}.card:nth-child(2) img{animation-delay:-.9s}.card:nth-child(3) img{animation-delay:-1.7s}',
     '@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}',
     // the one input line, as in the real stage
@@ -129,7 +143,7 @@
     '.is-dissolve .pill{opacity:1;transform:translate(-50%,0)}',
     '.pill .ph,.pill .ty{position:absolute;left:16px}',
     '.pill .ty{color:var(--ink);opacity:0;clip-path:inset(0 100% 0 0)}',
-    '.is-work .pill .ph{opacity:0}.is-work .pill .ty{opacity:1;animation:type 2.4s steps(22,end) .6s forwards}',
+    '.is-work .pill .ph{opacity:0}.is-work .pill .ty{opacity:1;animation:type 1.2s steps(22,end) .3s forwards}',
     '@keyframes type{to{clip-path:inset(0 0 0 0)}}',
     // captions
     '.cap{position:absolute;left:0;right:0;top:calc(50% + min(34vh,330px));text-align:center;font:500 clamp(19px,2.6vw,28px)/1.3 var(--sans,system-ui,sans-serif);color:rgba(20,20,20,.7);padding:0 24px;transition:color 1.2s ease,opacity .5s ease;min-height:1.3em}',
@@ -140,11 +154,12 @@
     '.final{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;pointer-events:none}',
     '.final>*{opacity:0;transform:translateY(10px);transition:opacity .8s ease,transform .8s cubic-bezier(.2,.7,.2,1)}',
     '.is-final .final{pointer-events:auto}.is-final .final>*{opacity:1;transform:none}',
-    '.is-final .final>:nth-child(2){transition-delay:.15s}.is-final .final>:nth-child(3){transition-delay:.3s}.is-final .final>:nth-child(4){transition-delay:.45s}.is-final .final>:nth-child(5){transition-delay:.6s}',
+    '.is-final .final>:nth-child(2){transition-delay:.15s}.is-final .final>:nth-child(3){transition-delay:.3s}.is-final .final>:nth-child(4){transition-delay:.45s}.is-final .final>:nth-child(5){transition-delay:.6s}.is-final .final>:nth-child(6){transition-delay:.75s}',
     '.ttl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center}',
     '.ttl h2{margin:0;font:500 clamp(34px,6vw,60px)/1.05 var(--sans,system-ui,sans-serif);letter-spacing:-.025em}',
     '.tag{font:600 11px/1 var(--mono,ui-monospace,monospace);letter-spacing:.08em;text-transform:uppercase;color:var(--accent-text);border:1px solid rgba(240,188,74,.45);background:rgba(227,166,27,.14);border-radius:999px;padding:6px 10px}',
     '.line{margin:0;max-width:30em;font-size:clamp(16px,2vw,20px);color:var(--soft);text-wrap:balance}',
+    '.sub{margin:0;max-width:34em;font-size:14px;color:var(--muted);text-wrap:balance}',
     '.note{margin:0;max-width:30em;font-size:13px;color:var(--muted)}',
     '.acts{display:flex;gap:10px;margin-top:10px}',
     '.btn{appearance:none;height:40px;border-radius:8px;padding:0 22px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);font-size:14px;cursor:pointer;white-space:nowrap;transition:background .12s ease}',
@@ -183,8 +198,10 @@
   // The complete markup for the shadow root. Pure, so it can be tested.
   function markup(){
     var cards = COPY.cards.map(function(c){
-      return '<div class="card"><div class="pic"><img alt="" draggable="false" src="' + mote(c.mote) + '"></div>'
-        + '<div class="t"><b>' + esc(c.title) + '</b><p>' + esc(c.text) + '</p></div></div>';
+      return '<div class="card' + (c.text ? ' ends' : '') + '"><div class="pic"><img alt="" draggable="false" src="' + mote(c.mote) + '"></div>'
+        + '<div class="bar"><i></i></div>'
+        + '<div class="t"><b>' + esc(c.title) + '</b><p class="w">' + esc(c.working) + '</p>'
+        + (c.text ? '<p class="d">' + esc(c.text) + '</p>' : '') + '</div></div>';
     }).join('');
     return '<style>' + CSS + '</style>'
       + '<div class="stage" data-stage role="dialog" aria-modal="true" aria-label="' + esc(COPY.label) + '" aria-describedby="aiIntroLine">'
@@ -194,7 +211,7 @@
       + '<div class="pill"><span class="ph">' + esc(COPY.placeholder) + '</span><span class="ty">' + esc(COPY.typed) + '</span></div></div>'
       + '<div class="cap" data-caption aria-live="polite"></div>'
       + '<div class="final"><div class="ttl"><h2>' + esc(COPY.title) + '</h2><span class="tag">' + esc(COPY.tag) + '</span></div>'
-      + '<p class="line" id="aiIntroLine">' + esc(COPY.line) + '</p><p class="note">' + esc(COPY.note) + '</p>'
+      + '<p class="line" id="aiIntroLine">' + esc(COPY.line) + '</p><p class="sub">' + esc(COPY.sub) + '</p><p class="note">' + esc(COPY.note) + '</p>'
       + '<div class="acts"><button type="button" class="btn" data-act="skip-final">' + esc(COPY.later) + '</button>'
       + '<button type="button" class="btn primary" data-act="try">' + esc(COPY.go) + '</button></div></div>'
       + '<button type="button" class="skip" data-act="skip">' + esc(COPY.skip) + '</button>'
@@ -204,6 +221,37 @@
   function prefersReduced(){
     try{ return !!(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches); }
     catch(_e){ return false; }
+  }
+
+  // The sound of the place arriving: a soft wind, and a small note for each
+  // drop. It fades in as the app dissolves and out when the intro closes.
+  function startSound(){
+    var AC = root.AudioContext || root.webkitAudioContext;
+    if(!AC) return null;
+    try{
+      var ac = new AC(), master = ac.createGain();
+      master.gain.value = 0; master.connect(ac.destination);
+      master.gain.linearRampToValueAtTime(1, ac.currentTime + 3);
+      var len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), data = buf.getChannelData(0);
+      for(var i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      var src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+      var band = ac.createBiquadFilter(); band.type = 'bandpass'; band.frequency.value = 320; band.Q.value = 0.8;
+      var wind = ac.createGain(); wind.gain.value = 0.045;
+      src.connect(band); band.connect(wind); wind.connect(master); src.start();
+      return {
+        drop: function(size){
+          try{
+            var t = ac.currentTime, g = ac.createGain(), o = ac.createOscillator(), base = 520 + Math.random() * 380;
+            o.type = 'sine'; o.frequency.setValueAtTime(base, t); o.frequency.exponentialRampToValueAtTime(base * 2.1, t + 0.05);
+            g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.07 * size, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+            o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.13);
+          }catch(_e){}
+        },
+        stop: function(){
+          try{ master.gain.setTargetAtTime(0, ac.currentTime, 0.15); setTimeout(function(){ try{ ac.close(); }catch(_e){} }, 700); }catch(_e){}
+        }
+      };
+    }catch(_e){ return null; }
   }
 
   var active = null;
@@ -228,16 +276,21 @@
     var laterBtn = shadow.querySelector('[data-act="skip-final"]');
     var tryBtn = shadow.querySelector('[data-act="try"]');
     var canvas = shadow.querySelector('#rain');
-    var timers = [], raf = 0, done = false, atEnd = false, phase = '';
+    var timers = [], raf = 0, done = false, atEnd = false, phase = '', sound = null, hush = null;
 
     active = new Promise(function(resolve){
       function setPhase(name){
         phase = name;
         classesFor(name).forEach(function(c){ stage.classList.add(c); });
         caption.textContent = COPY.captions[name] || '';
-        if(name === 'dissolve') startRain();
+        if(name === 'dissolve'){
+          if(opts.sound !== false) sound = startSound();
+          startRain();
+        }
         if(name === 'final'){
           atEnd = true;
+          // Mia says her welcome; the caller gives the voice and may return a way to stop it.
+          if(typeof opts.say === 'function'){ try{ hush = opts.say(COPY.spoken); }catch(_e){} }
           timers.push(setTimeout(function(){ if(!done) tryBtn.focus(); }, 500 / speed));
         }
       }
@@ -253,7 +306,7 @@
           }
           var W = canvas.width, H = canvas.height;
           ctx.clearRect(0, 0, W, H);
-          if(t - last > 420){ drops.push({x: Math.random(), d: Math.random(), t: t}); last = t; }
+          if(t - last > 420){ var drop = {x: Math.random(), d: Math.random(), t: t}; drops.push(drop); last = t; if(sound) sound.drop(0.25 + 0.75 * drop.d); }
           drops = drops.filter(function(p){ return t - p.t < 3000; });
           drops.forEach(function(p){
             var k = (t - p.t) / 3000, sc = 0.25 + 0.75 * p.d;
@@ -276,6 +329,8 @@
         timers.forEach(clearTimeout);
         if(raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
         document.removeEventListener('keydown', onKey, true);
+        if(sound) sound.stop();
+        if(result !== 'try' && typeof hush === 'function'){ try{ hush(); }catch(_e){} }
         stage.classList.add('leaving');
         setTimeout(function(){
           host.remove();

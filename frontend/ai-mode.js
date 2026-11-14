@@ -687,6 +687,36 @@ function sayNext(){
   }
   speakOwn(t,done);
 }
+// The welcome is said once: by the intro's ending the first time, on entering after that.
+var introSpoke=false;
+function welcome(){
+  if(introSpoke){introSpoke=false;return;}
+  speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
+}
+// The intro plays before AI mode is open, so its welcome is said here, in the same voice.
+// Returns a way to stop it, for a person who stays in Mia.
+function introSay(t){
+  var off=false,ctx=null,AC=window.AudioContext||window.webkitAudioContext;
+  if(muted)return function(){};
+  introSpoke=true;
+  function own(){if(!off)speakOwn(t,function(){});}
+  call('/api/ai-mode/voices').then(function(r){
+    if(off)return;
+    if(!(+r.data.voices)||!AC)return own();
+    return fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:0})})
+      .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
+      .then(function(b){ctx=new AC();return ctx.decodeAudioData(b);})
+      .then(function(buf){
+        if(off)return;
+        var src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);src.start();
+      });
+  }).catch(own);
+  return function(){
+    off=true;introSpoke=false;
+    try{if(ctx)ctx.close();}catch(e){}
+    try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
+  };
+}
 function speakOwn(t,done){
   if(!window.speechSynthesis)return done();
   try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;u.onend=u.onerror=done;window.speechSynthesis.speak(u);}catch(e){done();}
@@ -868,8 +898,8 @@ function enter(){
   startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
   call('/api/ai-mode/voices').then(function(r){
     voices=+r.data.voices||0;voice=0;$('voice').hidden=voices<2;$('voice').textContent='Voice 1';
-    if(open&&s===1)speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
-  },function(){speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');});
+    if(open&&s===1)welcome();
+  },function(){welcome();});
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
   setTimeout(function(){if(open)$('box').focus();},400);
   openChat().catch(function(){});
@@ -894,7 +924,7 @@ document.addEventListener('click',function(e){
   // The first time on this computer, a short intro shows what AI mode is.
   var seen=true;try{seen=localStorage.getItem('miaAiModeIntroSeen')==='1';}catch(err){}
   if(seen||!window.MiaAiModeIntro)return enter();
-  window.MiaAiModeIntro.play().then(function(r){
+  window.MiaAiModeIntro.play({sound:!muted,say:introSay}).then(function(r){
     try{localStorage.setItem('miaAiModeIntroSeen','1');}catch(err){}
     if(r==='try')enter();
   });

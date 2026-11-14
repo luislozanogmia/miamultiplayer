@@ -7,11 +7,12 @@ const intro = globalThis.MiaAiModeIntro;
 
 test('the copy says what AI mode is, that it is a preview, and offers two choices', () => {
   const html = intro.markup();
-  assert.match(html, />AI mode</);
+  assert.match(html, />Welcome to AI Mode\.</);
   assert.match(html, />Preview</);
-  assert.match(html, /Our take on where collaboration between people and AI is going\./);
-  assert.match(html, />Not now</);
-  assert.match(html, />Try AI mode</);
+  assert.match(html, /You set the direction\. I&#39;ll handle the execution\./);
+  assert.match(html, /Your familiar Mia workspace is always one click away\./);
+  assert.match(html, />Stay in Mia</);
+  assert.match(html, />Enter AI Mode</);
   assert.match(html, />Skip</);
   assert.match(html, /Say what you want/);
   assert.match(html, /role="dialog" aria-modal="true"/);
@@ -98,4 +99,21 @@ test('reduced motion shows the still final frame at once, with no timeline', asy
   assert.equal(await result, 'try');
   // the stylesheet turns every transition and animation off for the still frame
   assert.match(intro.markup(), /\.still \*,\.still\{transition:none!important;animation:none!important\}/);
+});
+
+test('cards are put together in view: each shows a bot at work, and the last is still being worked on', () => {
+  const html = intro.markup();
+  assert.equal((html.match(/class="w"/g) || []).length, 3);
+  assert.equal((html.match(/class="d"/g) || []).length, 2);
+  assert.equal((html.match(/class="card ends"/g) || []).length, 2);
+});
+
+test('Mia says her welcome when the ending arrives, and staying in Mia stops it', async () => {
+  const dom = page();
+  let said = '', stopped = 0;
+  const result = intro.play({ reducedMotion: true, sound: false, say: (t) => { said = t; return () => { stopped += 1; }; } });
+  assert.equal(said, intro.COPY.spoken);
+  dom.el('[data-act="skip-final"]').listeners.click();
+  assert.equal(await result, 'skip');
+  assert.equal(stopped, 1);
 });
