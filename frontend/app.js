@@ -5265,12 +5265,15 @@
   // latest version of it. The reply shows as working until it is done.
   function askHubMarketBot(roomId,bot,sequence){
     var replyId=window.MiaHubChat.id(),selection=chatModelSelectionMetadata(),me=hubChat.membership && hubChat.membership.clerk_user_id;
-    var job={id:replyId,channel_id:roomId,bot_name:bot.name,state:'claimed',market:true,requester_id:me,executor_id:me,created_at:Date.now()/1000};
+    var folderBot=sharedFolderBotForMarketBot(bot.id),ask={teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence};
+    var job={id:replyId,channel_id:roomId,bot_name:bot.name,state:'claimed',market:true,requester_id:me,executor_id:me,created_at:Date.now()/1000,folderBotId:folderBot?folderBot.id:null};
     trackHubDispatch(job);
     // A reply the live feed never closes stops showing as working by itself.
     setTimeout(function(){settleHubMarketReplies([{id:replyId,status:'failed'}]);},HUB_MARKET_RUN_MS);
-    return window.MiaHubChat.localCall('POST','/ask',Object.assign({teamId:activeWorkspaceKey.slice(4),channelId:roomId,botId:bot.id,replyId:replyId,triggerSequence:sequence},selection?{modelSelection:selection}:{},hubOpenPage()))
-      .then(function(){keepHubRunTokensFresh();})
+    // The bot's memory, as everyone left it, before the run reads it.
+    return pullSharedFolder(folderBot).then(function(){
+      return window.MiaHubChat.localCall('POST','/ask',Object.assign(ask,selection?{modelSelection:selection}:{},hubOpenPage()));
+    }).then(function(){keepHubRunTokensFresh();})
       .catch(function(error){
         trackHubDispatch(Object.assign({},job,{state:'failed'}));
         showBenchToast(bot.name+' couldn’t start: '+hubActionError(error,'try again.'));
@@ -5281,7 +5284,11 @@
   function settleHubMarketReplies(rows){
     (rows||[]).forEach(function(row){
       var job=row && hubChat.dispatches && hubChat.dispatches[row.id];
-      if(job && job.market && row.status!=='working')trackHubDispatch(Object.assign({},job,{state:row.status==='failed'?'failed':'done'}));
+      if(!job || !job.market || row.status==='working')return;
+      trackHubDispatch(Object.assign({},job,{state:row.status==='failed'?'failed':'done',folderBotId:null}));
+      // What the run learned goes back to everyone who uses the bot.
+      var folderBot=job.folderBotId && (chatWs.botRecords||[]).filter(function(record){return String(record.id)===String(job.folderBotId);})[0];
+      if(folderBot)pushSharedFolder(folderBot);
     });
   }
   function refreshHubBotState(roomId,force){
@@ -5801,8 +5808,19 @@
     var bot = botId && (chatWs.botRecords || []).filter(function(record){ return String(record.id) === String(botId); })[0];
     return bot && bot.marketSource && bot.marketSource.folder === true ? bot : null;
   }
-  function pullSharedFolderBeforeSend(roomId){
-    var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
+  // The person's own copy of a company bot, when it has a shared folder: a
+  // channel run reads and adds to the memory kept there.
+  function sharedFolderBotForMarketBot(marketBotId){
+    var teamId = activeWorkspaceKey.slice(4);
+    return (chatWs.botRecords || []).filter(function(record){
+      var source = record.marketSource;
+      return source && source.folder === true && source.teamId === teamId && String(source.botId) === String(marketBotId);
+    })[0] || null;
+  }
+  function pullSharedFolderBeforeSend(roomId){ return pullSharedFolder(sharedFolderBot(roomId)); }
+  function pushSharedFolderAfterRun(roomId){ pushSharedFolder(sharedFolderBot(roomId)); }
+  function pullSharedFolder(bot){
+    var sync = bot && sharedFolderSync();
     if(!sync) return Promise.resolve();
     var controller = new AbortController(), timer;
     var timeout = new Promise(function(resolve){ timer = setTimeout(function(){ controller.abort(); resolve(); }, 60000); });
@@ -5812,8 +5830,8 @@
       showBenchToast('Couldn\u2019t get ' + bot.name + '\u2019s latest shared files: ' + (error && error.message || 'try again.') + ' It works from the ones on this computer.');
     }).finally(function(){ clearTimeout(timer); });
   }
-  function pushSharedFolderAfterRun(roomId){
-    var bot = sharedFolderBot(roomId), sync = bot && sharedFolderSync();
+  function pushSharedFolder(bot){
+    var sync = bot && sharedFolderSync();
     if(!sync || sharedFolderPushes[bot.id]) return;
     sharedFolderPushes[bot.id] = sync.push(bot).then(function(result){
       if(result && result.skipped && result.skipped.length) showBenchToast(bot.name + '\u2019s shared folder skipped files with unsupported names or sizes: ' + result.skipped.slice(0, 3).join(', ') + (result.skipped.length > 3 ? ' and more.' : '.'));

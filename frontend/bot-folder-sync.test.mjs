@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 createRequire(import.meta.url)('./bot-folder-sync.js');
-const { createSync, conflictName } = globalThis.MiaBotFolderSync;
+const { createSync, conflictName, mergeMemory } = globalThis.MiaBotFolderSync;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const b64 = (text) => Buffer.from(text).toString('base64');
 globalThis.atob ||= (v) => Buffer.from(v, 'base64').toString('binary');
@@ -121,6 +121,49 @@ test('two runs changing the same file keep both: this run\'s becomes a copy, and
   assert.notEqual(again.copies[0], result.copies[0], 'a later conflict has its own copy name');
   assert.equal(ana.disk[result.copies[0]], 'v2 from Ana\'s run', 'the first conflict copy survives');
   assert.equal(w.hub.blobs[w.hub.files[again.copies[0]].file_id], 'v3 from Ana');
+});
+
+test('two memory files become one: every lesson kept once, new headings beside their siblings', () => {
+  const theirs = '# Sales\n\n## Leads\n\n### Naming\n- [2026-11-10, Ana] Leads are called prospects here.\n\n# Design\n\n## Art\n- [2026-11-11, Ana] Use the real art.\n';
+  const mine = '# Sales\n\n## Leads\n\n### Naming\n- [2026-11-10, Ana] Leads are called prospects here.\n- [2026-11-12, Ben] Never shorten a company name.\n\n### Follow-up\n- [2026-11-12, Ben] Follow up after three days.\n\n# Support\n\n## Tone\n- [2026-11-12, Ben] Short answers.\n';
+  const merged = mergeMemory(theirs, mine);
+  assert.equal(merged, '# Sales\n\n## Leads\n\n### Naming\n- [2026-11-10, Ana] Leads are called prospects here.\n- [2026-11-12, Ben] Never shorten a company name.\n\n'
+    + '### Follow-up\n- [2026-11-12, Ben] Follow up after three days.\n\n# Design\n\n## Art\n- [2026-11-11, Ana] Use the real art.\n\n# Support\n\n## Tone\n- [2026-11-12, Ben] Short answers.\n');
+  assert.equal(mergeMemory(merged, mine), merged, 'merging again adds nothing');
+  assert.equal(mergeMemory(theirs, theirs), theirs);
+  assert.equal(mergeMemory('', mine), mine);
+  assert.equal(mergeMemory(theirs, ''), theirs);
+  assert.equal(mergeMemory('# sales\n- a\n', '# Sales \n- b\n'), '# sales\n- a\n- b\n', 'the same heading in another case is one heading');
+});
+
+test('two runs that both taught the bot leave one memory with both lessons, and no copy', async () => {
+  const w = world(), ana = w.computer();
+  const sync = createSync({ api: ana.api, hubCall: w.hubCall, teamFiles: w.teamFiles, fetch: w.fetch, who: 'Ana' });
+  w.put('memory.md', '# Sales\n- [2026-11-10, Ana] one\n');
+  await sync.pull(bot);
+  ana.disk['memory.md'] = '# Sales\n- [2026-11-10, Ana] one\n- [2026-11-12, Ana] from Ana\n';
+  w.hub.raceOnCommit = () => w.put('memory.md', '# Sales\n- [2026-11-10, Ana] one\n- [2026-11-12, Ben] from Ben\n');   // Ben's run lands first
+  const result = await sync.push(bot);
+  const both = '# Sales\n- [2026-11-10, Ana] one\n- [2026-11-12, Ben] from Ben\n- [2026-11-12, Ana] from Ana\n';
+  assert.deepEqual(result.copies, []);
+  assert.deepEqual(Object.keys(ana.disk), ['memory.md']);
+  assert.equal(ana.disk['memory.md'], both);
+  assert.equal(w.hub.blobs[w.hub.files['memory.md'].file_id], both, 'the company\'s copy has both lessons');
+  // The same before a run: a lesson written here that never synced meets a newer memory there.
+  ana.disk['memory.md'] = both + '- [2026-11-13, Ana] offline\n';
+  w.put('memory.md', both + '- [2026-11-13, Ben] later\n');
+  await sync.pull(bot);
+  assert.equal(ana.disk['memory.md'], both + '- [2026-11-13, Ben] later\n- [2026-11-13, Ana] offline\n');
+  await sync.push(bot);
+  assert.equal(w.hub.blobs[w.hub.files['memory.md'].file_id], ana.disk['memory.md']);
+});
+
+test('a bot asked in a channel gets its shared folder before the run and gives it back after', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /return source && source\.folder === true && source\.teamId === teamId && String\(source\.botId\) === String\(marketBotId\);/);
+  assert.match(app, /return pullSharedFolder\(folderBot\)\.then\(function\(\)\{\n\s+return window\.MiaHubChat\.localCall\('POST','\/ask',/);
+  assert.match(app, /if\(folderBot\)pushSharedFolder\(folderBot\);/);
 });
 
 test('a bot without a shared folder, or with it off, syncs nothing', async () => {

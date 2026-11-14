@@ -5,7 +5,8 @@
   // copy is <bot working folder>/shared (/api/bots/:id/shared-folder). Before
   // a run: pull what changed. After it: push what changed. When someone else
   // changed the same file meanwhile, both versions are kept, never one
-  // overwritten: this run gets a distinct, Hub-valid copy name.
+  // overwritten: this run gets a distinct, Hub-valid copy name. The bot's
+  // memory (memory.md) is the exception: both versions become one file.
 
   var MAX_COMMIT = 500;
   var MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -21,6 +22,54 @@
     if(room < 1) throw new Error('The shared file name is too long for a conflict copy.');
     return dir + stem.slice(0, room) + suffix + ext;
   }
+
+  // The bot's memory: lessons as lines under headings. Two runs that both
+  // added lessons keep every line: theirs as it is, then what only this
+  // run's has, under the same heading or as a new one beside its siblings.
+  var MEMORY_FILE = 'memory.md';
+  function memorySections(text){
+    var sections = [{key: '', depth: 0, lines: []}], trail = [];
+    String(text || '').replace(/\r\n?/g, '\n').split('\n').forEach(function(line){
+      var heading = /^(#{1,6})\s+(.*\S)\s*$/.exec(line);
+      if(!heading){ sections[sections.length - 1].lines.push(line); return; }
+      var depth = heading[1].length;
+      trail = trail.slice(0, depth - 1);
+      while(trail.length < depth - 1) trail.push('');
+      trail.push(heading[2].toLowerCase());
+      sections.push({key: trail.join('\n'), parent: trail.slice(0, -1).join('\n'), depth: depth, heading: line, lines: []});
+    });
+    return sections;
+  }
+  function mergeMemory(theirs, mine){
+    var merged = memorySections(theirs), byKey = {};
+    merged.forEach(function(section){ if(!(section.key in byKey)) byKey[section.key] = section; });
+    memorySections(mine).forEach(function(section){
+      var same = byKey[section.key];
+      if(same){
+        var have = {};
+        same.lines.forEach(function(line){ have[line.trim()] = true; });
+        var added = section.lines.filter(function(line){ return line.trim() && !have[line.trim()]; });
+        if(!added.length) return;
+        while(same.lines.length && !same.lines[same.lines.length - 1].trim()) same.lines.pop();
+        same.lines = same.lines.concat(added, section.heading ? [''] : []);
+        return;
+      }
+      // A heading only this run's has: after the last section under the same parent.
+      var at = merged.length;
+      for(var i = merged.length - 1; i > 0; i--){
+        if(merged[i].key === section.parent || merged[i].key.indexOf(section.parent + '\n') === 0){ at = i + 1; break; }
+      }
+      if(!section.parent) at = merged.length;
+      var copy = {key: section.key, parent: section.parent, depth: section.depth, heading: section.heading, lines: section.lines.slice()};
+      merged.splice(at, 0, copy);
+      byKey[copy.key] = copy;
+    });
+    return merged.map(function(section){
+      return (section.heading ? [section.heading] : []).concat(section.lines).join('\n');
+    }).filter(function(part, index){ return index > 0 || part.trim(); }).join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s*$/, '\n');
+  }
+  function textToBase64(text){ return bytesToBase64(new root.TextEncoder().encode(text)); }
+  function base64ToText(value){ return new root.TextDecoder().decode(base64ToBytes(value)); }
 
   function base64ToBytes(value){
     var binary = root.atob(value), bytes = new Uint8Array(binary.length);
@@ -144,10 +193,20 @@
           var keepMine = here[file.path] && here[file.path] !== known[file.path];
           work.push(function(){
             stopped(signal);
-            var first = keepMine ? api(local(bot.id, '/file') + '?path=' + encodeURIComponent(file.path), {signal: signal}).then(function(res){
-              stopped(signal);
-              return saveConflictCopy(bot.id, file.path, check(res, 'A shared file could not be read.').contentBase64, 0, signal);
-            }) : Promise.resolve();
+            var readMine = function(){
+              return api(local(bot.id, '/file') + '?path=' + encodeURIComponent(file.path), {signal: signal}).then(function(res){
+                stopped(signal);
+                return check(res, 'A shared file could not be read.').contentBase64;
+              });
+            };
+            // The bot's memory changed here and there: one file with both runs' lessons.
+            if(keepMine && file.path === MEMORY_FILE) return readMine().then(function(mine){
+              return download(source, bot.id, file, signal).then(readMine).then(function(theirs){
+                var merged = mergeMemory(base64ToText(theirs), base64ToText(mine));
+                return api(local(bot.id, '/file'), {method: 'PUT', signal: signal, body: {path: file.path, contentBase64: textToBase64(merged)}});
+              }).then(function(res){ check(res, 'The bot\u2019s memory could not be saved on this computer.'); changed.push(file.path); });
+            });
+            var first = keepMine ? readMine().then(function(mine){ return saveConflictCopy(bot.id, file.path, mine, 0, signal); }) : Promise.resolve();
             return first.then(function(){ stopped(signal); return download(source, bot.id, file, signal); }).then(function(){ changed.push(file.path); });
           });
         });
@@ -194,7 +253,8 @@
           if(attempt >= 2) throw new Error('The shared folder kept changing while this run saved. Your files are still here; they sync after the next run.');
           // Someone changed the same files meanwhile: this run's go under a copy name,
           // the company's come back, and the copies are pushed.
-          var paths = (error.data && error.data.paths) || error.paths || [];
+          // The bot's memory gets no copy: the pull below merges both versions.
+          var paths = ((error.data && error.data.paths) || error.paths || []).filter(function(path){ return path !== MEMORY_FILE; });
           var copies = [];
           return paths.filter(function(path){ return here[path]; }).reduce(function(done, path){
             return done.then(function(){
@@ -216,5 +276,5 @@
     return {pull: pull, push: push};
   }
 
-  root.MiaBotFolderSync = {createSync: createSync, conflictName: conflictName};
+  root.MiaBotFolderSync = {createSync: createSync, conflictName: conflictName, mergeMemory: mergeMemory};
 })(typeof window !== 'undefined' ? window : globalThis);

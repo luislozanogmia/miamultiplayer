@@ -798,6 +798,11 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
       '- Never put keys, passwords or personal data there.',
     ].join('\n'));
   }
+  // What the bot has learned, from everyone who works with it. In its own
+  // chat the file is in its shared folder; a channel run names where it is.
+  const memoryFile = String(record.memoryFile || '').trim()
+    || (record.marketSource && record.marketSource.folder === true ? 'shared/memory.md' : '');
+  if (memoryFile) sections.push(botMemorySection(memoryFile));
   if (skills.length) {
     sections.push([
       'Your skills:',
@@ -806,6 +811,20 @@ function botIdentitySections(bot, { userDisplayName = '', userRelationship = 'au
     ].join('\n\n'));
   }
   return sections;
+}
+
+// The bot's memory: one file of short lessons, shared by everyone who uses
+// the bot. It holds how to do the work, not what was said.
+function botMemorySection(file) {
+  return [
+    'Your memory:',
+    `- \`${file}\` is what you have learned from working with everyone who uses you. It is the same file for all of them, so what you learn with one person helps the next.`,
+    '- Before work it could help with, read its headings, then the parts that fit the task. When it is missing you have learned nothing yet; create it with your first lesson.',
+    '- When a turn teaches you something worth keeping (how this company names or does things, what a term means here, a correction, a way that worked or failed), add one short line under the heading that fits, in the same turn.',
+    '- It is organized by headings: `# Broad area`, then `## Topic`, then `### Subject`. Put a lesson under an existing subject when one fits; add a heading only when none does.',
+    '- Write each lesson as `- [YYYY-MM-DD, first name of who you learned it from] the lesson`. Fix or replace a line that turned out wrong instead of adding a second one that disagrees.',
+    '- Keep the lesson, not the data: never copy messages, file contents, customer details, keys, passwords or anything personal into it. A person\u2019s private work stays out; what it taught you about doing the job goes in.',
+  ].join('\n');
 }
 
 function botSkills(bot) {
