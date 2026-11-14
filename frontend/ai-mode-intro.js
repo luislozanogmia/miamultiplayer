@@ -49,12 +49,12 @@
   // the classes of the ones before it, so the CSS only says what changes.
   var STEPS = [
     {at: 0, phase: 'app'},
-    {at: 1900, phase: 'soften'},
-    {at: 3100, phase: 'dissolve'},
-    {at: 4700, phase: 'work'},
-    {at: 6600, phase: 'final'}
+    {at: 3600, phase: 'soften'},
+    {at: 6600, phase: 'dissolve'},
+    {at: 10200, phase: 'work'},
+    {at: 14800, phase: 'final'}
   ];
-  var TOTAL_MS = 7600; // buttons are fully settled by here
+  var TOTAL_MS = 15800; // buttons are fully settled by here
   var LEAVE_MS = 240;
 
   function esc(value){
@@ -121,7 +121,7 @@
     '.card .pic img{height:52px;width:auto}',
     '.card .t{padding:10px 14px 13px}.card b{display:block;font:600 14px/1.3 var(--sans,system-ui,sans-serif);color:var(--ink)}.card p{margin:3px 0 0;font-size:12px;color:var(--soft)}',
     '.is-work .card{opacity:1;transform:none}',
-    '.card:nth-child(2){transition-delay:.45s}.card:nth-child(3){transition-delay:.9s}',
+    '.card:nth-child(2){transition-delay:.9s}.card:nth-child(3){transition-delay:1.8s}',
     '.is-work .card img{animation:bob 2.6s ease-in-out infinite}.card:nth-child(2) img{animation-delay:-.9s}.card:nth-child(3) img{animation-delay:-1.7s}',
     '@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}',
     // the one input line, as in the real stage
@@ -129,10 +129,10 @@
     '.is-dissolve .pill{opacity:1;transform:translate(-50%,0)}',
     '.pill .ph,.pill .ty{position:absolute;left:16px}',
     '.pill .ty{color:var(--ink);opacity:0;clip-path:inset(0 100% 0 0)}',
-    '.is-work .pill .ph{opacity:0}.is-work .pill .ty{opacity:1;animation:type 1.3s steps(22,end) .2s forwards}',
+    '.is-work .pill .ph{opacity:0}.is-work .pill .ty{opacity:1;animation:type 2.4s steps(22,end) .6s forwards}',
     '@keyframes type{to{clip-path:inset(0 0 0 0)}}',
     // captions
-    '.cap{position:absolute;left:0;right:0;top:calc(50% + min(34vh,330px));text-align:center;font:500 clamp(15px,1.8vw,19px)/1.3 var(--sans,system-ui,sans-serif);color:rgba(20,20,20,.7);padding:0 24px;transition:color 1.2s ease,opacity .5s ease;min-height:1.3em}',
+    '.cap{position:absolute;left:0;right:0;top:calc(50% + min(34vh,330px));text-align:center;font:500 clamp(19px,2.6vw,28px)/1.3 var(--sans,system-ui,sans-serif);color:rgba(20,20,20,.7);padding:0 24px;transition:color 1.2s ease,opacity .5s ease;min-height:1.3em}',
     '.is-dissolve .cap{color:var(--soft);top:auto;bottom:108px}',
     '.is-final .cap{opacity:0}',
     // the ending

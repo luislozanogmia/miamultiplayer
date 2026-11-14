@@ -30,7 +30,7 @@ test('the timeline runs app, soften, dissolve, work, final in order and keeps ea
   assert.deepEqual(intro.STEPS.map((s) => s.phase), ['app', 'soften', 'dissolve', 'work', 'final']);
   const times = intro.STEPS.map((s) => s.at);
   assert.deepEqual(times, [...times].sort((a, b) => a - b));
-  assert.ok(intro.TOTAL_MS >= 6000 && intro.TOTAL_MS <= 9000);
+  assert.ok(intro.TOTAL_MS >= 12000 && intro.TOTAL_MS <= 20000);
   assert.deepEqual(intro.classesFor('dissolve'), ['is-app', 'is-soften', 'is-dissolve']);
   assert.equal(intro.classesFor('final').length, 5);
 });
@@ -65,7 +65,7 @@ function page() {
 
 test('Try AI mode resolves "try" and removes the intro', async () => {
   const dom = page();
-  const result = intro.play({ speed: 100 });
+  const result = intro.play({ speed: 400 });
   const tryBtn = dom.el('[data-act="try"]');
   await new Promise((r) => setTimeout(r, 120));
   assert.ok(dom.el('[data-stage]').classList.contains('is-final'));
@@ -78,7 +78,7 @@ test('Try AI mode resolves "try" and removes the intro', async () => {
 test('Not now, the Skip control and Escape all resolve "skip"', async () => {
   for (const how of ['later', 'skip', 'escape']) {
     const dom = page();
-    const result = intro.play({ speed: 100 });
+    const result = intro.play({ speed: 400 });
     if (how === 'later') dom.el('[data-act="skip-final"]').listeners.click();
     if (how === 'skip') dom.el('[data-act="skip"]').listeners.click();
     if (how === 'escape') dom.handlers.keydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
