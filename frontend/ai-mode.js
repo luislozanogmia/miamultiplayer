@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-8">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-10">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -697,6 +697,12 @@ function build(){
   $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.
   // Esc puts the item at the front back with the others first.
+  // A phone's keyboard covers the bottom of the page; the box rides above it.
+  var vv=window.visualViewport;
+  if(vv){
+    var keys=function(){host.style.setProperty('--keys',(vv.scale===1?Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop)):0)+'px');};
+    vv.addEventListener('resize',keys);vv.addEventListener('scroll',keys);
+  }
   host.addEventListener('keydown',function(e){
     e.stopPropagation();
     var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
