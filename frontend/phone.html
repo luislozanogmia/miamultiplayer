@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mia</title>
+<!-- The Hub this page reaches the person's computer through. -->
+<meta name="mia-hub" content="https://hub.miamultiplayer.com">
+<meta name="theme-color" content="#050504">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mia">
+<link rel="manifest" href="phone.webmanifest">
+<link rel="apple-touch-icon" href="assets/icons/mia-192.png">
+<link rel="icon" href="assets/icons/mia-192.png">
+<link rel="stylesheet" href="phone.css?v=20261114-phone-1">
+</head>
+<body>
+<main class="phone" id="phone">
+  <span class="mark" id="mark" aria-hidden="true"></span>
+
+  <section id="pairView" hidden>
+    <h1>Mia on your phone</h1>
+    <p class="lead">Give directions to the Mia on your computer from here. On your computer, open AI mode, open the controls and choose Phone. Then type the code it shows.</p>
+    <form id="pairForm" novalidate>
+      <label for="code">Code from your computer</label>
+      <input id="code" name="code" inputmode="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX" aria-describedby="pairNote">
+      <p class="note" id="pairNote" role="status"></p>
+      <button class="primary" id="pairGo" type="submit">Connect</button>
+    </form>
+    <p class="fine">The code lasts five minutes and works for one phone. Your computer has to be on with Mia open.</p>
+  </section>
+
+  <section id="homeView" hidden>
+    <h1>Mia</h1>
+    <p class="status" id="status" role="status"><i id="dot"></i><span id="statusText"></span></p>
+    <button class="primary" id="open" type="button" data-ai-mode-enter>Open AI mode</button>
+    <p class="fine" id="homeNote">What you ask is sealed on this phone and opened only on your computer.</p>
+    <div class="foot">
+      <button class="quiet" id="forget" type="button">Disconnect this phone</button>
+      <div id="forgetAsk" hidden>
+        <p>Disconnect this phone from your computer?</p>
+        <button class="quiet" id="forgetNo" type="button">Keep it</button>
+        <button class="danger" id="forgetYes" type="button">Disconnect</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="assets/mia-mark.js"></script>
+<script src="remote-link-core.js?v=20261114-phone-1"></script>
+<script src="remote-link-phone.js?v=20261114-phone-1"></script>
+<script src="phone.js?v=20261114-phone-1"></script>
+<script src="ai-mode.js?v=20261114-ai-mode-19"></script>
+</body>
+</html>

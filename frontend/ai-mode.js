@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-10">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-11">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -27,11 +27,19 @@ var MARKUP=
       '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
+      '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
       '<button class="btn ghost" id="leave">Leave</button>'+
       '</span>'+
       '<button class="btn ghost more" id="more" aria-expanded="false" aria-label="Show the controls">\u2039</button>'+
     '</div>'+
     '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
+    '<div class="phone-bar" id="phoneBar" hidden>'+
+      '<b>AI mode on your phone</b>'+
+      '<p id="phoneNote"></p>'+
+      '<output class="phone-code" id="phoneCode" hidden></output>'+
+      '<ul id="phoneList"></ul>'+
+      '<button class="btn" id="phonePair">Connect a phone</button>'+
+    '</div>'+
     '<div class="cv pad" id="cv"></div>'+
     '<div class="site" id="site" hidden>'+
       '<div class="site-bar" id="siteBar">'+
@@ -479,7 +487,64 @@ function sitePlace(){
 function tools(fold){
   var m=$('more');$('tools').hidden=fold;m.textContent=fold?'\u2039':'\u203a';m.setAttribute('aria-expanded',fold?'false':'true');
   m.setAttribute('aria-label',fold?'Show the controls':'Hide the controls');
-  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');}
+  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);}
+}
+// A phone the person paired uses AI mode on this computer through the Hub.
+// The computer shows a code; the person types it on the phone once.
+var phone={code:'',until:0,list:[],note:'',busy:false,tick:null};
+function phoneShow(on){
+  $('phoneBar').hidden=!on;$('phoneBtn').setAttribute('aria-expanded',on?'true':'false');
+  if(on){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneLoad();}
+  else{phone.code='';clearInterval(phone.tick);phone.tick=null;}
+}
+function phoneWhy(e){
+  var st=e&&e.status,code=e&&e.code;
+  if(st===401)return 'Sign in to Mia on this computer first.';
+  if(code==='remote_not_available')return 'This needs a company in Mia. Join or create one first.';
+  if(code==='remote_device_limit')return 'This computer already has ten phones. Remove one first.';
+  if(st===429)return 'Too many codes are waiting. Try again in a few minutes.';
+  if(st===404)return 'Phones are not ready on Mia\'s side yet.';
+  return 'Could not reach Mia. Check the connection and try again.';
+}
+function phoneDraw(){
+  var left=Math.max(0,Math.ceil((phone.until-Date.now())/1000));
+  if(phone.code&&!left){phone.code='';clearInterval(phone.tick);phone.tick=null;}
+  $('phoneCode').hidden=!phone.code;$('phoneCode').textContent=phone.code;
+  $('phoneNote').textContent=phone.note||(phone.code?'Type this code in Mia on your phone. It works once, for '+(left>60?Math.ceil(left/60)+' more minutes.':left+' more seconds.')
+    :phone.list.length?'These phones can use AI mode on this computer while Mia is open here.'
+    :'Open Mia on your phone, then get a code here to connect it.');
+  $('phonePair').disabled=phone.busy;$('phonePair').textContent=phone.code?'New code':'Connect a phone';
+  $('phoneList').innerHTML=phone.list.map(function(d){
+    return '<li><span>'+esc(d.name||'Phone')+'</span><small>'+(d.online?'Connected':'Not open')+'</small><button class="btn ghost" data-phone="'+esc(d.id)+'">Remove</button></li>';
+  }).join('');
+}
+function phoneLoad(){
+  var h=window.MiaRemoteHost;if(!h||$('phoneBar').hidden)return;
+  h.phones().then(function(list){
+    // The code has done its job once the phone it was for shows up.
+    if(phone.code&&list.length>phone.list.length)phone.code='';
+    phone.list=list;phone.note='';phoneDraw();
+  },function(e){phone.list=[];phone.note=phoneWhy(e);phoneDraw();});
+}
+function phoneWire(){
+  var h=window.MiaRemoteHost;if(!h)return;
+  $('phoneBtn').hidden=false;
+  $('phoneBtn').onclick=function(){phoneShow($('phoneBar').hidden);};
+  $('phonePair').onclick=function(){
+    if(phone.busy)return;
+    phone.busy=true;phone.note='';phoneDraw();
+    h.pair().then(function(made){
+      phone.code=h.show(made.code);phone.until=made.expiresAt;
+      clearInterval(phone.tick);phone.tick=setInterval(phoneDraw,1000);
+    },function(e){phone.code='';phone.note=phoneWhy(e);}).then(function(){phone.busy=false;phoneDraw();});
+  };
+  $('phoneList').onclick=function(e){
+    var b=e.target&&e.target.closest&&e.target.closest('[data-phone]');
+    if(!b)return;
+    b.disabled=true;
+    h.remove(b.dataset.phone).then(phoneLoad,function(e){phone.note=phoneWhy(e);phoneDraw();});
+  };
+  window.addEventListener('mia-remote-link',phoneLoad);
 }
 function siteState(st){
   var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],tab=tabs.filter(function(t){return t.active;})[0];
@@ -681,7 +746,8 @@ function build(){
   $('blur').oninput=function(){blur(+this.value);try{localStorage.setItem('miaAiModeBlur',this.value);}catch(e){}};
   // The controls stay folded behind one mark until the person asks for them.
   $('more').onclick=function(){tools(!$('tools').hidden);};
-  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');};
+  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden)phoneShow(false);};
+  phoneWire();
   $('cv').addEventListener('click',function(e){
     // A link in her reply opens on the stage, in the desktop app.
     var a=e.target&&e.target.closest&&e.target.closest('a[href]');

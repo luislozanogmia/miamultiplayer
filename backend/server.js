@@ -1927,6 +1927,19 @@ function botFilesTidyPlan() {
     bots: cronSync.listBotFileFolders(),
   });
 }
+// Remote link: the phones paired with this computer (see frontend/remote-link-host.js).
+const remoteLink = require('./remote-link');
+const REMOTE_LINK_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'remote-link.json');
+// A person's own browser session only: a key used by automation must not read
+// or replace the keys the phones share with this computer.
+app.get('/api/remote-link/state', requireAuth, requireInteractiveAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store').json(remoteLink.readState(REMOTE_LINK_STATE));
+});
+app.put('/api/remote-link/state', requireAuth, requireInteractiveAuth, (req, res) => {
+  const state = remoteLink.writeState(REMOTE_LINK_STATE, req.body);
+  if (!state) return res.status(400).json({ error: 'invalid_remote_link_state' });
+  res.set('Cache-Control', 'no-store').json(state);
+});
 function botFilesTidyReview() {
   const moves = botFilesTidyPlan();
   const items = botFilesTidy.reviewPlan(miaosWorkspaceDir(), moves);

@@ -96,8 +96,13 @@ const HUB_MARKET_LIST = new RegExp(FILE_BASE + '/market/bots$');
 const HUB_MARKET_DETAIL = new RegExp(FILE_BASE + '/market/bots/' + FILE_ID + '(?:/versions/' + APP_VERSION + ')?$');
 const HUB_MARKET_WRITE = new RegExp(FILE_BASE + '/market/bots(?:/' + FILE_ID + '/versions)?$');
 const BOT_DEFINITION_BYTES = 72 * 1024 * 1024;
+// Remote link (a paired phone reaching this computer): sealed frames up to the
+// Hub's own 1 MiB a call each way, and the read for new frames is held open.
+const HUB_REMOTE = /^\/v1\/remote\/hosts\/[a-f0-9]{32}\/(poll|send)$/;
 function hubRouteLimits(method, route) {
   const file = hubFileRoute(method, route);
+  const remote = method === 'POST' && HUB_REMOTE.exec(route);
+  if (remote) return { request: 1024 * 1024, response: 2 * 1024 * 1024, timeout: remote[1] === 'poll' ? 30000 : 15000 };
   const largeDefinition = (method === 'POST' && (HUB_BOT_VERSIONS.test(route) || HUB_MARKET_WRITE.test(route)))
     || (method === 'GET' && (HUB_BOT_VERSIONS.test(route) || HUB_BOT_DEFINITION.test(route) || HUB_MARKET_DETAIL.test(route) || HUB_MARKET_LIST.test(route)))
     || (method === 'POST' && HUB_BOT_CLAIM.test(route));

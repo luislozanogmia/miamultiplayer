@@ -225,6 +225,7 @@ a.file:hover{border-color:var(--accent)}
   .intent .send{width:36px;height:36px}
   .stage .blur-bar{top:auto;bottom:calc(var(--bottom) + 8px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px))}
   .stage .blur-bar input{flex:1;width:auto;min-width:0}
+  .stage .phone-bar{top:auto;bottom:calc(var(--bottom) + 8px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));width:auto}
 }
 
 /* A website on the stage. The frame and its bar are see-through; the page inside is the browser's own. */
@@ -255,3 +256,16 @@ a.file:hover{border-color:var(--accent)}
 .blur-bar[hidden]{display:none}
 .blur-bar input{width:170px;accent-color:var(--accent)}
 .blur-bar small{font:11px var(--mono);color:var(--faint)}
+/* Pairing a phone: the code to type on it, and the phones already paired. */
+.phone-bar{position:absolute;top:var(--top);right:max(16px,env(safe-area-inset-right,0px));z-index:5;width:min(340px,calc(100% - 32px));display:flex;flex-direction:column;gap:10px;padding:14px 16px;border:1px solid var(--rule);border-radius:12px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px);font-size:13px;color:var(--soft)}
+.phone-bar[hidden]{display:none}
+.phone-bar b{font-weight:600;font-size:14px;color:var(--ink)}
+.phone-bar p{margin:0}
+.phone-code{display:block;padding:10px 0;border:1px solid var(--rule-strong);border-radius:10px;text-align:center;font:500 17px var(--mono);letter-spacing:.04em;color:var(--ink);user-select:all}
+.phone-code[hidden]{display:none}
+.phone-bar ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.phone-bar li{display:flex;align-items:center;gap:8px;min-width:0}
+.phone-bar li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.phone-bar li small{font:11px var(--mono);color:var(--faint)}
+.phone-bar .btn{align-self:flex-start}
+.phone-bar li .btn{align-self:auto;padding:0 8px}
