@@ -1177,6 +1177,10 @@
   /* The sidebar's sign that a new version is downloading; it fills as the download goes. */
   .update-cue{position:relative;flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;overflow:hidden;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:default;}
   .update-cue[hidden]{display:none;}
+  /* AI mode: the way in sits above the footer; in the narrow rail only its icon shows. */
+  .ai-mode-entry{flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:pointer;}
+  .ai-mode-entry:hover{background:var(--sand-fill-ghost-hover);}
+  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text{display:none;}}
   /* At rail width only the mark fits. */
   @media (max-width:1100px){.update-cue{margin:4px auto;padding:7px;}.update-cue-text,.update-cue-detail{display:none;}}
   .update-cue-bar{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--sand-fill-ghost-hover);transition:width .4s ease;pointer-events:none;}

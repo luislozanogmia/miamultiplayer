@@ -46,6 +46,7 @@ const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisio
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
 const meetingSuggestions = require('./meeting-suggestions');
+const aiMode = require('./ai-mode');
 const nextStep = require('./next-step');
 const { reasoningRepeatsReply } = require('./reasoning-summary');
 const { safeBrowserContext } = require('./browser-context');
@@ -9458,6 +9459,46 @@ app.post('/api/space/suggestions', requireAuth, async (req, res) => {
     res.status(200).json({ suggestions: meetingSuggestions.parseReply(reply, body.had) });
   } catch (err) {
     res.status(200).json({ suggestions: [] });
+  }
+});
+
+// AI mode: the person directs, Mia answers with the work as one plan the
+// screen draws. Body: {turns: [{role, content}], bots: [names of their bots]}.
+// This is the person's own request, so it runs on the 'reply' tier.
+app.post('/api/ai-mode/direct', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const prompt = aiMode.buildPrompt({ turns: body.turns, bots: body.bots });
+  if (!prompt) return res.status(400).json({ error: 'turns must end on what the person said' });
+  try {
+    const reply = await scheduleInference(prompt, 'reply', await inferenceOptionsForUser(req.userEmail));
+    const plan = aiMode.parseReply(reply);
+    if (!plan) return res.status(502).json({ error: 'no_plan' });
+    res.status(200).json({ plan });
+  } catch (err) {
+    res.status(502).json({ error: 'inference_failed' });
+  }
+});
+
+// Pictures for the background of AI mode, by the short subject Mia named.
+app.get('/api/ai-mode/images', requireAuth, async (req, res) => {
+  try {
+    const found = await aiMode.searchImages(req.query.q);
+    res.status(200).json({ images: found.map((url) => `/api/ai-mode/image?u=${encodeURIComponent(url)}`) });
+  } catch (err) {
+    res.status(200).json({ images: [] });
+  }
+});
+
+// The page loads pictures only from Mia, so each one passes through here.
+app.get('/api/ai-mode/image', requireAuth, async (req, res) => {
+  try {
+    const image = await aiMode.fetchImage(req.query.u);
+    if (!image) return res.status(404).end();
+    res.setHeader('Content-Type', image.type);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.status(200).end(image.body);
+  } catch (err) {
+    res.status(404).end();
   }
 });
 
