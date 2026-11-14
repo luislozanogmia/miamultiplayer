@@ -125,6 +125,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mind.hold span{animation-play-state:paused}
 @keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(var(--dx),var(--dy),0)}}
 @media(prefers-reduced-motion:reduce){.mind span{animation:none}}
+:host(.calm) .mind span,:host(.calm) .intent .mic.on,:host(.calm) .bot.busy img,:host(.calm) .mini.busy .perch{animation:none}
 
 #miaLine{transition:opacity .5s ease}
 

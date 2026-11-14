@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-12">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-13">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -753,7 +753,16 @@ function plink(px,sc){
 }
 
 // Rain: each drop falls as a short streak, then rings spread where it lands. Depth sets size and height.
-var c=null,x=null,drops=[],last=0,still=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// A computer that draws without a graphics card spends a whole core on a moving stage,
+// and a remote desktop then cannot keep up with clicks or sound. There the stage holds still.
+function drawsSlowly(){
+  try{
+    var g=document.createElement('canvas').getContext('webgl');if(!g)return true;
+    var e=g.getExtension('WEBGL_debug_renderer_info');
+    return !!e&&/swiftshader|llvmpipe|software/i.test(g.getParameter(e.UNMASKED_RENDERER_WEBGL));
+  }catch(_e){return false;}
+}
+var c=null,x=null,drops=[],last=0,still=window.matchMedia('(prefers-reduced-motion: reduce)').matches||drawsSlowly();
 function frame(t){
   if(!open)return;
   if(c.width!==c.clientWidth||c.height!==c.clientHeight){c.width=c.clientWidth;c.height=c.clientHeight;}
@@ -825,7 +834,7 @@ function enter(){
   if(!host)build();
   open=true;s=1;R=null;conv='';seq=0;drive=false;mindSet({});
   host.classList.remove('driving');$('back').hidden=true;
-  host.hidden=false;draw();
+  host.hidden=false;host.classList.toggle('calm',still);draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
   $('mic').hidden=!earParts();
   if(pane()&&!webOff)webOff=web.onState(siteState);
