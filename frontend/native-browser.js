@@ -516,6 +516,11 @@
   // Full-window cards and viewers are added straight to the body; adding or
   // removing one lays the live page out again so it never covers them.
   new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
+  // A drawer's scrim stays in the page and opens by a class, so a scrim
+  // opening or closing lays the live page out again too.
+  new MutationObserver(function (changes) {
+    if (changes.some(function (change) { return change.target.matches && change.target.matches('.drawer-overlay, .styled-scrim'); })) layout();
+  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
   new MutationObserver(function () {
     if (showingView() !== docked && state) render(state);
     else dockChatActions(bar && bar.getAttribute('data-view') || docked);
@@ -846,8 +851,10 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Full-window cards and viewers (Edit channel, a confirmation, an image)
-      // sit in the page too.
-      var dialogOpen = !!document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
+      // sit in the page too, and so does every drawer or sheet (New channel,
+      // Settings, a new message): each one opens with a scrim over the whole
+      // window. The docked "Your bots" panel and the details pane have none.
+      var dialogOpen = !!document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer, .drawer-overlay.open, .styled-scrim.open');
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
