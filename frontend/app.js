@@ -6064,6 +6064,12 @@
     // The same order as Solo's bots: unread, working, latest message, new.
     var orderedBots=orderSidebarBots(myBots,function(bot){ var chat=teamBotChat(bot); return chat && chat.id; },function(bot){ return bot.createdAt; });
     orderedBots.forEach(function(bot){ if(!botPinned('mine:'+bot.id) && hiddenBots.indexOf(bot)<0)myBotSection.list.appendChild(teamBotRow(bot)); });
+    // AI mode shows these same bots in this same order.
+    sidebarBotRows=orderedBots.filter(function(bot){ return hiddenBots.indexOf(bot)<0; }).map(function(bot){
+      var chat=teamBotChat(bot), roomId=chat && chat.id;
+      return { name: bot.name, working: sidebarEntryHasActivity({roomId: roomId}), line: roomPreview(roomId) || '' };
+    });
+    if(window.MiaAiMode && window.MiaAiMode.bots) window.MiaAiMode.bots();
     hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
       'Bots you hid. Right-click one to show it again.');
     if(!myBots.length)myBotSection.list.innerHTML='<div class="chat-sidebar-empty">Your bots show up here</div>';
