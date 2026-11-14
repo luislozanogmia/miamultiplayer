@@ -3,8 +3,8 @@
 // to Mia herself, in a chat of hers that no list shows (POST
 // /api/conversations/ai-mode): her real run, with her tools, her bots, the
 // browser and her approvals. This file draws that run as it happens: each
-// step she takes, what she is weighing, the reply as she writes it, and
-// whatever needs the person.
+// step she takes, the line she says about it (shown and read out loud), the
+// reply as she writes it, and whatever needs the person.
 //
 // There is no chat history here on purpose: the stage shows the last thing the
 // person said and the work, nothing older.
@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-2">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-4">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -22,11 +22,26 @@ var MARKUP=
       '<span class="sp"></span>'+
       '<button class="btn" id="stop" hidden>Stop</button>'+
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
+      '<button class="btn ghost" id="web" hidden>Browser</button>'+
+      '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="leave">Leave</button>'+
     '</div>'+
+    '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
     '<div class="cv pad" id="cv"></div>'+
+    '<div class="site" id="site" hidden>'+
+      '<div class="site-bar" id="siteBar">'+
+        '<button id="siteBack" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></svg></button>'+
+        '<button id="siteForward" title="Forward" aria-label="Forward" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"/></svg></button>'+
+        '<button id="siteReload" title="Reload" aria-label="Reload"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"/></svg></button>'+
+        '<button id="siteWide" title="Fill the stage" aria-label="Fill the stage" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button>'+
+        '<form id="siteForm" autocomplete="off"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h9m4 0h3M4 16h3m4 0h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/></svg><input id="siteUrl" type="text" inputmode="url" spellcheck="false" autocapitalize="off" aria-label="Web address" placeholder="Search or type a web address"></form>'+
+        '<button id="siteZoom" title="Page size: 100%" aria-label="Page size"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5M8.5 11h5M11 8.5v5"/></svg></button>'+
+        '<button id="siteClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>'+
+      '</div>'+
+      '<div class="site-page" id="sitePage"></div>'+
+    '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
@@ -113,14 +128,15 @@ function readReply(text){
   return {say:sayable?first:'',body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
 }
 function newRun(text){
-  return {said:text,running:true,sent:false,line:'Thinking…',thought:'',steps:[],stepCount:0,draft:'',say:'',body:'',options:[],next:'',files:[],touched:[],
+  return {said:text,running:true,sent:false,line:'On it.',steps:[],stepCount:0,draft:'',say:'',body:'',options:[],next:'',files:[],touched:[],
     asks:[],bots:[],dispatch:'',over:{},note:'',spoken:''};
 }
+function narrating(){var d=R.draft.trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
 function miaLine(){
   if(R.note)return R.note;
   var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
   if(ask)return 'I need your OK before I go on.';
-  return R.line;
+  return R.running&&narrating()?R.draft.trim().replace(/[*_`]+/g,''):R.line;
 }
 function stepHtml(st){
   return '<li class="st'+(st.done?(st.ok===false?' bad':' done'):' now')+'"><i></i><span><b>'+esc(st.label)+'</b>'+(st.detail?' <em>'+esc(st.detail)+'</em>':'')+
@@ -135,7 +151,8 @@ function stepsHtml(){
 function resultHtml(){
   // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
-  if(!text)return '';
+  // One short line on its own is her narration, shown beside her mark, not a result.
+  if(!text||(R.running&&narrating()))return '';
   return '<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(text)+'</div></div>';
 }
 function askHtml(a){
@@ -173,7 +190,6 @@ function draw(){
     var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=stepsHtml()+resultHtml(),quiet=!main&&!side;
     h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
-      (R.running&&R.thought&&!R.draft?'<p class="thought">'+esc(R.thought)+'</p>':'')+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
   }
   cv.innerHTML=h;mount(cv);
@@ -187,31 +203,40 @@ function draw(){
 function redraw(){if(!drawTimer)drawTimer=setTimeout(function(){if(open)draw();},120);}
 function say(t){if(!t||t===R.spoken)return;R.spoken=t;speak(t);}
 
-// What the run sends while it is going: steps, thoughts, lines said between steps, the reply being written.
+// What the run sends while it is going: steps, the lines Mia says between them, the reply being written.
 function onActivity(a){
   if(!R||!a||typeof a!=='object')return;
   // A last signal can land after the reply it belongs to; that run is over.
   if(a.dispatchId&&R.over[a.dispatchId])return;
   if(a.dispatchId&&!R.dispatch)R.dispatch=a.dispatchId;
-  if(a.aiMode==='thought')R.thought=lastThought(a.text);
-  else if(a.aiMode==='said'){R.line=readReply(a.text).say||str(a.text,200);say(R.line);}
+  if(a.aiMode==='said'){R.line=str(a.text,200);R.told=true;R.toldAt=Date.now();say(R.line);}
   else if(a.aiMode==='writing')R.draft=String(a.text||'').slice(0,20000);
   else if(a.aiMode==='handoff')(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);
   else if(a.phase==='start'){
     var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
     R.steps.push({id:a.toolId||'',label:str(a.label,60)||'Working',detail:str(a.detail,60),files:files,done:false,ok:true});
     R.stepCount=Math.max(R.stepCount+1,+a.step||0);if(R.steps.length>40)R.steps.shift();
-    R.touched=R.touched.concat(files);R.draft='';R.line=str(a.label,60)||'Working';
+    R.touched=R.touched.concat(files);R.draft='';
+    // A step she did not announce is said for her, in a few words.
+    if(!R.told&&Date.now()-(R.toldAt||0)>7000){R.line=ownLine(str(a.label,60));say(R.line);}
+    if(R.told)R.toldAt=Date.now();
+    R.told=false;
     if(a.detail)mindAdd('w',str(a.detail,26));
   }else if(a.phase==='complete'){
     for(var i=R.steps.length-1;i>=0;i--){var st=R.steps[i];if(!st.done&&(!a.toolId||st.id===a.toolId)){st.done=true;st.ok=a.ok!==false;break;}}
   }else return;
   R.running=true;redraw();
 }
-// Of what Mia is thinking, the stage keeps the sentence she is on.
-function lastThought(t){
-  var parts=String(t||'').replace(/\s+/g,' ').trim().split(/(?<=[.!?…])\s+/).filter(function(x){return x.length>12;});
-  return str(parts[parts.length-1]||'',200);
+// The steps panel names each step; what is said out loud is how a person would put it.
+var OWN=['I\'ll look into it.','Let me check something.','I\'m still on it.','One moment, I\'m working on this.'],ownAt=0;
+function ownLine(label){
+  R.toldAt=Date.now();
+  if(/search/i.test(label))return 'I\'ll search for that.';
+  if(/brows|page|site|web/i.test(label))return 'I\'ll open the browser for you.';
+  if(/bot|hand|deleg/i.test(label))return 'I\'m putting a bot on this.';
+  if(/writ|sav|creat|edit/i.test(label))return 'I\'m writing that down for you.';
+  if(/read|file|open/i.test(label))return 'Let me read through this.';
+  return OWN[ownAt++%OWN.length];
 }
 function ended(){
   R.running=false;R.top=true;R.steps.forEach(function(st){st.done=true;});settle();
@@ -232,7 +257,7 @@ function onEvent(ev){
   if(!text)return;
   var read=readReply(text);
   if(meta.dispatchId)R.over[meta.dispatchId]=true;
-  R.say=read.say;R.body=read.body;R.options=read.options;R.draft='';R.thought='';
+  R.say=read.say;R.body=read.body;R.options=read.options;R.draft='';
   R.next=str(meta.nextStep,120);
   R.line=read.say||(read.options.length?'This part needs your judgment.':'Done.');
   R.files=R.files.concat((Array.isArray(content.attachments)?content.attachments:[]).filter(function(f){return f&&f.id;}).map(function(f){
@@ -329,38 +354,125 @@ function answer(id,ok){
 // Taking the wheel is a real intervention: Mia stops, the app is the person's, and she picks up from what they left.
 function takeWheel(){
   drive=true;hush();halt('take-over');
-  host.classList.add('driving');$('back').hidden=false;
+  host.classList.add('driving');$('back').hidden=false;sitePlace();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
 }
 function handBack(){
-  drive=false;host.classList.remove('driving');$('back').hidden=true;
+  drive=false;host.classList.remove('driving');$('back').hidden=true;sitePlace();
   if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
   direct('(I took over and did part of this myself in the app. Look at how things stand now, keep what I did, and continue from there.)','You took the wheel, then handed it back.');
 }
+// A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
+// native view, so it only exists in the desktop app; in a plain browser tab links open as they always did.
+var web=window.miaDesktop&&window.miaDesktop.browser,webOff=null,ZOOMS=[1,1.25,1.5,0.75];
+var site={open:false,wide:false,moving:false,x:null,y:0,zoom:0};
+function pane(){var n=window.miaNativeBrowser;return web&&n&&n.stage?n:null;}
+function siteBox(){
+  var W=innerWidth,H=innerHeight,top=60,bottom=H-92;
+  if(site.wide||W<760)return {x:12,y:top,w:W-24,h:bottom-top};
+  var w=Math.min(760,W*0.58),h=Math.max(280,Math.min(bottom-top-70,H*0.62));
+  // It opens where the work is drawn: the left column, under Mia's line.
+  if(site.x===null){site.x=Math.max(16,(W-Math.min(W-32,1120))/2);site.y=210;}
+  site.x=Math.max(8,Math.min(W-w-8,site.x));site.y=Math.max(top,Math.min(bottom-h,site.y));
+  return {x:site.x,y:site.y,w:w,h:h};
+}
+// The page follows the window; while the window is being moved only its see-through frame shows.
+function sitePlace(){
+  var n=pane();if(!n)return;
+  var el=$('site'),show=site.open&&open&&!drive;
+  el.hidden=!show;
+  if(!show){n.stage(open&&!drive?false:null);return;}
+  var b=siteBox();el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
+  el.classList.toggle('moving',site.moving);
+  $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
+  var r=$('sitePage').getBoundingClientRect();
+  n.stage(site.moving?false:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)});
+}
+function siteState(st){
+  var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],tab=tabs.filter(function(t){return t.active;})[0];
+  // The page Mia is working in comes to the stage by itself.
+  if(open&&!drive&&R&&R.running){
+    var hers=tabs.filter(function(t){return t.botActivity;})[0];
+    if(hers){
+      if(!site.open){site.open=true;sitePlace();}
+      if(!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
+    }
+  }
+  if(!site.open||!tab)return;
+  var u=$('siteUrl');if(root.activeElement!==u)u.value=tab.url||'';
+  $('siteBack').disabled=!tab.canGoBack;$('siteForward').disabled=!tab.canGoForward;
+  $('siteBar').classList.toggle('loading',!!tab.loading);
+}
+function siteDo(action,more){
+  var c={action:action},k;for(k in more||{})c[k]=more[k];
+  return web.command(c).then(function(st){if(st&&st.tabs)siteState(st);},function(){});
+}
+function siteOpen(url){
+  if(!pane())return false;
+  site.open=true;sitePlace();
+  // A link opens in a tab of its own, so the page the person left in the browser stays.
+  if(url)siteDo('new').then(function(){return siteDo('navigate',{value:url});});else siteDo('state');
+  return true;
+}
+function siteClose(){site.open=false;sitePlace();}
+function siteWire(){
+  $('web').onclick=function(){if(site.open)siteClose();else siteOpen('');};
+  $('siteBack').onclick=function(){siteDo('back');};$('siteForward').onclick=function(){siteDo('forward');};
+  $('siteReload').onclick=function(){siteDo('reload');};$('siteClose').onclick=siteClose;
+  $('siteWide').onclick=function(){site.wide=!site.wide;sitePlace();};
+  $('siteZoom').onclick=function(){
+    site.zoom=(site.zoom+1)%ZOOMS.length;this.title='Page size: '+Math.round(ZOOMS[site.zoom]*100)+'%';
+    siteDo('zoom',{factor:ZOOMS[site.zoom]});
+  };
+  $('siteForm').onsubmit=function(e){e.preventDefault();var v=$('siteUrl').value.trim();if(v){$('siteUrl').blur();siteDo('navigate',{value:v});}};
+  $('siteUrl').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape')this.blur();});
+  $('siteUrl').addEventListener('focus',function(){this.select();});
+  var bar=$('siteBar'),from=null;
+  bar.addEventListener('pointerdown',function(e){
+    if(site.wide||e.button||e.target.closest('button,input'))return;
+    from={x:e.clientX-site.x,y:e.clientY-site.y,cx:e.clientX,cy:e.clientY};bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener('pointermove',function(e){
+    if(!from)return;
+    if(!site.moving&&Math.abs(e.clientX-from.cx)+Math.abs(e.clientY-from.cy)<4)return;
+    site.moving=true;site.x=e.clientX-from.x;site.y=e.clientY-from.y;sitePlace();
+  });
+  function drop(){if(!from)return;from=null;site.moving=false;sitePlace();}
+  bar.addEventListener('pointerup',drop);bar.addEventListener('pointercancel',drop);
+  window.addEventListener('resize',function(){if(open)sitePlace();});
+}
 // Mia's lines are read in the voice the person picked when this computer has one, else in the browser's own.
-var voices=0,voice=0,speaking=null,speakId=0;
+var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
+// Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
 function speak(t){
   if(muted||!t||drive)return;
-  hush();var my=++speakId;t=String(t).slice(0,600);
+  lines.push(String(t).slice(0,600));if(lines.length>2)lines.shift();
+  if(!busy)sayNext();
+}
+function sayNext(){
+  var t=lines.shift(),my=speakId;
+  if(!t||muted||!open){busy=false;return;}
+  busy=true;
+  function done(){if(my===speakId)sayNext();}
   if(voices&&ac){
     fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:voice})})
       .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
       .then(function(b){return ac.decodeAudioData(b);})
       .then(function(buf){
         if(my!==speakId||muted||!open)return;
-        var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.start();speaking=src;
-      }).catch(function(){if(my===speakId)speakOwn(t);});
+        var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.onended=done;src.start();speaking=src;
+      }).catch(function(){if(my===speakId)speakOwn(t,done);});
     return;
   }
-  speakOwn(t);
+  speakOwn(t,done);
 }
-function speakOwn(t){
-  if(!window.speechSynthesis)return;
-  try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;window.speechSynthesis.speak(u);}catch(e){}
+function speakOwn(t,done){
+  if(!window.speechSynthesis)return done();
+  try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;u.onend=u.onerror=done;window.speechSynthesis.speak(u);}catch(e){done();}
 }
 function hush(){
-  speakId++;
-  try{if(speaking){speaking.stop();speaking=null;}}catch(e){}
+  speakId++;lines=[];busy=false;
+  try{if(speaking){speaking.onended=null;speaking.stop();speaking=null;}}catch(e){}
   try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
 }
 // Sound: wind is shaped noise; each drop is a short rising tone, placed left or right where it lands.
@@ -415,8 +527,18 @@ function build(){
   $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t)return;$('box').value='';direct(t.slice(0,2000));};
   $('stop').onclick=function(){hush();halt('');};
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
-  $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);speak('This is how I sound now.');};
+  $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
+  siteWire();
+  // How blurry the background is stays as the person left it on this computer.
+  var k=100;try{k=+localStorage.getItem('miaAiModeBlur')||100;}catch(e){}
+  function blur(v){$('mind').style.setProperty('--k',v/100);}
+  $('blur').value=k;blur(k);
+  $('blur').oninput=function(){blur(+this.value);try{localStorage.setItem('miaAiModeBlur',this.value);}catch(e){}};
+  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');};
   $('cv').addEventListener('click',function(e){
+    // A link in her reply opens on the stage, in the desktop app.
+    var a=e.target&&e.target.closest&&e.target.closest('a[href]');
+    if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
     var b=e.target&&e.target.closest&&e.target.closest('button');if(!b||!R)return;
     if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
@@ -433,6 +555,8 @@ function enter(){
   open=true;s=1;R=null;conv='';seq=0;drive=false;mindSet({});
   host.classList.remove('driving');$('back').hidden=true;
   host.hidden=false;draw();
+  site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
+  if(pane()&&!webOff)webOff=web.onState(siteState);
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
   startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
   call('/api/ai-mode/voices').then(function(r){
@@ -451,6 +575,7 @@ function leave(){
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
   host.classList.remove('driving');$('back').hidden=true;drive=false;
+  site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
   setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';mindSet({});}},1600);
 }

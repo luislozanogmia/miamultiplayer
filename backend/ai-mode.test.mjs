@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, isAiModeConversation, turnNote, toolTrace, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, synthesize, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -109,4 +109,13 @@ test('speech is off without a key, and a line is read in the voice picked', asyn
   assert.equal(await synthesize('', 0, { env, request }), null);
   assert.equal(await synthesize('Hi', 0, { env: {}, request }), null);
   assert.equal(await synthesize('Hi', 0, { env, request: async () => ({ ok: false }) }), null);
+});
+
+test('narration keeps the one line Mia said before a step', () => {
+  assert.equal(narration('I will open the browser for you.'), 'I will open the browser for you.');
+  assert.equal(narration('Some notes.\n\n**The page is ready for you.**\n'), 'The page is ready for you.');
+  assert.equal(narration('| Tree | Height |'), '');
+  assert.equal(narration('- first item'), '');
+  assert.equal(narration('x'.repeat(260)), '');
+  assert.equal(narration(''), '');
 });

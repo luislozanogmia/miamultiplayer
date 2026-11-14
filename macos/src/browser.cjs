@@ -4056,6 +4056,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
         else navigate(tab, command.value);
       }
+      // The size a page is drawn at, from half to three times its own.
+      if (command.action === "zoom" && Number.isFinite(command.factor)) {
+        tab.view.webContents.setZoomFactor(Math.min(3, Math.max(0.5, command.factor)));
+      }
       if (command.action === "select" && tabs.has(command.id)) {
         activateTab(command.id); layout(); persistTabs();
         // Following a bot moves the page in front, not the keyboard.

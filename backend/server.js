@@ -8641,8 +8641,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     })).catch(() => {});
   };
   // AI mode has no chat to read, so its screen is drawn from the run itself:
-  // what Mia is weighing, what she says between steps and the reply as she
-  // writes it. Never saved; only the person who gave the direction is here.
+  // what Mia says between steps and the reply as she writes it. Her private
+  // reasoning is not shown. Never saved; only the person who gave the direction is here.
   const aiModeRun = dispatch.targetType === 'gateway' && aiMode.isAiModeConversation(conversation);
   const publishAiModeSignal = (signal) => {
     try {
@@ -8651,10 +8651,6 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       });
     } catch (_) { /* the stage must never break a turn */ }
   };
-  const aiModeThoughts = aiModeRun ? createHermesDeltaCoalescer((_kind, text) => {
-    const thought = redactHermesChatDetail(text).trim();
-    if (thought) publishAiModeSignal({ aiMode: 'thought', text: thought });
-  }) : null;
   let aiModeDraft = '';
   let aiModeDraftTimer = null;
   const publishAiModeDraft = () => {
@@ -8664,16 +8660,21 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   };
   const postAiModeSignal = (type, payload) => {
     const text = String((payload && (payload.text || payload.rendered)) || '');
-    if (type === 'thinking.delta' || type === 'reasoning.delta') return aiModeThoughts.push('Thought', text);
-    aiModeThoughts.flush();
+    if (type === 'thinking.delta' || type === 'reasoning.delta') return;
     if (type === 'message.delta' && text) {
       aiModeDraft += text;
       if (!aiModeDraftTimer) aiModeDraftTimer = setTimeout(publishAiModeDraft, AI_MODE_DRAFT_MS);
       return;
     }
-    if (type === 'tool.start') aiModeDraft = '';
+    if (type === 'tool.start') {
+      // What she wrote just before a step is her narration of it.
+      const line = aiMode.narration(stripAgentActionBlocks(redactHermesChatDetail(aiModeDraft)));
+      aiModeDraft = '';
+      if (line) publishAiModeSignal({ aiMode: 'said', text: line });
+    }
     if (type === 'message.interim' && text.trim()) {
-      publishAiModeSignal({ aiMode: 'said', text: stripAgentActionBlocks(redactHermesChatDetail(text)).trim() });
+      const line = aiMode.narration(stripAgentActionBlocks(redactHermesChatDetail(text)));
+      if (line) publishAiModeSignal({ aiMode: 'said', text: line });
     }
   };
   const postHermesProgress = (type, payload) => {

@@ -43,7 +43,12 @@ function turnNote() {
     'what you need. Then the result itself.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
     'question, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
-    '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.'
+    '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
+    '- Narrate as you go. Before each step, and when something is ready, write one short line in the first ' +
+    'person, under 16 words, with nothing else beside it. It is read out loud, so the person hears what you ' +
+    'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +
+    'ready for you.", "You asked for X, so it is better that I do Y first." Plain words, no lists, no names of tools.\n' +
+    '- A page you open in the browser shows in a window on the stage, so the person watches you use it.'
   );
 }
 
@@ -79,6 +84,16 @@ function toolTrace(payload) {
     } catch { /* not an address */ }
   }
   return '';
+}
+
+// narration(text) -> the one line Mia said before a step, or '' when what she
+// wrote there is not a line to say out loud (a table, a list, a long passage).
+const MAX_NARRATION_CHARS = 200;
+function narration(text) {
+  const lines = String(text || '').split('\n').map((line) => line.replace(/[*_`#>]+/g, '').trim()).filter(Boolean);
+  const last = lines[lines.length - 1] || '';
+  if (!last || last.length > MAX_NARRATION_CHARS || /^[-|\d[]/.test(last)) return '';
+  return last;
 }
 
 // seedPrompt(said) -> the prompt that picks what to picture behind the stage,
@@ -178,6 +193,8 @@ async function fetchImage(value, { request = fetch } = {}) {
 // the computer's own voice. Only the line Mia says out loud is sent.
 const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const SPEECH_MODEL = 'eleven_turbo_v2_5';
+// A little slower than the voice's own pace, so a line is easy to follow while watching.
+const SPEECH_SPEED = 0.8;
 const MAX_SPEECH_CHARS = 600;
 const MAX_VOICES = 4;
 const SPEECH_TIMEOUT_MS = 20000;
@@ -200,7 +217,7 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
   const response = await request(`${SPEECH_API}${voiceId}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'xi-api-key': String(env.MIAOS_ELEVENLABS_API_KEY).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-    body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
+    body: JSON.stringify({ text: line, model_id: SPEECH_MODEL, voice_settings: { speed: SPEECH_SPEED } }),
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });
   if (!response.ok) return null;
@@ -210,5 +227,5 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
 
 module.exports = {
   speechVoices, synthesize,
-  AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };
