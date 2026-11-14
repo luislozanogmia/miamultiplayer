@@ -13235,26 +13235,36 @@
     if(!hubWorkspace()) return [];
     return (hubChat.members || []).filter(function(member){ return member && member.email; }).map(function(member){
       return {email: String(member.email), name: humanMentionName({email: member.email, displayName: member.display_name})};
-    }).filter(function(person){ return person.name && person.name !== 'You'; });
+    }).filter(function(person){ return person.name; });
   }
   // "@Name" shows who it is: a bot's Mote in its color, a person's picture
-  // or initials. Works on rendered text: only a mention at a word start
-  // outside a tag.
+  // or initials. A bot often tags a person by their email instead, so
+  // "@their email" shows the same chip under their name, just as when a
+  // person picks them from the @ menu. Works on rendered text: only a
+  // mention at a word start outside a tag, and never inside code.
   function withMentionChips(html){
+    var people = roomMentionPeople();
     var named = roomMentionBots().filter(function(bot){ return bot.name; }).map(function(bot){
       return {name: bot.name, face: agentAvatarHtml(bot.name, bot.id, 16, null, bot.color)};
-    }).concat(roomMentionPeople().map(function(person){
+    }).concat(people.filter(function(person){ return person.name !== 'You'; }).map(function(person){
       return {name: person.name, face: '<span class="chat-msg-mention-face">' + humanAvatarContent(person.email) + '</span>'};
+    })).concat(people.map(function(person){
+      return {name: person.email, label: person.name, face: '<span class="chat-msg-mention-face">' + humanAvatarContent(person.email) + '</span>'};
     })).sort(function(a, b){ return b.name.length - a.name.length; });
     if(!named.length) return html;
     // One pass over every name, longest first, so "@Admin Bot" never also
-    // matches a bot called "Admin" inside the icon it just became.
+    // matches a bot called "Admin" inside the icon it just became. A name
+    // followed by "@" or ".word" is the start of a longer address, not a mention.
     var names = named.map(function(item){ return esc(item.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
-    var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w-])', 'gi');
-    return html.replace(pattern, function(_match, before, name){
-      var item = named.filter(function(entry){ return esc(entry.name).toLowerCase() === name.toLowerCase(); })[0];
-      return before + '<span class="chat-msg-mention">' + item.face + '@' + name + '</span>';
-    });
+    var pattern = new RegExp('(^|[\\s>(])@(' + names.join('|') + ')(?![\\w@-]|\\.\\w)', 'gi');
+    // Code stays exactly as written, so an @ inside backticks is left alone.
+    return html.split(/(<pre[\s\S]*?<\/pre>|<code>[\s\S]*?<\/code>)/).map(function(part, index){
+      if(index % 2) return part;
+      return part.replace(pattern, function(_match, before, name){
+        var item = named.filter(function(entry){ return esc(entry.name).toLowerCase() === name.toLowerCase(); })[0];
+        return before + '<span class="chat-msg-mention">' + item.face + '@' + (item.label ? esc(item.label) : name) + '</span>';
+      });
+    }).join('');
   }
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
