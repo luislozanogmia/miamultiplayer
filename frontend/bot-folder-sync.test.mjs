@@ -223,3 +223,14 @@ test('unsupported local file names are reported while valid files still sync', a
   const app = await import('node:fs').then(fs => fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8'));
   assert.match(app, /result\.skipped\.length\) showBenchToast/, 'the app warns the person');
 });
+
+test('every company bot has a shared folder unless an admin turned it off', async () => {
+  const app = await import('node:fs').then(fs => fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8'));
+  const body = app.slice(app.indexOf('function shareMarketFolders'), app.indexOf('function keepMarketFolderState'));
+  assert.match(body, /if\(bot\.folder \|\| !\(bot\.is_owner \|\| bot\.can_publish\)\) return done;/, 'only a bot that never had one, and only by its owner or an admin');
+  assert.match(body, /'\/folder', \{enabled: true\}/);
+  assert.match(app, /folder: marketFolderOn\(result\.bot\)/, 'a downloaded copy starts with the company\'s setting');
+  assert.match(app, /version: version, folder: source\.folder === true\}/, 'an update keeps it');
+  const link = app.slice(app.indexOf('function linkSharedBots'), app.indexOf('// Your copy follows the company'));
+  assert.match(link, /if\(!record \|\| record\.marketSource\) return done;/, 'the bot a person shared joins the company\'s folder in their own chat');
+});

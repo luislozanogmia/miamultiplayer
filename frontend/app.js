@@ -15671,7 +15671,7 @@
       return createLibrarySkills(latest.skills).then(function(skillIds){
         return api('/api/bots', {method:'POST', body:{name: String(latest.name || bot.name), instructions: instructions, model: model, status: 'running', departments: [],
           avatarColor: latest.avatar_color || bot.color || null, skills: skillIds,
-          marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0)}}});
+          marketSource: {teamId: teamId, botId: bot.id, version: Number(latest.version || bot.version || 0), folder: marketFolderOn(result.bot)}}});
       });
     }).then(function(res){
       var created = res.data && res.data.bot;
@@ -15690,16 +15690,57 @@
   // company's copy has a newer version, yours takes it. A version you
   // published yourself is already what you have.
   function updateMarketBotCopies(teamId){
-    var copies = (chatWs.botRecords || []).filter(function(bot){ return bot && bot.marketSource && bot.marketSource.teamId === teamId; });
-    if(!copies.length) return Promise.resolve();
     var me = hubChat.membership && hubChat.membership.clerk_user_id;
     return hubCall('GET', '/v1/teams/' + teamId + '/market/bots').then(function(result){
-      return copies.reduce(function(done, copy){
-        var latest = (result.bots || []).filter(function(bot){ return bot.id === copy.marketSource.botId; })[0];
-        if(!latest || latest.published_by === me || !(Number(latest.latest_version) > Number(copy.marketSource.version || 0))) return done;
-        return done.then(function(){ return updateMarketBotCopy(teamId, latest, copy); }).catch(function(){ /* The next change or company open retries. */ });
-      }, Promise.resolve());
+      var bots = (result.bots || []).filter(function(bot){ return bot && !bot.archived_at; });
+      return shareMarketFolders(teamId, bots).then(function(){ return linkSharedBots(teamId, bots); }).then(function(){
+        var copies = (chatWs.botRecords || []).filter(function(bot){ return bot && bot.marketSource && bot.marketSource.teamId === teamId; });
+        return copies.reduce(function(done, copy){
+          var latest = bots.filter(function(bot){ return bot.id === copy.marketSource.botId; })[0];
+          if(!latest) return done;
+          done = done.then(function(){ return keepMarketFolderState(copy, latest); }).catch(function(){ /* The next change or company open retries. */ });
+          if(latest.published_by === me || !(Number(latest.latest_version) > Number(copy.marketSource.version || 0))) return done;
+          return done.then(function(){ return updateMarketBotCopy(teamId, latest, copy); }).catch(function(){ /* The next change or company open retries. */ });
+        }, Promise.resolve());
+      });
     }).catch(function(){ /* The next change or company open retries. */ });
+  }
+  // Every company bot has a shared folder, where its memory lives, unless an
+  // admin turned it off. A bot that never had one gets it from the first owner
+  // or admin whose Mia sees it; one that was turned off stays off.
+  function marketFolderOn(bot){ return !!(bot && bot.folder && bot.folder.enabled); }
+  function shareMarketFolders(teamId, bots){
+    return bots.reduce(function(done, bot){
+      if(bot.folder || !(bot.is_owner || bot.can_publish)) return done;
+      return done.then(function(){
+        return hubCall('PUT', '/v1/teams/' + teamId + '/market/bots/' + encodeURIComponent(bot.id) + '/folder', {enabled: true});
+      }).then(function(folder){ bot.folder = {enabled: !folder || folder.enabled !== false}; }, function(){ /* The next company open retries. */ });
+    }, Promise.resolve());
+  }
+  // A bot you shared to the company is the company's bot in your own chat with
+  // it too: it gets the same link a downloaded copy has, so it reads and adds
+  // to the same shared folder and memory there.
+  function linkSharedBots(teamId, bots){
+    return window.MiaHubChat.localCall('GET', '/available').then(function(result){
+      return (result.bots || []).reduce(function(done, mine){
+        var shared = (mine.sharedAs || []).filter(function(copy){ return copy.teamId === teamId; })[0];
+        var bot = shared && bots.filter(function(item){ return item.id === shared.registrationId; })[0];
+        var record = bot && (chatWs.botRecords || []).filter(function(item){ return String(item.id) === String(mine.id); })[0];
+        if(!record || record.marketSource) return done;
+        var source = {teamId: teamId, botId: bot.id, version: Number(bot.latest_version || 0), folder: marketFolderOn(bot)};
+        return done.then(function(){
+          return api('/api/bots/' + encodeURIComponent(record.id), {method: 'PUT', body: {marketSource: source}});
+        }).then(function(res){ if(res.status === 200) record.marketSource = source; }, function(){ /* The next company open retries. */ });
+      }, Promise.resolve());
+    }, function(){ /* The next company open retries. */ });
+  }
+  // Your copy follows the company: its shared folder is on when the company's is.
+  function keepMarketFolderState(copy, bot){
+    var on = marketFolderOn(bot), source = copy.marketSource;
+    if((source.folder === true) === on) return Promise.resolve();
+    return api('/api/bots/' + encodeURIComponent(copy.id), {method: 'PUT', body: {marketSource: Object.assign({}, source, {folder: on})}}).then(function(res){
+      if(res.status === 200) copy.marketSource = Object.assign({}, source, {folder: on});
+    });
   }
   // Fetch both sides again so a stale list cannot overwrite a newer local
   // copy or apply an update after company access was removed.
@@ -15717,7 +15758,7 @@
           return api('/api/bots/' + encodeURIComponent(current.id), {method:'PUT', body:{
             instructions: String(latest.instructions), skills: skillIds,
             expectedInstructionsRevision: current.instructionsRevision,
-            marketSource: {teamId: teamId, botId: bot.id, version: version}
+            marketSource: {teamId: teamId, botId: bot.id, version: version, folder: source.folder === true}
           }}).then(function(saved){
             if(saved.status !== 200 || !saved.data || !saved.data.bot) throw new Error(saved.data && (saved.data.message || saved.data.error) || 'try again.');
             syncChatBotRecords((chatWs.botRecords || []).filter(function(record){ return String(record.id) !== String(saved.data.bot.id); }).concat([saved.data.bot]));

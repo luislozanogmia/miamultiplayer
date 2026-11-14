@@ -469,9 +469,10 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const binding=journal.bind(scope,bot,known);
       // A copy from another company brings the skills its owner reviewed.
       const skills=sharedSkills(Array.isArray(input.skills)?input.skills:bundleSkills(bot));
+      // Every company bot starts with a shared folder, where its memory lives.
       const result=await requestHub(scope.origin,token,'POST','/v1/teams/'+scope.teamId+'/market/bots',
         {id:binding.registration_id,name:bot.name,avatar_color:bot.avatarColor||'',instructions:bot.instructions || bot.role || bot.output || '',
-          skills,tags:[],channel_id:scope.channelId,access:shareAccess(input.access)},fetcher)
+          skills,tags:[],channel_id:scope.channelId,access:shareAccess(input.access),share_folder:true},fetcher)
         .catch(error=>{throw error.code!=='bot_storage_limit' && error.code!=='bot_name_taken' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
       if(!result.bot || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
       return {bot:result.bot};
