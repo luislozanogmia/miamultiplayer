@@ -13,13 +13,14 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-4">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-7">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
     '<div class="hud pad" id="hud">'+
       '<span class="who"><span id="hudMark" style="width:20px;height:20px"></span>AI mode</span>'+
       '<span class="sp"></span>'+
+      '<span class="tools" id="tools" hidden>'+
       '<button class="btn" id="stop" hidden>Stop</button>'+
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
       '<button class="btn ghost" id="web" hidden>Browser</button>'+
@@ -27,6 +28,8 @@ var MARKUP=
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="leave">Leave</button>'+
+      '</span>'+
+      '<button class="btn ghost more" id="more" aria-expanded="false" aria-label="Show the controls">\u2039</button>'+
     '</div>'+
     '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
     '<div class="cv pad" id="cv"></div>'+
@@ -49,7 +52,6 @@ var MARKUP=
   '</div>'+
   '<button class="btn primary back" id="back" hidden>Hand it back to Mia</button>';
 
-var MAX_STEPS=8;
 var host=null,root=null,open=false,drive=false;
 // One run: what the person said and everything Mia has done about it so far.
 var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},mindMap={},seedId=0,drawTimer=null;
@@ -123,12 +125,43 @@ function readReply(text){
     var last=lines[lines.length-1].trim(),m=/^(?:[-*]\s*)?\**Option:?\**:?\s*(.+)$/i.exec(last);
     if(m){options.unshift(str(m[1].replace(/\*+/g,''),80));lines.pop();}else if(!last)lines.pop();else break;
   }
+  // Her closing question is said out loud, so it comes off the page.
+  var end=(lines[lines.length-1]||'').replace(/^[#>\s]+/,'').replace(/[*_`]+/g,'').trim(),ask='';
+  if(lines.length>1&&/\?$/.test(end)&&end.length<=200&&!/^[-|]|^\d+[.)]\s|^(?:card|image|text):/i.test(end)){ask=end;lines.pop();}
   while(lines.length&&!lines[0].trim())lines.shift();
   var first=(lines[0]||'').replace(/^[#>\s]+/,'').replace(/\*+/g,'').trim(),sayable=first&&first.length<=200&&!/^[-*|`]|^\d+[.)]\s/.test(first);
-  return {say:sayable?first:'',body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
+  return {say:sayable?first:'',ask:ask,body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
+}
+// The result comes as cards: a title, a picture found for the words Mia gave, and a line or two.
+var MAX_CARDS=8,pics={};
+function readCards(body){
+  var cards=[],rest=[],cur=null;
+  String(body||'').split('\n').forEach(function(line){
+    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
+    if(k==='card'){cur={title:str(v,80),image:'',text:''};cards.push(cur);}
+    else if(k==='image'&&cur)cur.image=str(v,60);
+    else if(k==='text'&&cur)cur.text=str(v,400);
+    else rest.push(line);
+  });
+  return {cards:cards.filter(function(c){return c.title;}).slice(0,MAX_CARDS),rest:rest.join('\n').trim()};
+}
+function pic(q){
+  if(!q)return '';
+  if(pics[q]===undefined){
+    pics[q]='';
+    call('/api/ai-mode/images?q='+encodeURIComponent(q)).then(function(d){
+      var u=(Array.isArray(d.data.images)?d.data.images:[])[0];
+      if(typeof u==='string'&&u.indexOf('/api/ai-mode/image?u=')===0){pics[q]=u;redraw();}
+    },function(){});
+  }
+  return pics[q];
+}
+function cardHtml(c,i){
+  var u=pic(c.image);
+  return '<article class="card" style="--i:'+i+'"><div class="pic">'+(u?'<img alt="" src="'+esc(u)+'">':'')+'</div><div class="card-t"><b>'+esc(c.title)+'</b>'+(c.text?'<p>'+esc(c.text)+'</p>':'')+'</div></article>';
 }
 function newRun(text){
-  return {said:text,running:true,sent:false,line:'On it.',steps:[],stepCount:0,draft:'',say:'',body:'',options:[],next:'',files:[],touched:[],
+  return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
     asks:[],bots:[],dispatch:'',over:{},note:'',spoken:''};
 }
 function narrating(){var d=R.draft.trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
@@ -136,24 +169,18 @@ function miaLine(){
   if(R.note)return R.note;
   var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
   if(ask)return 'I need your OK before I go on.';
-  return R.running&&narrating()?R.draft.trim().replace(/[*_`]+/g,''):R.line;
-}
-function stepHtml(st){
-  return '<li class="st'+(st.done?(st.ok===false?' bad':' done'):' now')+'"><i></i><span><b>'+esc(st.label)+'</b>'+(st.detail?' <em>'+esc(st.detail)+'</em>':'')+
-    (st.files.length?' <em>'+esc(st.files.join(', '))+'</em>':'')+(st.done&&st.ok===false?' <em class="warn">did not work</em>':'')+'</span></li>';
-}
-function stepsHtml(){
-  if(!R.steps.length)return '';
-  var shown=R.steps.slice(-MAX_STEPS),hidden=R.stepCount-shown.length;
-  return '<div class="panel steps"><div class="p-head"><b>'+(R.running?'Working':'What I did')+'</b><span>'+R.stepCount+(R.stepCount===1?' step':' steps')+'</span></div><ol>'+
-    (hidden>0?'<li class="st more"><i></i><span><em>'+hidden+' earlier</em></span></li>':'')+shown.map(stepHtml).join('')+'</ol></div>';
+  if(R.running&&narrating())return R.draft.trim().replace(/[*_`]+/g,'');
+  // With the sound off her question has to be read.
+  return !R.running&&R.ask&&muted?R.ask:R.line;
 }
 function resultHtml(){
   // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
   // One short line on its own is her narration, shown beside her mark, not a result.
   if(!text||(R.running&&narrating()))return '';
-  return '<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(text)+'</div></div>';
+  var read=readCards(text);
+  return (read.cards.length?'<div class="cards">'+read.cards.map(cardHtml).join('')+'</div>':'')+
+    (read.rest?'<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
   if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
@@ -187,7 +214,7 @@ function draw(){
   unmount(cv);
   if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
   else{
-    var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=stepsHtml()+resultHtml(),quiet=!main&&!side;
+    var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
     h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
@@ -214,20 +241,16 @@ function onActivity(a){
   else if(a.aiMode==='handoff')(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);
   else if(a.phase==='start'){
     var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
-    R.steps.push({id:a.toolId||'',label:str(a.label,60)||'Working',detail:str(a.detail,60),files:files,done:false,ok:true});
-    R.stepCount=Math.max(R.stepCount+1,+a.step||0);if(R.steps.length>40)R.steps.shift();
     R.touched=R.touched.concat(files);R.draft='';
     // A step she did not announce is said for her, in a few words.
     if(!R.told&&Date.now()-(R.toldAt||0)>7000){R.line=ownLine(str(a.label,60));say(R.line);}
     if(R.told)R.toldAt=Date.now();
     R.told=false;
     if(a.detail)mindAdd('w',str(a.detail,26));
-  }else if(a.phase==='complete'){
-    for(var i=R.steps.length-1;i>=0;i--){var st=R.steps[i];if(!st.done&&(!a.toolId||st.id===a.toolId)){st.done=true;st.ok=a.ok!==false;break;}}
-  }else return;
+  }else if(a.phase!=='complete')return;
   R.running=true;redraw();
 }
-// The steps panel names each step; what is said out loud is how a person would put it.
+// A step is named for the app; what is said out loud is how a person would put it.
 var OWN=['I\'ll look into it.','Let me check something.','I\'m still on it.','One moment, I\'m working on this.'],ownAt=0;
 function ownLine(label){
   R.toldAt=Date.now();
@@ -239,7 +262,7 @@ function ownLine(label){
   return OWN[ownAt++%OWN.length];
 }
 function ended(){
-  R.running=false;R.top=true;R.steps.forEach(function(st){st.done=true;});settle();
+  R.running=false;R.top=true;settle();
 }
 // What the run leaves in the chat: an approval it needs, and the reply.
 function onEvent(ev){
@@ -257,13 +280,13 @@ function onEvent(ev){
   if(!text)return;
   var read=readReply(text);
   if(meta.dispatchId)R.over[meta.dispatchId]=true;
-  R.say=read.say;R.body=read.body;R.options=read.options;R.draft='';
+  R.say=read.say;R.ask=read.ask;R.body=read.body;R.options=read.options;R.draft='';
   R.next=str(meta.nextStep,120);
-  R.line=read.say||(read.options.length?'This part needs your judgment.':'Done.');
+  R.line=read.say||(read.options.length||read.ask?'This part needs your judgment.':'Done.');
   R.files=R.files.concat((Array.isArray(content.attachments)?content.attachments:[]).filter(function(f){return f&&f.id;}).map(function(f){
     return {name:str(f.filename,80)||'File',url:chat(conv,'/attachments/'+encodeURIComponent(f.id))+'?workspace='+encodeURIComponent(workspace())};
   }));
-  say(R.line);redraw();
+  say(R.line);say(R.ask);redraw();
   // A line said mid-run is saved like a reply; the run is over only when nothing of it is still going.
   var my=R;call(chat(conv,'/dispatches/active')).then(function(r){
     if(my!==R)return;var going=Array.isArray(r.data.dispatches)?r.data.dispatches:[];
@@ -387,6 +410,11 @@ function sitePlace(){
   $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
   var r=$('sitePage').getBoundingClientRect();
   n.stage(site.moving?false:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)});
+}
+function tools(fold){
+  var m=$('more');$('tools').hidden=fold;m.textContent=fold?'\u2039':'\u203a';m.setAttribute('aria-expanded',fold?'false':'true');
+  m.setAttribute('aria-label',fold?'Show the controls':'Hide the controls');
+  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');}
 }
 function siteState(st){
   var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],tab=tabs.filter(function(t){return t.active;})[0];
@@ -534,6 +562,8 @@ function build(){
   function blur(v){$('mind').style.setProperty('--k',v/100);}
   $('blur').value=k;blur(k);
   $('blur').oninput=function(){blur(+this.value);try{localStorage.setItem('miaAiModeBlur',this.value);}catch(e){}};
+  // The controls stay folded behind one mark until the person asks for them.
+  $('more').onclick=function(){tools(!$('tools').hidden);};
   $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');};
   $('cv').addEventListener('click',function(e){
     // A link in her reply opens on the stage, in the desktop app.
@@ -545,7 +575,7 @@ function build(){
     else if(b.dataset.next)direct(R.next);
     else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
   });
-  $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
+  $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.
   host.addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape'&&!drive)leave();});
 }

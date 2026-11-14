@@ -37,12 +37,17 @@ const isAiModeConversation = (conversation) => Boolean(conversation && conversat
 function turnNote() {
   return (
     '[AI mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
-    'stage that shows your steps as you take them, then your reply.\n' +
+    'stage where they hear you say each step as you take it, then see your reply.\n' +
     '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
     '- Begin your reply with one short sentence, under 16 words, that can be said out loud: what you did or ' +
-    'what you need. Then the result itself.\n' +
+    'what you need.\n' +
+    '- Then the result as cards, not prose: the stage is for looking, not reading. Three to six cards, each ' +
+    'as three lines: "Card: <a title, six words at most>", "Image: <one to three plain words to picture it, ' +
+    'like rainforest canopy>", "Text: <one or two short sentences, 30 words at most>". Image words are ' +
+    'subjects only, never anything private from the direction. When there is more worth keeping than fits, ' +
+    'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
-    'question, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
+    'question, which is read out loud and not shown, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
     '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
     '- Narrate as you go. Before each step, and when something is ready, write one short line in the first ' +
     'person, under 16 words, with nothing else beside it. It is read out loud, so the person hears what you ' +
