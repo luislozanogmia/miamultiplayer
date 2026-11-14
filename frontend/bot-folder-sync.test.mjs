@@ -161,9 +161,10 @@ test('two runs that both taught the bot leave one memory with both lessons, and 
 test('a bot asked in a channel gets its shared folder before the run and gives it back after', async () => {
   const { readFile } = await import('node:fs/promises');
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /return source && source\.folder === true && source\.teamId === teamId && String\(source\.botId\) === String\(marketBotId\);/);
+  assert.match(app, /return \{id: 'hub:' \+ teamId \+ ':' \+ bot\.id, name: bot\.name, marketSource: \{teamId: teamId, botId: bot\.id, folder: true\}, quietSync: true\};/, 'the company\'s folder, with or without a copy of the bot here');
+  assert.match(app, /var folderBot=companyBotFolder\(bot\),ask=/);
   assert.match(app, /return pullSharedFolder\(folderBot\)\.then\(function\(\)\{\n\s+return window\.MiaHubChat\.localCall\('POST','\/ask',/);
-  assert.match(app, /if\(folderBot\)pushSharedFolder\(folderBot\);/);
+  assert.match(app, /if\(job\.folderBot\)pushSharedFolder\(job\.folderBot\);/);
 });
 
 test('a bot without a shared folder, or with it off, syncs nothing', async () => {

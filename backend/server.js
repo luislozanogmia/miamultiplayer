@@ -1413,16 +1413,6 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-// A bot asked in a channel by the person at this computer keeps the memory it
-// has in their own chat with it: the memory file in their copy's shared
-// folder, which the app syncs around the run. -> { memoryFile } or {}
-function sharedRunMemory(owner, asker) {
-  const localBot = asker && asker.own && asker.localBotId ? db.loadOne(conn, 'bots', asker.localBotId) : null;
-  if (!localBot || !sameOwner(localBot, owner) || !(localBot.marketSource && localBot.marketSource.folder === true)) return {};
-  const workFolder = soloBotWorkFolder(localBot);
-  return workFolder ? { memoryFile: path.join(workFolder, botSharedFolder.SHARED_DIR, botSharedFolder.MEMORY_FILE) } : {};
-}
-
 async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, asker = null, files = [], unreadableFiles = [] }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
@@ -1436,8 +1426,7 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
     // in their own chat with it; asked by anyone else, it does not.
     const sharedBot = { id: bot.id, name: bot.name,
       instructions: bot.instructions || bot.role || bot.output || '', automations: [],
-      bundledSkills: Array.isArray(bot.bundledSkills) ? bot.bundledSkills : [],
-      ...sharedRunMemory(owner, asker) };
+      bundledSkills: Array.isArray(bot.bundledSkills) ? bot.bundledSkills : [] };
     const stagedFiles = turnFiles.stageTurnFiles(TURN_FILES_DIR, files);
     const filesNote = turnFiles.turnFilesNote(stagedFiles, unreadableFiles);
     const imagePaths = turnFiles.turnImagePaths(stagedFiles);
@@ -1479,7 +1468,12 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       }
     }
     const turn = await runBotReplyTurn({
-      agent: teamFolder ? { ...sharedBot, filesFolder: teamFolder } : sharedBot,
+      // A company bot with a shared folder has one memory for the whole
+      // company, whoever asks: the app syncs it into the run's work folder
+      // before the run and back after it.
+      agent: { ...sharedBot, ...(teamFolder ? { filesFolder: teamFolder } : {}),
+        ...(bot.sharedFolder === true && teamWorkFolder
+          ? { memoryFile: path.join(teamWorkFolder, botSharedFolder.SHARED_DIR, botSharedFolder.MEMORY_FILE) } : {}) },
       senderLabel: trigger.author_email,
       message: trigger.body,
       promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
@@ -6077,6 +6071,15 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) 
 // bot, only its shared/ folder; file bytes travel as base64 JSON.
 const botSharedFolder = require('./bot-shared-folder');
 function sharedFolderFor(req) {
+  // A company bot asked in a channel: its work folder for that company on
+  // this computer, whether or not the person has their own copy of the bot.
+  const company = /^hub:([a-f0-9]{32}):([A-Za-z0-9_-]{1,120})$/.exec(String(req.params.id || ''));
+  if (company) {
+    if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) {
+      throw new botSharedFolder.SharedFolderError('no_work_folder', 'This bot has no working folder on this computer.', 409);
+    }
+    return botSharedFolder.createSharedFolder(cronSync.teamBotWorkFolder({ teamId: company[1] }, { registrationId: company[2] }));
+  }
   const bot = db.loadOne(conn, 'bots', String(req.params.id || ''));
   if (!bot || !botReachable(bot, req) || !sameOwner(bot, req.userEmail)) {
     throw new botSharedFolder.SharedFolderError('not_found', 'That bot is not here.', 404);

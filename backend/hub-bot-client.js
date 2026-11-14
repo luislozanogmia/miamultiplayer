@@ -304,7 +304,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       if(controller.signal.aborted) throw controller.signal.reason;
       const preparedSkills=materializeSharedSkills(sharedSkills(definition.skills));
       skillFilesCleanup=preparedSkills.cleanup;
-      const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills};
+      // The bot's shared folder holds its memory, the same for everyone in the company.
+      const folder=await hub('GET','/v1/teams/'+s.teamId+'/market/bots/'+run.botId+'/folder').catch(()=>null);
+      if(controller.signal.aborted) throw controller.signal.reason;
+      const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills,
+        sharedFolder:!!folder && folder.enabled!==false && Array.isArray(folder.files)};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<run.triggerSequence),
         channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat:false},signal:controller.signal,modelSelection:run.selection||null,asker:asker(s,run.botId,true,run.openPage),...attached});
