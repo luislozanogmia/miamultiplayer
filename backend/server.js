@@ -1934,6 +1934,17 @@ function botFilesTidyPlan() {
     bots: cronSync.listBotFileFolders(),
   });
 }
+// The one-time card about bots sharing what they learn (frontend/bot-memory-intro.js).
+const botMemoryIntro = require('./bot-memory-intro');
+const BOT_MEMORY_INTRO_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-memory-intro.json');
+app.get('/api/bot-memory-intro', requireAuth, (req, res) => {
+  res.json({ state: botMemoryIntro.readState(BOT_MEMORY_INTRO_STATE).state || 'ask' });
+});
+app.post('/api/bot-memory-intro', requireAuth, (req, res) => {
+  const accept = req.body && req.body.accept;
+  if (typeof accept !== 'boolean') return res.status(400).json({ error: 'invalid_answer' });
+  res.json({ state: botMemoryIntro.answer(BOT_MEMORY_INTRO_STATE, accept) });
+});
 // Remote link: the phones paired with this computer (see frontend/remote-link-host.js).
 const remoteLink = require('./remote-link');
 const REMOTE_LINK_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'remote-link.json');

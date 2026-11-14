@@ -5840,6 +5840,30 @@
       showBenchToast(bot.name + '\u2019s shared files didn\u2019t sync: ' + (error && error.message || 'try again.') + ' They stay on this computer and sync after the next run.');
     }).then(function(){ delete sharedFolderPushes[bot.id]; });
   }
+  // The one-time card about bots sharing what they learn (bot-memory-intro.js):
+  // the person's bots that keep a company memory and have a chat with them here.
+  function botsWithCompanyMemory(){
+    var seen = {};
+    return (chatWs.nativeConversations || []).map(function(conversation){
+      var bot = sharedFolderBot(conversation.id);
+      if(!bot || seen[bot.id]) return null;
+      seen[bot.id] = true;
+      return {bot: bot, roomId: conversation.id};
+    }).filter(Boolean);
+  }
+  function showBotMemoryIntro(){
+    if(window.MiaBotMemoryIntro) window.MiaBotMemoryIntro.showOnce({api: api, bots: botsWithCompanyMemory, start: addLearnedToBotMemory});
+  }
+  // Each bot is asked in its own chat, one after another, with the company's
+  // memory pulled first; its reply pushes the memory back like any other run.
+  var BOT_MEMORY_INTRO_ASK = 'Your memory is now shared with everyone in the company who uses you. Go over this chat and save what you learned working with me as lessons in your memory. Keep lessons about the work only; leave my messages, files and personal details out. When you are done, tell me in one line how many lessons you saved.';
+  function addLearnedToBotMemory(list){
+    list.reduce(function(done, item){
+      return done.then(function(){ return pullSharedFolder(item.bot); }).then(function(){
+        return sendNativeConversationEvent(BOT_MEMORY_INTRO_ASK, null, null, item.roomId, {botMemoryIntro: true});
+      }).catch(function(){ /* The bot still learns from its next chats. */ });
+    }, Promise.resolve());
+  }
   function initHubChat(){
     ['channels','bots','company-bots'].forEach(function(key){ hubHiddenBotsOpen[activeWorkspaceKey+':'+key]=false; });
     // Local startup callbacks may already have selected Mia. A Hub selection
@@ -15703,7 +15727,7 @@
           return done.then(function(){ return updateMarketBotCopy(teamId, latest, copy); }).catch(function(){ /* The next change or company open retries. */ });
         }, Promise.resolve());
       });
-    }).catch(function(){ /* The next change or company open retries. */ });
+    }).catch(function(){ /* The next change or company open retries. */ }).then(showBotMemoryIntro);
   }
   // Every company bot has a shared folder, where its memory lives, unless an
   // admin turned it off. A bot that never had one gets it from the first owner
@@ -18956,6 +18980,7 @@
         var rooms = chatWs.rooms.home ? [chatWs.rooms.home].concat(chatWs.rooms.departments, chatWs.rooms.dms) : chatWs.rooms.departments.concat(chatWs.rooms.dms);
         return loadNativeConversationStates(rooms).then(function(){
           restoreActiveChatLocation();
+          showBotMemoryIntro();
         });
       });
     }).catch(function(){
