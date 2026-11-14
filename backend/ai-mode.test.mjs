@@ -164,3 +164,15 @@ test('the page picture is kept per person and wanted only while a stage is askin
   at += 9000;
   assert.equal(pages.wanted('a@example.test'), false);
 });
+
+test('an AI mode run asks for the mid Claude model, and the server falls back when the person cannot reach it', async () => {
+  const { modelSelection } = require('./ai-mode');
+  const { HERMES_ALLOWED_MODELS_BY_PROVIDER } = require('./inference');
+  const pick = modelSelection();
+  assert.equal(pick.provider, 'claude-subscription-directsdk-experimental');
+  assert.match(pick.model, /^claude-sonnet-/);
+  if (HERMES_ALLOWED_MODELS_BY_PROVIDER) assert.ok(HERMES_ALLOWED_MODELS_BY_PROVIDER[pick.provider].includes(pick.model));
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  assert.match(source, /!rawChatModelSelection && isGatewayAgent && aiMode\.isAiModeConversation\(conversation\)\n\s+\? await chatModelSelectionForUser\(aiMode\.modelSelection\(\), trigger\.senderId\)\.catch\(\(\) => null\)/);
+});

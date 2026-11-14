@@ -8444,8 +8444,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const isGatewayAgent = dispatch.targetType === 'gateway';
   const message = nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename));
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
+  // An AI mode run has no model picker: it takes its own model when the
+  // person can reach it, and their usual one otherwise.
+  const ownSelection = !rawChatModelSelection && isGatewayAgent && aiMode.isAiModeConversation(conversation)
+    ? await chatModelSelectionForUser(aiMode.modelSelection(), trigger.senderId).catch(() => null)
+    : null;
   const chatModelSelection = await chatModelSelectionForUser(
-    rawChatModelSelection,
+    ownSelection || rawChatModelSelection,
     trigger.senderId
   );
   if (!message) return;

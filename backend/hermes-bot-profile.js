@@ -198,10 +198,21 @@ function validProfileModel(selection) {
   const provider = String((selection && selection.provider) || '').trim();
   return model && provider && !/[\r\n]/.test(model + provider) ? { model, provider } : null;
 }
+// The helpers a turn hands work to carry most of the tokens, so on a Claude
+// sign-in they run on the small model while the turn keeps its own. They stay
+// on the turn's provider (Hermes inherits it when only the model is set); on
+// any other provider they inherit the turn's model as before.
+const CLAUDE_WORKER_MODEL = 'claude-haiku-5-5';
+function profileWorkerBlock(valid) {
+  return valid && valid.provider === CLAUDE_SUBSCRIPTION_PLUGIN
+    ? ['delegation:', `  model: ${JSON.stringify(CLAUDE_WORKER_MODEL)}`]
+    : [];
+}
 function profileModelBlock(selection) {
   const valid = validProfileModel(selection);
   if (!valid) return ['model:', SWITCH_CONFIRM_OFF];
-  return ['model:', `  default: ${JSON.stringify(valid.model)}`, `  provider: ${JSON.stringify(valid.provider)}`, SWITCH_CONFIRM_OFF];
+  return ['model:', `  default: ${JSON.stringify(valid.model)}`, `  provider: ${JSON.stringify(valid.provider)}`, SWITCH_CONFIRM_OFF,
+    ...profileWorkerBlock(valid)];
 }
 
 // The model block a previous turn wrote, so re-provisioning at boot keeps it.
@@ -409,6 +420,11 @@ function setHermesProfileModel(profile, selection, { profilesRoot = path.join(he
   if (start >= 0) {
     let end = start + 1;
     while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    // The worker model written with the last pick goes with it.
+    if (lines[end] === 'delegation:') {
+      end += 1;
+      while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    }
     lines.splice(start, end - start);
   }
   lines.splice(1, 0, ...block);

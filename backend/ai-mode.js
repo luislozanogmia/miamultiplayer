@@ -33,6 +33,13 @@ const oneLine = (value, limit) => String(value == null ? '' : value).replace(/\s
 const isAiModeConversation = (conversation) => Boolean(conversation && conversation.metadata
   && conversation.metadata.source === AI_MODE_SOURCE);
 
+// modelSelection() -> the model Mia runs on in AI mode when the person has a
+// Claude sign-in: the mid one, with her workers on the small one
+// (hermes-bot-profile.js). Without that sign-in the run keeps their own model.
+function modelSelection() {
+  return { provider: 'claude-subscription-directsdk-experimental', model: 'claude-sonnet-5-5[1m]' };
+}
+
 // turnNote() -> what Mia is told on every turn of an AI mode run.
 function turnNote() {
   return (
@@ -302,5 +309,5 @@ function createStagePages({ now = Date.now } = {}) {
 
 module.exports = {
   speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
-  AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };
