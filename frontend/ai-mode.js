@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-13">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-14">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -700,6 +700,7 @@ function earShow(state,note){
   var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
   $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
   if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,0.1);
+  hold(slow&&!!state);
 }
 function earStop(note){
   if(ear)ear.cancel();
@@ -754,7 +755,8 @@ function plink(px,sc){
 
 // Rain: each drop falls as a short streak, then rings spread where it lands. Depth sets size and height.
 // A computer that draws without a graphics card spends a whole core on a moving stage,
-// and a remote desktop then cannot keep up with clicks or sound. There the stage holds still.
+// and a remote desktop then cannot carry the person's voice as well. There the stage holds
+// still while the mic is open or the words are being written down, and moves again after.
 function drawsSlowly(){
   try{
     var g=document.createElement('canvas').getContext('webgl');if(!g)return true;
@@ -762,9 +764,14 @@ function drawsSlowly(){
     return !!e&&/swiftshader|llvmpipe|software/i.test(g.getParameter(e.UNMASKED_RENDERER_WEBGL));
   }catch(_e){return false;}
 }
-var c=null,x=null,drops=[],last=0,still=window.matchMedia('(prefers-reduced-motion: reduce)').matches||drawsSlowly();
+var c=null,x=null,drops=[],last=0,still=window.matchMedia('(prefers-reduced-motion: reduce)').matches,slow=drawsSlowly(),held=false,due=false;
+function next(){if(due||still||held||!open)return;due=true;requestAnimationFrame(frame);}
+function hold(on){
+  on=!!on;if(on===held)return;
+  held=on;host.classList.toggle('calm',held);next();
+}
 function frame(t){
-  if(!open)return;
+  due=false;if(!open)return;
   if(c.width!==c.clientWidth||c.height!==c.clientHeight){c.width=c.clientWidth;c.height=c.clientHeight;}
   var W=c.width,H=c.height;x.clearRect(0,0,W,H);
   if(t-last>1950+Math.random()*2700){drops.push({x:Math.random(),d:Math.random(),t:t});last=t;}
@@ -776,7 +783,7 @@ function frame(t){
     var k=(age-400)/3200;
     for(var r=0;r<2;r++){var kk=k-r*0.18;if(kk<=0)continue;var rad=sc*(5+kk*70);x.strokeStyle='rgba(255,236,200,'+((1-kk)*0.26*sc)+')';x.lineWidth=1;x.beginPath();x.ellipse(px,py,rad,rad*0.3,0,0,Math.PI*2);x.stroke();}
   });
-  if(!still)requestAnimationFrame(frame);
+  next();
 }
 
 function build(){
@@ -834,7 +841,7 @@ function enter(){
   if(!host)build();
   open=true;s=1;R=null;conv='';seq=0;drive=false;mindSet({});
   host.classList.remove('driving');$('back').hidden=true;
-  host.hidden=false;host.classList.toggle('calm',still);draw();
+  host.hidden=false;hold(false);draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
   $('mic').hidden=!earParts();
   if(pane()&&!webOff)webOff=web.onState(siteState);
@@ -845,7 +852,7 @@ function enter(){
     voices=+r.data.voices||0;voice=0;$('voice').hidden=voices<2;$('voice').textContent='Voice 1';
     if(open&&s===1)speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
   },function(){speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');});
-  if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else requestAnimationFrame(frame);
+  if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
   setTimeout(function(){if(open)$('box').focus();},400);
   openChat().catch(function(){});
 }
