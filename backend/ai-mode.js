@@ -44,7 +44,10 @@ function turnNote() {
     '- Then the result as cards, not prose: the stage is for looking, not reading. Three to six cards, each ' +
     'as three lines: "Card: <a title, six words at most>", "Image: <one to three plain words to picture it, ' +
     'like rainforest canopy>", "Text: <one or two short sentences, 30 words at most>". Image words are ' +
-    'subjects only, never anything private from the direction. When there is more worth keeping than fits, ' +
+    'subjects only, never anything private from the direction. They name the real thing the card is about, ' +
+    'something a photo exists of: for a brief on a chip maker, "graphics card chip", not "news brief". ' +
+    'Never the kind of thing you made or opened (brief, report, page, tab, file, browser), and leave the ' +
+    'Image line out when no photo would show the subject. When there is more worth keeping than fits, ' +
     'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
     'question, which is read out loud and not shown, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
