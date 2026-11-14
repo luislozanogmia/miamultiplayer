@@ -13,7 +13,7 @@
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-7">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-8">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -156,13 +156,46 @@ function pic(q){
   }
   return pics[q];
 }
-function cardHtml(c,i){
-  var u=pic(c.image);
-  return '<article class="card" style="--i:'+i+'"><div class="pic">'+(u?'<img alt="" src="'+esc(u)+'">':'')+'</div><div class="card-t"><b>'+esc(c.title)+'</b>'+(c.text?'<p>'+esc(c.text)+'</p>':'')+'</div></article>';
+// Everything Mia puts on the stage is an item: each result card, and the page she is in. A page is one
+// more view of what she found, so it sits with the cards. Picking an item brings it to the front and
+// the others wait on a shelf beside it.
+function siteName(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return '';}}
+function pageOn(){return !!(R.page||(pane()&&site.open));}
+function itemView(it){
+  if(it.key!=='page')return {title:it.card.title,text:it.card.text,src:pic(it.card.image),mark:''};
+  var p=R.page||{};
+  return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
+}
+function cardHtml(it,i){
+  var v=itemView(it);
+  return '<article class="card'+(it.key==='page'?' page':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'"><div class="pic">'+(v.src?'<img alt=""'+v.mark+' src="'+esc(v.src)+'">':'')+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+}
+function thumbHtml(it){
+  var v=itemView(it);
+  return '<button class="thumb" data-item="'+it.key+'" title="'+esc(v.title)+'"><span class="pic">'+(v.src?'<img alt=""'+v.mark+' src="'+esc(v.src)+'">':'')+'</span><b>'+esc(v.title)+'</b></button>';
+}
+function frontHtml(it){
+  var v=itemView(it),x='<button class="front-x" data-item="" aria-label="Back to everything" title="Back to everything"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>';
+  // In the desktop app the page itself takes this place; anywhere else it is a picture of it.
+  if(it.key==='page'&&pane())return '<div class="front live" id="frontPage"></div>';
+  if(it.key==='page')return '<figure class="front shot">'+x+(v.src?'<img alt="The page Mia is in"'+v.mark+' src="'+esc(v.src)+'">':'<p class="hint">Opening the page.</p>')+
+    '<figcaption><b>'+esc(v.title)+'</b><span>'+esc(v.text)+'</span><small>A picture of the page I am in. It follows what I do there.</small></figcaption></figure>';
+  return '<article class="front card">'+x+'<div class="pic">'+(v.src?'<img alt="" src="'+esc(v.src)+'">':'')+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+}
+// focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
+// Mia's work does not undo for the rest of the run.
+function focus(key,picked){
+  if(!R)return;
+  R.focus=key||'';if(picked)R.picked=true;
+  if(pane()){
+    if(R.focus==='page'&&!site.open){site.open=true;siteDo('state');}
+    if(R.focus!=='page')site.open=false;
+  }
+  draw();
 }
 function newRun(text){
   return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
-    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:''};
+    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
 }
 function narrating(){var d=R.draft.trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
 function miaLine(){
@@ -177,9 +210,12 @@ function resultHtml(){
   // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
   // One short line on its own is her narration, shown beside her mark, not a result.
-  if(!text||(R.running&&narrating()))return '';
-  var read=readCards(text);
-  return (read.cards.length?'<div class="cards">'+read.cards.map(cardHtml).join('')+'</div>':'')+
+  if(R.running&&narrating())text='';
+  var read=readCards(text),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
+  if(pageOn())items.unshift({key:'page'});
+  var front=items.filter(function(it){return it.key===R.focus;})[0];
+  return (front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
+    :items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':'')+
     (read.rest?'<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
@@ -224,6 +260,7 @@ function draw(){
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
   $('stop').hidden=!live;$('drive').hidden=s!==2;
+  if(pane())sitePlace();
   $('box').placeholder=live?'Guide or redirect':s===2?'Say what is next':'Say what you want';
 }
 // Signals arrive in bursts while Mia writes; the stage redraws at most a few times a second.
@@ -263,6 +300,8 @@ function ownLine(label){
 }
 function ended(){
   R.running=false;R.top=true;settle();
+  // The work is done: everything she made is laid out together, the page among it.
+  if(!R.picked){R.focus='';if(pane())site.open=false;}
 }
 // What the run leaves in the chat: an approval it needs, and the reply.
 function onEvent(ev){
@@ -357,7 +396,7 @@ function direct(t,shown){
     // The chat is gone when AI mode was opened in another window. Start a new one and say what came before.
     if(r.status!==404||my!==R)return r;
     var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}
-    return send(before?'Earlier I asked you: "'+before.said+'".'+(before.ask?' You asked me: "'+before.ask+'".':'')+' My answer: '+t:t);
+    return send(before?'Earlier I asked you: "'+before.said+'".'+(before.ask?' You asked me: "'+before.ask+'". My answer: ':' That is behind us. What I want now: ')+t:t);
   }).then(function(r){
     if(my!==R)return;
     if(r.status!==200&&r.status!==201)throw new Error(r.status===401?'signin':'closed');
@@ -397,7 +436,7 @@ function handBack(){
 // A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
 // native view, so it only exists in the desktop app; in a plain browser tab links open as they always did.
 var web=window.miaDesktop&&window.miaDesktop.browser,webOff=null,ZOOMS=[1,1.25,1.5,0.75];
-var site={open:false,wide:false,moving:false,x:null,y:0,zoom:0};
+var site={open:false,wide:false,moving:false,docked:false,x:null,y:0,zoom:0};
 function pane(){var n=window.miaNativeBrowser;return web&&n&&n.stage?n:null;}
 function siteBox(){
   var W=innerWidth,H=innerHeight,top=60,bottom=H-92;
@@ -412,9 +451,16 @@ function siteBox(){
 function sitePlace(){
   var n=pane();if(!n)return;
   var el=$('site'),show=site.open&&open&&!drive;
+  // At the front of the stage the window sits in the item's place and follows it as the stage scrolls.
+  var dock=show&&!site.wide&&innerWidth>=760?root.getElementById('frontPage'):null,b=null;
+  site.docked=!!dock;
+  if(dock){
+    var d=dock.getBoundingClientRect(),top=Math.max(60,d.top),bottom=Math.min(innerHeight-92,d.bottom);
+    if(bottom-top<140)show=false;else b={x:d.left,y:top,w:d.width,h:bottom-top};
+  }
   el.hidden=!show;
   if(!show){n.stage(open&&!drive?false:null);return;}
-  var b=siteBox();el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
+  b=b||siteBox();el.classList.toggle('docked',site.docked);el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
   el.classList.toggle('moving',site.moving);
   $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
   var r=$('sitePage').getBoundingClientRect();
@@ -431,8 +477,8 @@ function siteState(st){
   if(open&&!drive&&R&&R.running){
     var hers=tabs.filter(function(t){return t.botActivity;})[0];
     if(hers){
-      if(!site.open){site.open=true;sitePlace();}
-      if(!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
+      if(!site.open&&!R.picked){site.open=true;R.focus='page';draw();}
+      if(site.open&&!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
     }
   }
   if(!site.open||!tab)return;
@@ -446,14 +492,66 @@ function siteDo(action,more){
 }
 function siteOpen(url){
   if(!pane())return false;
-  site.open=true;sitePlace();
+  site.open=true;
+  if(R&&s===2){R.focus='page';R.picked=true;draw();}else sitePlace();
   // A link opens in a tab of its own, so the page the person left in the browser stays.
   if(url)siteDo('new').then(function(){return siteDo('navigate',{value:url});});else siteDo('state');
   return true;
 }
-function siteClose(){site.open=false;sitePlace();}
+function siteClose(){
+  site.open=false;
+  if(R&&s===2){R.picked=true;if(R.focus==='page')R.focus='';draw();}else sitePlace();
+}
+// The page as a picture. The desktop app holds the page; it hands a picture of the one Mia is in to
+// this computer's Mia, and every stage shows that picture, so a stage in a plain browser tab sees the
+// page too. Only a tab Mia is working in is pictured, and only while a stage is showing it.
+var pageAt=-1,pageTimer=null;
+function pagePoll(){
+  pageTimer=null;if(!open)return;
+  var my=R;
+  // The first look only notes how old the newest picture is, so a page from before this visit stays out.
+  var first=pageAt<0;
+  (first||(s===2&&R)?call('/api/ai-mode/page?since='+Math.max(0,pageAt)):Promise.resolve(null)).then(function(r){
+    var p=r&&r.data.page;
+    if(first){if(r&&r.status<400)pageAt=p&&+p.at>0?+p.at:0;return;}
+    if(!p||my!==R||typeof p.image!=='string'||p.image.indexOf('data:image/jpeg;base64,')!==0||!(+p.at>pageAt))return;
+    pageAt=+p.at;
+    if(pageAt<=R.pageBase)return;
+    var was=R.page,im=$('cv').querySelectorAll('img[data-page]');
+    R.page={url:str(p.url,300),title:str(p.title,120),image:p.image};
+    // The first picture brings the page to the front while she works; later ones only change the picture.
+    if(!was&&R.running&&!R.picked&&!R.focus)R.focus='page';
+    if(was&&im.length&&was.url===R.page.url&&was.title===R.page.title)im.forEach(function(i){i.src=p.image;});else redraw();
+  },function(){}).then(function(){if(open&&!pageTimer)pageTimer=setTimeout(pagePoll,1500);});
+}
+(function(){
+  if(!web||!web.onState||!web.command)return;
+  var tab=null,acting=false,seen=0,want=false,busy=false,space='solo';
+  web.onState(function(st){
+    // The browser only hands out pictures for the workspace it is showing.
+    if(st&&typeof st.workspace==='string'&&st.workspace)space=st.workspace;
+    var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],hers=tabs.filter(function(t){return t.botActivity;})[0];
+    if(hers){tab=hers;acting=true;return;}
+    if(acting){acting=false;seen=Date.now();}
+    if(tab)tab=tabs.filter(function(t){return t.id===tab.id;})[0]||null;
+  });
+  setInterval(function(){
+    // A little after her last step the page has settled and the pictures stop.
+    if(busy||!tab||(!acting&&Date.now()-seen>20000))return;
+    busy=true;
+    var t=tab;
+    (want?web.command({action:'spaceFrames',ids:[t.id],width:640,workspace:space}).then(function(r){
+      var f=r&&Array.isArray(r.frames)?r.frames[0]:null;
+      return f&&f.dataUrl?{url:t.url||'',title:t.title||'',image:f.dataUrl}:{};
+    },function(){return {};}):Promise.resolve({}))
+      .then(function(body){return call('/api/ai-mode/page',body);})
+      .then(function(r){want=r.data.wanted===true;},function(){want=false;})
+      .then(function(){busy=false;});
+  },1500);
+})();
 function siteWire(){
   $('web').onclick=function(){if(site.open)siteClose();else siteOpen('');};
+  $('cv').addEventListener('scroll',function(){if(site.open&&site.docked)sitePlace();},{passive:true});
   $('siteBack').onclick=function(){siteDo('back');};$('siteForward').onclick=function(){siteDo('forward');};
   $('siteReload').onclick=function(){siteDo('reload');};$('siteClose').onclick=siteClose;
   $('siteWide').onclick=function(){site.wide=!site.wide;sitePlace();};
@@ -466,7 +564,7 @@ function siteWire(){
   $('siteUrl').addEventListener('focus',function(){this.select();});
   var bar=$('siteBar'),from=null;
   bar.addEventListener('pointerdown',function(e){
-    if(site.wide||e.button||e.target.closest('button,input'))return;
+    if(site.wide||site.docked||e.button||e.target.closest('button,input'))return;
     from={x:e.clientX-site.x,y:e.clientY-site.y,cx:e.clientX,cy:e.clientY};bar.setPointerCapture(e.pointerId);
   });
   bar.addEventListener('pointermove',function(e){
@@ -578,6 +676,8 @@ function build(){
     // A link in her reply opens on the stage, in the desktop app.
     var a=e.target&&e.target.closest&&e.target.closest('a[href]');
     if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
+    var it=R&&e.target&&e.target.closest&&e.target.closest('[data-item]');
+    if(it){focus(it.dataset.item,true);return;}
     var b=e.target&&e.target.closest&&e.target.closest('button');if(!b||!R)return;
     if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
@@ -586,7 +686,13 @@ function build(){
   });
   $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.
-  host.addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape'&&!drive)leave();});
+  // Esc puts the item at the front back with the others first.
+  host.addEventListener('keydown',function(e){
+    e.stopPropagation();
+    var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
+    if(it){e.preventDefault();focus(it.dataset.item,true);}
+    else if(e.key==='Escape'&&!drive){if(s===2&&R&&R.focus)focus('',true);else leave();}
+  });
 }
 function enter(){
   if(open)return;
@@ -596,6 +702,7 @@ function enter(){
   host.hidden=false;draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
   if(pane()&&!webOff)webOff=web.onState(siteState);
+  if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
   startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
   call('/api/ai-mode/voices').then(function(r){

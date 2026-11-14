@@ -101,11 +101,13 @@ test('Mia app actions also reject a completed or expired Hermes session', () => 
   const end = source.indexOf('  postCard(target, proposal)', start);
   const sessions = new Map();
   const context = { Date, String, nativeGatewaySessionConversations: sessions,
+    aiMode: { isAiModeConversation: conversation => Boolean(conversation.metadata) },
     nativeConversationService: { getConversation: () => ({ id: 'chat' }) } };
   const { resolveTurn } = vm.runInNewContext('({' + source.slice(start, end) + '})', context);
   const target = { companyId: 'local:solo:owner', conversationId: 'chat', browserActiveUntil: Date.now() + 60_000 };
   sessions.set('run', target);
   assert.equal(resolveTurn('run', 'owner').conversationId, 'chat');
+  assert.equal(resolveTurn('run', 'owner').aiMode, false);
   target.browserActiveUntil = 0;
   assert.equal(resolveTurn('run', 'owner'), null);
   target.browserActiveUntil = Date.now() - 1;

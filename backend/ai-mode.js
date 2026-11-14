@@ -53,7 +53,11 @@ function turnNote() {
     'person, under 16 words, with nothing else beside it. It is read out loud, so the person hears what you ' +
     'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +
     'ready for you.", "You asked for X, so it is better that I do Y first." Plain words, no lists, no names of tools.\n' +
-    '- A page you open in the browser shows in a window on the stage, so the person watches you use it.'
+    '- A page you open in the browser shows in a window on the stage, so the person watches you use it.\n' +
+    '- Bots are yours to deploy here. When a job is better done by a bot, create it or get it from the ' +
+    'marketplace and put it to work; it starts at once, with no card for the person to accept. Say that you did. ' +
+    'Do it with the mia-app tools bot_create_propose and marketplace_get_propose, which here act at once. ' +
+    'There is no bot setup card on the stage, so never end a reply with a bot setup block.'
   );
 }
 
@@ -228,7 +232,49 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
   return body.length ? { type: 'audio/mpeg', body } : null;
 }
 
+// What Mia may do on her own word in an AI mode run: put a bot to work. The
+// person gave a direction and is watching; a card to accept has nowhere to
+// show there. Removing a bot still asks.
+const DEPLOY_TOOLS = new Set(['bot_create_propose', 'marketplace_get_propose', 'bot_departments_propose']);
+
+// The page Mia is working in, as a small picture. The desktop app holds the
+// page itself; a stage in a plain browser tab has no page, so the app hands a
+// picture of it here and the stage shows that. Kept in memory only, one per
+// person, and only while a stage asked for it in the last few seconds.
+const FRAME_PREFIX = 'data:image/jpeg;base64,';
+const MAX_FRAME_CHARS = 400 * 1024;
+const FRAME_WANTED_MS = 8000;
+
+// pageFrame(body) -> {url, title, image} for a picture the app sent, or null.
+// The address keeps no query, which can carry a sign-in link's token.
+function pageFrame(body) {
+  const sent = body && typeof body === 'object' ? body : {};
+  const image = typeof sent.image === 'string' ? sent.image : '';
+  if (!image.startsWith(FRAME_PREFIX) || image.length > MAX_FRAME_CHARS
+    || !/^[A-Za-z0-9+/]+=*$/.test(image.slice(FRAME_PREFIX.length))) return null;
+  let url = '';
+  try {
+    const parsed = new URL(String(sent.url || ''));
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') url = `${parsed.origin}${parsed.pathname}`.slice(0, 300);
+  } catch { /* no address to show */ }
+  return { url, title: oneLine(sent.title, 120), image };
+}
+
+// createStagePages() -> the latest page picture per person.
+// want(owner) marks that a stage is showing it; wanted(owner) is what the app
+// checks before taking a picture.
+function createStagePages({ now = Date.now } = {}) {
+  const pages = new Map();
+  const asked = new Map();
+  return {
+    want(owner) { asked.set(owner, now()); },
+    wanted: (owner) => now() - (asked.get(owner) || -Infinity) <= FRAME_WANTED_MS,
+    put(owner, frame) { pages.set(owner, { ...frame, at: now() }); },
+    get: (owner) => pages.get(owner) || null,
+  };
+}
+
 module.exports = {
-  speechVoices, synthesize,
+  speechVoices, synthesize, DEPLOY_TOOLS, pageFrame, createStagePages,
   AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };

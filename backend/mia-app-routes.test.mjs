@@ -72,9 +72,11 @@ async function harness(t) {
     activity: createActivityLog(dataDir),
     resolveTurn(session) {
       if (session === 'mia-session') return { companyId: 'co', conversationId: 'c-mia', workspace: 'multiplayer_test' };
+      if (session === 'stage-session') return { companyId: 'co', conversationId: 'c-stage', aiMode: true, workspace: 'multiplayer_test' };
       if (session === 'bot-session') return { companyId: 'co', conversationId: 'c-bot', botId: 'b1', workspace: 'multiplayer_test' };
       return null;
     },
+    turnTrusts: (target, tool) => target.aiMode === true && tool === 'bot_create_propose',
     postCard(_target, proposal) { const id = `card-${state.cards.size + 1}`; state.cards.set(id, proposal); return id; },
     findCard(_req, id) { const proposal = state.cards.get(id); return proposal ? { event: { id }, proposal, companyId: 'co', workspace: 'multiplayer_test', conversationId: 'c-mia' } : null; },
     updateCard({ event }, proposal) { state.cards.set(event.id, proposal); return { id: event.id, metadata: { miaAppProposal: proposal } }; },
@@ -158,6 +160,23 @@ test('having just read a page forces a card that names it, even with trust on', 
   assert.equal(asked.data.result.proposed, true);
   assert.deepEqual(state.archived, []);
   assert.equal(state.cards.get(asked.data.result.event_id).reading.url, 'https://example.test/x');
+});
+
+test('a chat that lets Mia deploy bots creates one with no card, and still asks after a page read', async t => {
+  const { call, state, get } = await harness(t);
+  const bot = { name: 'Scout', instructions: 'Find leads.' };
+  assert.equal((await call('bot_create_propose', bot)).data.result.proposed, true);
+  assert.equal(state.createdBots.length, 0);
+  const made = await call('bot_create_propose', bot, { turn: 'stage-session' });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  assert.equal(made.data.result.proposed, undefined);
+  assert.equal(state.createdBots.length, 1);
+  assert.equal((await get('/api/mia-app/activity')).activity[0].via, 'trusted');
+  // Only the tools the chat names, and never on the word of a page.
+  assert.equal((await call('bot_archive_propose', { bot_id: 'b1' }, { turn: 'stage-session' })).data.result.proposed, true);
+  const read = await call('bot_create_propose', bot, { turn: 'stage-session', reading: { url: 'https://example.test/x', title: 'X' } });
+  assert.equal(read.data.result.proposed, true);
+  assert.equal(state.createdBots.length, 1);
 });
 
 test('a page-read approval card never stores credential-bearing URL parts', async t => {

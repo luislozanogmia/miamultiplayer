@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, synthesize, DEPLOY_TOOLS, pageFrame, createStagePages, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -118,4 +118,38 @@ test('narration keeps the one line Mia said before a step', () => {
   assert.equal(narration('- first item'), '');
   assert.equal(narration('x'.repeat(260)), '');
   assert.equal(narration(''), '');
+});
+
+test('in AI mode Mia deploys bots on her own word, and removing one still asks', () => {
+  assert.equal(DEPLOY_TOOLS.has('bot_create_propose'), true);
+  assert.equal(DEPLOY_TOOLS.has('marketplace_get_propose'), true);
+  assert.equal(DEPLOY_TOOLS.has('bot_archive_propose'), false);
+  assert.match(turnNote(), /Bots are yours to deploy/);
+});
+
+test('a page picture is a small JPEG, with an address that carries no query', () => {
+  const image = `data:image/jpeg;base64,${'A'.repeat(64)}==`;
+  assert.deepEqual(pageFrame({ url: 'https://example.test/reset/abc?code=fixture-code#frag', title: ' Sign\nin ', image }),
+    { url: 'https://example.test/reset/abc', title: 'Sign in', image });
+  assert.equal(pageFrame({ url: 'file:///etc/hosts', title: '', image }).url, '');
+  assert.equal(pageFrame({ image: 'data:image/svg+xml;base64,AAAA' }), null);
+  assert.equal(pageFrame({ image: 'data:image/jpeg;base64,AA"onerror="x' }), null);
+  assert.equal(pageFrame({ image: `data:image/jpeg;base64,${'A'.repeat(500 * 1024)}` }), null);
+  assert.equal(pageFrame({}), null);
+  assert.equal(pageFrame(null), null);
+});
+
+test('the page picture is kept per person and wanted only while a stage is asking', () => {
+  let at = 1000;
+  const pages = createStagePages({ now: () => at });
+  assert.equal(pages.wanted('a@example.test'), false);
+  assert.equal(pages.get('a@example.test'), null);
+  pages.want('a@example.test');
+  assert.equal(pages.wanted('a@example.test'), true);
+  assert.equal(pages.wanted('b@example.test'), false);
+  pages.put('a@example.test', { url: 'https://example.test/', title: 'T', image: 'x' });
+  assert.deepEqual(pages.get('a@example.test'), { url: 'https://example.test/', title: 'T', image: 'x', at: 1000 });
+  assert.equal(pages.get('b@example.test'), null);
+  at += 9000;
+  assert.equal(pages.wanted('a@example.test'), false);
 });

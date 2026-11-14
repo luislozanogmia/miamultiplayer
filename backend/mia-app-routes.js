@@ -457,7 +457,7 @@ function routeCaller(req, workspace) {
 }
 const publicEntry = ({ undo, ...entry }) => ({ ...entry, canUndo: !!undo && !entry.undoneAt });
 
-function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, postCard, findCard, updateCard, listCards = () => [], postNote = null }) {
+function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, postCard, findCard, updateCard, listCards = () => [], turnTrusts = () => false, postNote = null }) {
   const ownerOf = req => String(req.userEmail).toLowerCase();
   app.get('/api/mia-app/trust', requireAuth, (req, res) => res.json({ trust: trustFor(loadSettings(), ownerOf(req)) }));
   app.post('/api/mia-app/trust', requireInteractiveAuth, (req, res) => {
@@ -512,7 +512,8 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
     try {
       if (tool.group !== 'C') return res.json({ result: await tool.run(ctx) });
       const plan = await tool.prepare(ctx);
-      if (tool.trust && trustFor(loadSettings(), owner)[tool.trust] && !reading) {
+      // A chat can itself say Mia acts on her own word for a tool (AI mode: bots).
+      if (((tool.trust && trustFor(loadSettings(), owner)[tool.trust]) || (target && turnTrusts(target, name))) && !reading) {
         const result = await tool.apply(ctx, plan.input);
         log({ summary: plan.summary, via: 'trusted' });
         return res.json({ result });

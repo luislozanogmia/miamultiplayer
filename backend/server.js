@@ -8776,7 +8776,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     }),
     sharedBrowserNote(),
     // Only Mia's own chat shows the bot setup card.
-    ownsPrivateAgentConversation && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
+    // AI mode has no setup card: there Mia creates the bot herself (see aiMode.turnNote).
+    ownsPrivateAgentConversation && !aiModeRun && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
     // TEMPORARY (bot files tidy-up): remove in 0.3.6.
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
@@ -9563,6 +9564,24 @@ app.get('/api/ai-mode/image', requireAuth, async (req, res) => {
   }
 });
 
+// The page Mia is working in, as a picture on the stage. GET is the stage
+// asking for the latest one. POST is the desktop app: an empty body asks
+// whether a stage wants one, {url, title, image} hands it over.
+const aiModePages = aiMode.createStagePages();
+app.get('/api/ai-mode/page', requireAuth, (req, res) => {
+  const owner = String(req.userEmail).toLowerCase();
+  aiModePages.want(owner);
+  // ?since= is the last picture the stage has, so the same one is not sent twice.
+  const page = aiModePages.get(owner);
+  res.set('Cache-Control', 'no-store').status(200).json({ page: page && page.at > (Number(req.query.since) || 0) ? page : null });
+});
+app.post('/api/ai-mode/page', requireAuth, (req, res) => {
+  const owner = String(req.userEmail).toLowerCase();
+  const frame = aiMode.pageFrame(req.body);
+  if (frame) aiModePages.put(owner, frame);
+  res.status(200).json({ wanted: aiModePages.wanted(owner) });
+});
+
 // ---------- admin ----------
 // GET /api/admin/backup mirrors GET /api/backup's payload exactly (same
 // fields, same settings.lastBackup side effect) — duplicated here rather
@@ -10136,11 +10155,14 @@ const miaAppAnswers = miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   resolveTurn(session, owner) {
     const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
     if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return null;
+    let found;
     try {
-      nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
+      found = nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
     } catch (_) { return null; }
-    return { ...target, workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
+    return { ...target, aiMode: aiMode.isAiModeConversation(found),
+      workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
   },
+  turnTrusts: (target, tool) => target.aiMode === true && !target.botId && aiMode.DEPLOY_TOOLS.has(tool),
   postCard(target, proposal) {
     const created = nativeConversationService.createEvent({
       companyId: target.companyId, conversationId: target.conversationId,
