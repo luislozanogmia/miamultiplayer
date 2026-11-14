@@ -20,7 +20,7 @@ function route() {
     let response; const res = { status: () => res, json: value => { response = JSON.parse(JSON.stringify(value)); } };
     handler({ query: { session }, userEmail: email }, res); return response;
   };
-  return { sessions, shared, calls, invoke };
+  return { sessions, shared, calls, invoke, context };
 }
 
 test('browser actor route distinguishes authorized Mia and bot sessions from unresolved or denied sessions', () => {
@@ -54,6 +54,23 @@ test('a team bot running on this computer may use the browser for the person run
   assert.match(turn, /onSession,\n\s*\},\n\s*signal,\n\s*\}\)\.finally\(\(\) => \{ runSessions\.forEach\(\(id\) => sharedBotRunSessions\.delete\(id\)\); if \(approvals\) approvals\.end\(\); \}\);/);
   const inference = readFileSync(new URL('./inference.js', import.meta.url), 'utf8');
   assert.match(inference, /onSession: typeof options\.onSession === 'function' \? options\.onSession : null,/);
+});
+
+test('a bot asked in a channel works in the same tab group as in its own chat with the person', () => {
+  const h = route();
+  const workspace = 'hub_' + 'c'.repeat(32);
+  h.sessions.set('own-chat', { companyId: 'company', conversationId: 'team-chat', botId: 'marketing', agentName: 'Marketing Bot',
+    agent: { id: 'marketing' }, browserActiveUntil: Date.now() + 60_000 });
+  const sharedBot = { id: 'shared-reg1-v3', name: 'Marketing Bot' };
+  h.shared.set('channel-run', { owner: 'owner@example.test', botId: h.context.browserBotId(sharedBot, 'marketing'), name: sharedBot.name, workspace });
+  const own = h.invoke('own-chat').actor, channel = h.invoke('channel-run').actor;
+  assert.equal(channel.botId, 'marketing', 'the person\'s copy of the bot, not the company\'s versioned id');
+  assert.equal(channel.botId, own.botId, 'one bot, one tab group');
+  assert.deepEqual(Object.keys(channel).sort(), Object.keys(own).sort(), 'both paths build the same identity');
+  assert.equal(h.context.browserBotId(sharedBot, null), 'shared-reg1-v3', 'without a copy here it keeps the company id');
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const turn = source.slice(source.indexOf('async function runSharedBotTurn('), source.indexOf('function nativeConversationPrincipal('));
+  assert.match(turn, /sharedBotRunSessions\.set\(id, \{[^}]*botId: browserBotId\(sharedBot, asker && asker\.localBotId\),/);
 });
 
 test('a bot identity carries only the absolute folders its run works in; Mia carries none', () => {

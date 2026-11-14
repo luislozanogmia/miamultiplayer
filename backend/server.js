@@ -1444,7 +1444,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       if (!id) return;
       if (approvals) approvals.bind(session);
       runSessions.push(id);
-      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
+      // The person's own copy of this bot, when there is one, so its pages
+      // join the same tab group as in their own chat with it.
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: browserBotId(sharedBot, asker && asker.localBotId), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
         // The folders this run works in, the only ones it may show in the file manager.
         folders: [teamFolder, teamWorkFolder].filter(Boolean) });
     };
@@ -7564,6 +7566,20 @@ function browserWorkspaceForConversation(conversation, companyId, email) {
   return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
 }
 
+// A bot's tab group is keyed by its id on this computer. A bot's own chat
+// runs it under that id; a channel run of the person's copy of a company bot
+// carries the company's versioned id, so it takes the local one when the
+// person has such a copy. Without one it keeps the company id.
+function browserBotId(bot, localBotId) {
+  return String(localBotId || (bot && bot.id) || '');
+}
+
+// What the desktop browser gets for a bot's run, from its own chat or a
+// channel alike: the same identity, so the same tab group.
+function browserBotActor({ botId, name, workspace, folders }) {
+  return { kind: 'bot', botId: String(botId), name: String(name || 'Bot'), workspace, folders: browserActorFolders(folders) };
+}
+
 // A bot may show only the folders its own run works in (its Mia folder and
 // working folder) in the system file manager; the desktop host checks the
 // path against these. Mia's own agent gets none: she may show any folder.
@@ -7582,7 +7598,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   if (shared) {
     // Only the person running it here: the bot uses their browser, as in Solo.
     if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
-    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace, folders: browserActorFolders(shared.folders) } });
+    return res.status(200).json({ actor: browserBotActor(shared) });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
   if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
@@ -7598,7 +7614,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   }
   const workspace = browserWorkspaceForConversation(conversation, target.companyId, req.userEmail);
   return res.status(200).json({ actor: target.botId
-    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace, folders: browserActorFolders(target.folders) }
+    ? browserBotActor({ botId: browserBotId(target.agent, target.botId), name: target.agentName, workspace, folders: target.folders })
     : { kind: 'mia', workspace } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
