@@ -911,6 +911,29 @@ test('turns and goal verdicts Hermes starts on its own reach the session listene
   client.close();
 });
 
+test('a background worker still reports to the session listener after the turn that started it', async () => {
+  const seen = [];
+  const gateway = scriptedGateway({
+    'session.create': createGoalSession,
+    'prompt.submit': (request, socket) => {
+      socket.push('message.complete', { text: 'Two workers are on it.', status: 'complete' });
+      socket.push('subagent.tool', { subagent_id: 'w1', goal: 'Price check: compare', tool_name: 'web_search' });
+      socket.push('subagent.complete', { subagent_id: 'w1', goal: 'Price check: compare', status: 'completed' });
+      return { status: 'streaming' };
+    },
+  });
+  const client = new HermesGatewayClient({
+    url: 'ws://127.0.0.1:9121/api/ws', token: 't', WebSocketImpl: gateway.WebSocketImpl, env: {},
+    onSessionEvent: (sessionId, kind, data) => seen.push({ sessionId, kind, data }),
+  });
+  await client.run({ message: 'go', options: {} });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const workers = seen.filter((event) => event.kind === 'worker');
+  assert.deepEqual(workers.map((event) => event.data.type), ['subagent.tool', 'subagent.complete']);
+  assert.equal(workers[0].data.payload.subagent_id, 'w1');
+  client.close();
+});
+
 test('a refused first connect attempt leaves one socket, so a reply is not also posted as a goal turn', async () => {
   // Hermes is still starting when Mia first connects, and it sends a
   // session's events to every socket attached to it.

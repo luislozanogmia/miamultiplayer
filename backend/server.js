@@ -7601,6 +7601,7 @@ function bindNativeHermesSessionEvents() {
     const target = nativeGatewaySessionConversations.get(key);
     if (target && kind === 'turn.start') activateBrowserRun(target, 'continuation');
     if (target && kind === 'turn.complete') expireBrowserRun(target, 'continuation');
+    if (target && kind === 'worker') return publishAiModeWorker(target, data);
     const next = (nativeHermesSessionEventChains.get(key) || Promise.resolve())
       .then(() => handleNativeHermesSessionEvent(key, kind, data))
       .catch(() => {});
@@ -7610,6 +7611,21 @@ function bindNativeHermesSessionEvents() {
     });
   });
 }
+
+// A background worker reporting after Mia's turn ended: the stage still shows it.
+function publishAiModeWorker(target, data) {
+  try {
+    const signal = aiMode.workerSignal(data && data.type, data && data.payload, aiModeStepLabel);
+    if (!signal || target.botId) return;
+    const conversation = nativeConversationRepository.getConversation({ companyId: target.companyId, id: target.conversationId });
+    if (!aiMode.isAiModeConversation(conversation)) return;
+    nativeConversationRealtime.publishActivity(target.conversationId, { agentName: target.agentName || 'Mia', at: Date.now(), ...signal });
+  } catch (_) { /* the stage must never break a turn */ }
+}
+const aiModeStepLabel = (tool) => {
+  const step = extractToolActivity('tool.start', { name: tool });
+  return (step && step.label) || 'Working';
+};
 
 // Hermes' goal state for the chip: an object, null (no goal), or undefined
 // when it could not be read (the chip then keeps what it had).
@@ -8661,6 +8677,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const postAiModeSignal = (type, payload) => {
     const text = String((payload && (payload.text || payload.rendered)) || '');
     if (type === 'thinking.delta' || type === 'reasoning.delta') return;
+    // A background worker she started shows on the stage as a bot at work.
+    const worker = aiMode.workerSignal(type, payload, aiModeStepLabel);
+    if (worker) return publishAiModeSignal(worker);
     if (type === 'message.delta' && text) {
       aiModeDraft += text;
       if (!aiModeDraftTimer) aiModeDraftTimer = setTimeout(publishAiModeDraft, AI_MODE_DRAFT_MS);
@@ -8776,8 +8795,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     }),
     sharedBrowserNote(),
     // Only Mia's own chat shows the bot setup card.
-    // AI mode has no setup card: there Mia creates the bot herself (see aiMode.turnNote).
-    ownsPrivateAgentConversation && !aiModeRun && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
+    ownsPrivateAgentConversation && !slashCommand && !privateAgent ? miaBotSetupActions.botSetupInstruction() : '',
     // TEMPORARY (bot files tidy-up): remove in 0.3.6.
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
@@ -10155,14 +10173,11 @@ const miaAppAnswers = miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
   resolveTurn(session, owner) {
     const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
     if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return null;
-    let found;
     try {
-      found = nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
+      nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
     } catch (_) { return null; }
-    return { ...target, aiMode: aiMode.isAiModeConversation(found),
-      workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
+    return { ...target, workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
   },
-  turnTrusts: (target, tool) => target.aiMode === true && !target.botId && aiMode.DEPLOY_TOOLS.has(tool),
   postCard(target, proposal) {
     const created = nativeConversationService.createEvent({
       companyId: target.companyId, conversationId: target.conversationId,

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, DEPLOY_TOOLS, pageFrame, createStagePages, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -120,11 +120,22 @@ test('narration keeps the one line Mia said before a step', () => {
   assert.equal(narration(''), '');
 });
 
-test('in AI mode Mia deploys bots on her own word, and removing one still asks', () => {
-  assert.equal(DEPLOY_TOOLS.has('bot_create_propose'), true);
-  assert.equal(DEPLOY_TOOLS.has('marketplace_get_propose'), true);
-  assert.equal(DEPLOY_TOOLS.has('bot_archive_propose'), false);
-  assert.match(turnNote(), /Bots are yours to deploy/);
+test('a background worker shows on the stage under its job name, with its step and its end', () => {
+  const goal = 'Price check: find the three cheapest flights and list them.';
+  assert.deepEqual(workerSignal('subagent.start', { goal, task_index: 1, subagent_id: 'sa-1-abc' }),
+    { aiMode: 'worker', worker: { key: 'sa-1-abc', name: 'Price check', state: 'start' } });
+  assert.deepEqual(workerSignal('subagent.tool', { goal, subagent_id: 'sa-1-abc', tool_name: 'web_search', text: 'private words' }, () => 'Searching the web'),
+    { aiMode: 'worker', worker: { key: 'sa-1-abc', name: 'Price check', state: 'step', line: 'Searching the web' } });
+  assert.equal(workerSignal('subagent.complete', { goal, subagent_id: 'sa-1-abc', status: 'completed' }).worker.failed, false);
+  assert.equal(workerSignal('subagent.complete', { goal, subagent_id: 'sa-1-abc', status: 'timeout' }).worker.failed, true);
+  // No job name: the first words of the job, and the task number tells workers apart.
+  assert.deepEqual(workerSignal('subagent.start', { goal: 'Read the pricing page of the site and report back', task_index: 2 }).worker,
+    { key: 'task-2', name: 'Read the pricing page', state: 'start' });
+  assert.equal(workerSignal('subagent.start', { goal: '' }).worker.name, 'Worker');
+  assert.equal(workerSignal('subagent.thinking', { goal }), null);
+  assert.equal(workerSignal('tool.start', { name: 'web_search' }), null);
+  assert.match(turnNote(), /background worker/);
+  assert.doesNotMatch(turnNote(), /deploy/);
 });
 
 test('a page picture is a small JPEG, with an address that carries no query', () => {

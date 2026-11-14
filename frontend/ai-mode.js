@@ -232,7 +232,7 @@ function choiceHtml(){
 function botsHtml(){
   if(!R.bots.length)return '';
   return '<span class="lbl">'+(R.bots.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
-    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" src="'+mote(b.name)+'"><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:'Done')+'</span></button>';
+    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" src="'+mote(b.name)+'"><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:b.failed?'Could not finish':'Done')+'</span></button>';
   }).join('')+'</div>'+R.bots.filter(function(b){return b.open;}).map(function(b){
     return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" src="'+mote(b.name)+'"><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
       (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
@@ -276,6 +276,7 @@ function onActivity(a){
   if(a.aiMode==='said'){R.line=str(a.text,200);R.told=true;R.toldAt=Date.now();say(R.line);}
   else if(a.aiMode==='writing')R.draft=String(a.text||'').slice(0,20000);
   else if(a.aiMode==='handoff')(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);
+  else if(a.aiMode==='worker'){followWorker(a.worker);redraw();return;}
   else if(a.phase==='start'){
     var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
     R.touched=R.touched.concat(files);R.draft='';
@@ -359,6 +360,15 @@ function followBot(b){
     if(my!==R||!a)return;
     if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
   });
+}
+// A background worker Mia started for this job. It is drawn as a bot but has no chat of its own:
+// the run says when it starts, what step it is on and when it ends, and it is gone with the run.
+function followWorker(w){
+  if(!w||!w.key||!R)return;
+  var bot=R.bots.filter(function(x){return x.key===w.key;})[0];
+  if(!bot){if(R.bots.length>=8)return;bot={key:String(w.key),name:str(w.name,40)||'Worker',running:true,line:'Starting',reply:'',open:false};R.bots.push(bot);}
+  if(w.state==='step'){bot.running=true;bot.line=str(w.line,40)||'Working';}
+  else if(w.state==='done'){bot.running=false;bot.failed=w.failed===true;}
 }
 function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};}
 // Mia's chat for this visit: made once, then every direction goes into it.

@@ -763,6 +763,11 @@ class HermesGatewayClient {
       emit('goal.status', { text: String(payload.text) });
       return;
     }
+    // Background workers keep going after the turn that started them.
+    if (type.startsWith('subagent.')) {
+      emit('worker', { type, payload });
+      return;
+    }
     if (type === 'session.control.update' && payload.control) {
       emit('control', { control: payload.control });
     }

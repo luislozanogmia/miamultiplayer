@@ -54,10 +54,13 @@ function turnNote() {
     'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +
     'ready for you.", "You asked for X, so it is better that I do Y first." Plain words, no lists, no names of tools.\n' +
     '- A page you open in the browser shows in a window on the stage, so the person watches you use it.\n' +
-    '- Bots are yours to deploy here. When a job is better done by a bot, create it or get it from the ' +
-    'marketplace and put it to work; it starts at once, with no card for the person to accept. Say that you did. ' +
-    'Do it with the mia-app tools bot_create_propose and marketplace_get_propose, which here act at once. ' +
-    'There is no bot setup card on the stage, so never end a reply with a bot setup block.'
+    '- Workers are yours to start here. When a job splits into parts that can go on at the same time, hand ' +
+    'each part to a background worker with delegate_task, and say that you did. The person sees each one on ' +
+    'the stage as a bot at work. Start each goal with a job name of one to three words and a colon, like ' +
+    '"Price check: ...", then everything the worker needs, because it knows nothing of this conversation. ' +
+    'A worker lasts for this job only. Put what it found into your own cards.\n' +
+    '- A bot the person keeps (they ask for one by name, or for something to run again and again) is still ' +
+    'made the usual way. Do not make one just to get this job done.'
   );
 }
 
@@ -232,10 +235,30 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
   return body.length ? { type: 'audio/mpeg', body } : null;
 }
 
-// What Mia may do on her own word in an AI mode run: put a bot to work. The
-// person gave a direction and is watching; a card to accept has nowhere to
-// show there. Removing a bot still asks.
-const DEPLOY_TOOLS = new Set(['bot_create_propose', 'marketplace_get_propose', 'bot_departments_propose']);
+// workerSignal(type, payload, label) -> what the stage shows for a background
+// worker Mia started for this job, or null when the event is not about one. A
+// worker is drawn as a bot but is none: it has no chat, nothing is kept and it
+// is gone when the run ends. `label(tool)` names a step in plain words.
+const MAX_WORKER_NAME = 28;
+const WORKER_EVENTS = { 'subagent.start': 'start', 'subagent.tool': 'step', 'subagent.complete': 'done' };
+function workerName(goal) {
+  const text = oneLine(goal, 400);
+  const named = /^([^:.!?\n]{2,28}):\s/.exec(text);
+  if (named && named[1].trim().split(/\s+/).length <= 4) return named[1].trim();
+  // No job name given: the first few words of the job stand in for one.
+  const words = text.split(/\s+/).filter(Boolean).slice(0, 4).join(' ').replace(/[,;:.]+$/, '');
+  return (words.length > MAX_WORKER_NAME ? `${words.slice(0, MAX_WORKER_NAME - 1).trim()}…` : words) || 'Worker';
+}
+function workerSignal(type, payload, label = () => 'Working') {
+  const state = WORKER_EVENTS[type];
+  const event = payload && typeof payload === 'object' ? payload : null;
+  if (!state || !event) return null;
+  const key = oneLine(event.subagent_id, 80) || `task-${Number(event.task_index) || 0}`;
+  const worker = { key, name: workerName(event.goal), state };
+  if (state === 'step') worker.line = oneLine(label(String(event.tool_name || '')), 40) || 'Working';
+  if (state === 'done') worker.failed = ['failed', 'error', 'timeout', 'interrupted'].includes(String(event.status || ''));
+  return { aiMode: 'worker', worker };
+}
 
 // The page Mia is working in, as a small picture. The desktop app holds the
 // page itself; a stage in a plain browser tab has no page, so the app hands a
@@ -275,6 +298,6 @@ function createStagePages({ now = Date.now } = {}) {
 }
 
 module.exports = {
-  speechVoices, synthesize, DEPLOY_TOOLS, pageFrame, createStagePages,
+  speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
   AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };
