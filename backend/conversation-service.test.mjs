@@ -588,10 +588,14 @@ test('the AI mode chat is the person\'s own, hidden from lists, and replaces the
   const mia = service.createConversation({
     companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' },
   });
+  const team = 'hub_' + 'a'.repeat(32);
+  assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner(), teamWorkspace: team }).metadata.teamWorkspace, team,
+    'opened in a company it belongs to that company');
   const first = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
   const second = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
 
   assert.equal(first.type, 'agent');
+  assert.equal(first.metadata.teamWorkspace, undefined, 'opened in Solo it belongs to no company');
   assert.equal(first.metadata.source, 'ai-mode');
   assert.equal(first.metadata.agentId, 'gateway');
   assert.notEqual(first.id, mia.id);

@@ -324,7 +324,7 @@ function createConversationService({ repository, authorization, realtime = null,
   // AI mode has no chat on screen, so its run with Mia lives in a chat of its
   // own that no list shows. Each time the person enters, they get a new one
   // and the ones they left are put away.
-  function openAiModeConversation({ companyId, principal, createdAt } = {}) {
+  function openAiModeConversation({ companyId, principal, createdAt, teamWorkspace } = {}) {
     const normalizedCompanyId = required(companyId, 'companyId');
     const owner = {
       principalId: required(principal && principal.principalId, 'principalId'),
@@ -342,7 +342,7 @@ function createConversationService({ repository, authorization, realtime = null,
       name: 'Mia',
       createdBy: owner.principalId,
       createdAt,
-      metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE },
+      metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE, ...(teamWorkspace ? { teamWorkspace } : {}) },
       owner,
     });
     ensureGatewayMember(conversation);

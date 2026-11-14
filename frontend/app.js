@@ -5619,10 +5619,11 @@
     if(key in hubChannelPictures) return hubChannelPictures[key];
     hubChannelPictures[key]=null;
     hubCall('GET',hubPath()+'/channels/'+channel.id+'/picture').then(function(res){
-      if(!res || !res.data) return;
+      if(!res || !res.data){ delete hubChannelPictures[key]; return; }
       hubChannelPictures[key]='data:'+res.mime+';base64,'+res.data;
       renderChatSidebar();
-    }).catch(function(){});
+    // A read that failed is asked again the next time the list is drawn.
+    }).catch(function(){ delete hubChannelPictures[key]; });
     return null;
   }
   function hubChannelLabel(channel){ return !channel ? '' : hubPrivateConversation(channel) ? hubChannelTitle(channel) : '# '+channel.name; }
@@ -10340,7 +10341,6 @@
   function restoreLocalBrowserAfterBoot(){
     if(localBrowserBootRestoreHandled) return;
     localBrowserBootRestoreHandled = true;
-    if(startUpdatedDesktopIntro()) return;
     if(shouldRestoreLocalBrowser()) openWebBrowserTool({restoring:true});
   }
 
@@ -19482,7 +19482,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, format: mdLite};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite};
 
   // The artifacts you opened last, listed first on the Artifacts page.
   var RECENT_ARTIFACTS_STORE = 'mia.recentArtifacts.v1';
@@ -22207,10 +22207,8 @@
 
   function tourFinish(){
     localStorage.setItem(TOUR_LS_KEY, '1');
-    if(tour.releaseVersion && window.miaDesktop && window.miaDesktop.state){
-      window.miaDesktop.state.set('miaIntroVersion', tour.releaseVersion);
-      tour.releaseVersion = null;
-    }
+    // Kept with the desktop app too, so an update never brings the guide back.
+    if(window.miaDesktop && window.miaDesktop.state) window.miaDesktop.state.set('miaIntroVersion', 'done');
     tourTeardown();
     if(tour.onFinish){var finish = tour.onFinish; tour.onFinish = null; finish();}
   }
@@ -22235,29 +22233,13 @@
     tourShowStep(0);
   }
 
-  function startUpdatedDesktopIntro(){
-    var desktop = window.miaDesktop;
-    if(!desktop || !desktop.version || !desktop.state) return false;
-    var version = desktop.version();
-    if(!version) return false;
-    var previous = desktop.state.get('miaIntroVersion');
-    // An installation predating version tracking may already have a completed
-    // tour or a restored browser. Treat it as an upgrade, not a new account.
-    var existingInstall = !!previous || !!localStorage.getItem(TOUR_LS_KEY) || shouldRestoreLocalBrowser();
-    if(previous !== version && existingInstall){
-      if(!previous) desktop.state.set('miaIntroVersion', 'legacy');
-      tour.releaseVersion = version;
-      tourStart();
-      return true;
-    }
-    if(!previous) desktop.state.set('miaIntroVersion', version);
-    return false;
-  }
-
   // Only ever auto-fires once the app shell is actually visible (called
   // from showApp(), never from the login wall) — see hideApp/showApp above.
   function tourMaybeAutoStart(){
     if(localStorage.getItem(TOUR_LS_KEY)) return;
+    // Someone who has used Mia on this computer before is not walked through it again.
+    var desktop = window.miaDesktop;
+    if(desktop && desktop.state && desktop.state.get('miaIntroVersion')) return;
     setTimeout(tourStart, 500);
   }
 

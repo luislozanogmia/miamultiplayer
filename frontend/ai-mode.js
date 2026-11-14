@@ -27,6 +27,7 @@ var MARKUP=
       '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
+      '<button class="btn ghost" id="full" hidden>Full screen</button>'+
       '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
       '<button class="btn ghost" id="leave">Leave</button>'+
       '</span>'+
@@ -63,6 +64,7 @@ var MARKUP=
 
 var host=null,root=null,open=false,drive=false;
 // One run: what the person said and everything Mia has done about it so far.
+var fullOwn=false;
 var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},mindMap={},seedId=0,drawTimer=null;
 function $(id){return root.getElementById(id);}
 function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
@@ -70,8 +72,11 @@ function str(v,n){return (typeof v==='string'?v.trim():'').slice(0,n);}
 function appHost(){return window.miaAiModeHost||{};}
 function workspace(){try{return appHost().workspace()||'solo';}catch(e){return 'solo';}}
 function format(t){try{return appHost().format(t);}catch(e){return '<p>'+esc(t)+'</p>';}}
-function call(path,body){
+// The company the person is in, or '' in Solo; its sign-in proves they are in it.
+function team(){try{return appHost().team()||'';}catch(e){return '';}}
+function call(path,body,token){
   var o={credentials:'include',headers:{'Accept':'application/json','X-MiaOS-Workspace':workspace()}};
+  if(token)o.headers['x-hub-token']=token;
   if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
   return fetch(path,o).then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {status:r.status,data:d||{}};});});
 }
@@ -383,7 +388,12 @@ function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k
 // Mia's chat for this visit: made once, then every direction goes into it.
 function openChat(){
   if(conv)return Promise.resolve(conv);
-  if(!opening)opening=call('/api/conversations/ai-mode',{}).then(function(r){
+  var company=team();
+  function plain(){return call('/api/conversations/ai-mode',{});}
+  // A company that cannot be confirmed right now still gets AI mode, working as in Solo.
+  if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',{teamWorkspace:company},token);})
+    .then(function(r){return r.status===403?plain():r;},plain)
+    :plain()).then(function(r){
     opening=null;var id=r.data.conversation&&r.data.conversation.id;
     if(!id)throw new Error(r.status===401?'signin':'closed');
     conv=id;seq=0;
@@ -808,6 +818,14 @@ function build(){
   $('more').onclick=function(){tools(!$('tools').hidden);};
   $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden)phoneShow(false);};
   phoneWire();
+  // Full screen: the stage takes the whole screen, and gives it back on leaving.
+  var page=document.documentElement;
+  $('full').hidden=!page.requestFullscreen;
+  $('full').onclick=function(){
+    if(document.fullscreenElement){document.exitFullscreen();fullOwn=false;}
+    else page.requestFullscreen().then(function(){fullOwn=true;},function(){});
+  };
+  document.addEventListener('fullscreenchange',function(){$('full').textContent=document.fullscreenElement?'Exit full screen':'Full screen';if(!document.fullscreenElement)fullOwn=false;});
   $('cv').addEventListener('click',function(e){
     // A link in her reply opens on the stage, in the desktop app.
     var a=e.target&&e.target.closest&&e.target.closest('a[href]');
@@ -861,6 +879,7 @@ function leave(){
   if(!open)return;
   if(R&&R.running)halt('');
   open=false;clearTimeout(drawTimer);drawTimer=null;hush();earStop();seedId++;
+  if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
   host.classList.remove('driving');$('back').hidden=true;drive=false;
@@ -870,7 +889,15 @@ function leave(){
 }
 document.addEventListener('click',function(e){
   var b=e.target&&e.target.closest&&e.target.closest('[data-ai-mode-enter]');
-  if(b){e.preventDefault();enter();}
+  if(!b)return;
+  e.preventDefault();
+  // The first time on this computer, a short intro shows what AI mode is.
+  var seen=true;try{seen=localStorage.getItem('miaAiModeIntroSeen')==='1';}catch(err){}
+  if(seen||!window.MiaAiModeIntro)return enter();
+  window.MiaAiModeIntro.play().then(function(r){
+    try{localStorage.setItem('miaAiModeIntroSeen','1');}catch(err){}
+    if(r==='try')enter();
+  });
 });
 window.MiaAiMode={enter:enter,leave:leave};
 })();

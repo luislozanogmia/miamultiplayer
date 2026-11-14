@@ -21,45 +21,43 @@ function functionSource(name){
   return source.slice(start, source.indexOf('\n  }', start) + 4);
 }
 
-test('updates start at guide step one before browser restoration, once per completed version', () => {
-  const saved = new Map([['miaIntroVersion', '0.2.2']]);
+test('an update never starts the guide: the browser comes back and the guide stays in Settings', () => {
   const calls = [];
   const context = {
-    window: {miaDesktop: {version: () => '0.2.3', state: {get: key => saved.get(key), set: (key, value) => saved.set(key, value)}}},
-    localStorage: {getItem: () => null, setItem: () => {}},
-    TOUR_LS_KEY: 'miaosTourDone', tour: {}, localBrowserBootRestoreHandled: false,
-    shouldRestoreLocalBrowser: () => true,
-    tourStart: () => calls.push('intro'), tourTeardown: () => {},
-    openWebBrowserTool: () => calls.push('browser'),
+    localBrowserBootRestoreHandled: false, shouldRestoreLocalBrowser: () => true,
+    tourStart: () => calls.push('guide'), openWebBrowserTool: () => calls.push('browser'),
   };
   vm.createContext(context);
-  vm.runInContext(['startUpdatedDesktopIntro', 'restoreLocalBrowserAfterBoot', 'tourFinish'].map(functionSource).join('\n'), context);
+  vm.runInContext(functionSource('restoreLocalBrowserAfterBoot'), context);
   context.restoreLocalBrowserAfterBoot();
-  assert.deepEqual(calls, ['intro']);
-  assert.equal(context.tour.releaseVersion, '0.2.3');
-  assert.equal(saved.get('miaIntroVersion'), '0.2.2');
-  context.tourFinish();
-  assert.equal(saved.get('miaIntroVersion'), '0.2.3');
-  context.localBrowserBootRestoreHandled = false;
-  context.restoreLocalBrowserAfterBoot();
-  assert.deepEqual(calls, ['intro', 'browser']);
+  assert.deepEqual(calls, ['browser']);
+  assert.doesNotMatch(source, /startUpdatedDesktopIntro|releaseVersion/);
+  assert.match(source, /settingsReplayTour/);
 });
 
-test('fresh installs retain chat onboarding, legacy installs with a browser receive the introduction', () => {
-  for(const existing of [false, true]){
-    const saved = new Map();
-    let started = false;
+test('the guide starts by itself only for someone new to Mia on this computer', () => {
+  const run = (done, seen) => {
+    const saved = new Map(seen ? [['miaIntroVersion', seen]] : []);
+    let started = 0;
     const context = {
-      window: {miaDesktop: {version: () => '0.2.3', state: {get: key => saved.get(key), set: (key, value) => saved.set(key, value)}}},
-      localStorage: {getItem: () => null}, TOUR_LS_KEY: 'miaosTourDone', tour: {},
-      shouldRestoreLocalBrowser: () => existing, tourStart: () => { started = true; },
+      window: {miaDesktop: {state: {get: key => saved.get(key), set: (key, value) => saved.set(key, value)}}},
+      localStorage: {getItem: () => (done ? '1' : null), setItem: () => {}},
+      TOUR_LS_KEY: 'miaosTourDone', tour: {}, tourTeardown: () => {},
+      setTimeout: fn => fn(), tourStart: () => { started += 1; },
     };
     vm.createContext(context);
-    vm.runInContext(functionSource('startUpdatedDesktopIntro'), context);
-    assert.equal(context.startUpdatedDesktopIntro(), existing);
-    assert.equal(started, existing);
-    assert.equal(saved.get('miaIntroVersion'), existing ? 'legacy' : '0.2.3');
-  }
+    vm.runInContext(['tourMaybeAutoStart', 'tourFinish'].map(functionSource).join('\n'), context);
+    context.tourMaybeAutoStart();
+    return {started, context, saved};
+  };
+  assert.equal(run(false, '').started, 1);
+  assert.equal(run(true, '').started, 0);
+  // An earlier version left its number here; a finished guide leaves 'done'.
+  assert.equal(run(false, '0.3.8').started, 0);
+  assert.equal(run(false, 'legacy').started, 0);
+  const fresh = run(false, '');
+  fresh.context.tourFinish();
+  assert.equal(fresh.saved.get('miaIntroVersion'), 'done');
 });
 
 test('replaying the guide closes native browser before showing HTML and begins at zero', () => {
@@ -86,6 +84,7 @@ test('Next walks every guide step without needing a target click and Done finish
   let finished = 0;
   const context = {
     tour: {active: true, step: 0, steps},
+    window: {},
     TOUR_LS_KEY: 'miaosTourDone',
     localStorage: {setItem: () => { finished += 1; }},
     location: {hash: '#/chat'},
