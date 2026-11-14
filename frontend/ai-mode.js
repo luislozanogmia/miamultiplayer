@@ -343,12 +343,21 @@ function fail(my,e){
 function direct(t,shown){
   startAudio();
   var steering=s===2&&R&&R.running&&R.sent;
+  var before=R&&R.sent?{said:str(R.said,400),ask:str(R.ask,200)}:null;
   if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
   else{closeBots();R=newRun(shown||t);R.at=Date.now()-2000;seed(shown||t);}
   s=2;draw();
   var my=R;
-  openChat().then(function(id){
-    return call(chat(id,'/events'),{type:'message',content:{text:t},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)});
+  var send=function(text){
+    return openChat().then(function(id){
+      return call(chat(id,'/events'),{type:'message',content:{text:text},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)});
+    });
+  };
+  send(t).then(function(r){
+    // The chat is gone when AI mode was opened in another window. Start a new one and say what came before.
+    if(r.status!==404||my!==R)return r;
+    var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}
+    return send(before?'Earlier I asked you: "'+before.said+'".'+(before.ask?' You asked me: "'+before.ask+'".':'')+' My answer: '+t:t);
   }).then(function(r){
     if(my!==R)return;
     if(r.status!==200&&r.status!==201)throw new Error(r.status===401?'signin':'closed');
