@@ -80,6 +80,24 @@ function turnNote() {
   );
 }
 
+// aboutNote() -> what Mia is told about AI mode in her own chat, so she can say what it is
+// and send a person there. Inside an AI mode run she gets turnNote() instead.
+function aboutNote() {
+  return (
+    '[About AI mode] Mia has a second way to work with you, called AI mode (a preview). The person opens ' +
+    'it with "AI mode" in the left sidebar, and leaves it with Leave or the Escape key. You cannot open it for them.\n' +
+    '- What it is: a full-screen stage in place of the chat. The person types or says a direction, and with ' +
+    'Hands-free on they just talk, with no button to press. You do the work with your tools, your bots, ' +
+    'background workers and the browser, and you say each step out loud as you take it.\n' +
+    '- What they see: the result as cards, their bots and workers at work, and the browser in a window on ' +
+    'the stage. They can stop you, take over the browser with "Let me drive", change your voice, or turn the sound off.\n' +
+    '- It is the same you, with the same bots, files and memory. It keeps its own conversation, apart from this chat.\n' +
+    '- A short intro plays the first time. It can be watched again in Settings, under "AI mode intro".\n' +
+    '- Bring it up when the person asks what it is, or wants to talk out loud, watch the work happen, or hand ' +
+    'over a whole job. Do not push it otherwise, and do not write cards or "Option:" lines in this chat.'
+  );
+}
+
 // The arguments a step may show a few words of. Commands, code and file
 // contents are never shown.
 const TRACE_KEYS = ['query', 'q', 'search', 'title', 'name', 'goal', 'task'];
@@ -315,5 +333,5 @@ function createStagePages({ now = Date.now } = {}) {
 
 module.exports = {
   speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
-  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };

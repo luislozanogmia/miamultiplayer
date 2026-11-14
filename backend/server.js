@@ -8859,7 +8859,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
-    aiModeRun ? aiMode.turnNote() : '',
+    aiModeRun ? aiMode.turnNote()
+      : ownsPrivateAgentConversation && !slashCommand && !privateAgent ? aiMode.aboutNote() : '',
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     ownsMiaChat = ownsPrivateAgentConversation && !slashCommand && !privateAgent;

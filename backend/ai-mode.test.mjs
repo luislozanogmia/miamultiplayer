@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -20,6 +20,14 @@ test('the turn note tells Mia to do the work for real and how to hand a choice b
   assert.match(note, /not reading a chat/);
   assert.match(note, /Do not describe work you did not do/);
   assert.match(note, /Option: </);
+});
+
+test('in her own chat Mia is told what AI mode is and how a person gets there', () => {
+  const note = aboutNote();
+  assert.match(note, /"AI mode" in the left sidebar/);
+  assert.match(note, /You cannot open it for them/);
+  assert.match(note, /Hands-free/);
+  assert.doesNotMatch(note, /Card: </);
 });
 
 test('a step shows what it is about, never a command, code or file contents', () => {

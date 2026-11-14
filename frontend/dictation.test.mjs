@@ -106,3 +106,59 @@ test('the recorder gives the mic back and returns what was said', async () => {
   recorder.cancel();
   assert.deepEqual([recorder.active(), stopped.length, heard.length], [false, 2, 1]);
 });
+
+test('the endpointer hears a person start, waits out a pause, and ends a second after they stop', () => {
+  const ears = D.createEndpointer();
+  const feed = (level, times, loud) => { const got = []; for (let i = 0; i < times; i++) { const what = ears.feed(level, 40, loud); if (what) got.push(what); } return got; };
+  assert.deepEqual(feed(0.003, 50), []);
+  assert.deepEqual(feed(0.1, 20), ['start']);
+  assert.deepEqual(feed(0.003, 10), [], 'a short pause is not the end');
+  assert.deepEqual(feed(0.1, 10), []);
+  assert.deepEqual(feed(0.003, 30), ['end']);
+  assert.deepEqual(feed(0.1, 4), ['start']);
+  assert.deepEqual(feed(0.003, 30), ['drop'], 'a click or a cough is not something said');
+});
+
+test('while Mia is speaking it takes a louder, longer sound to count as the person', () => {
+  const ears = D.createEndpointer();
+  for (let i = 0; i < 50; i++) ears.feed(0.003, 40, true);
+  for (let i = 0; i < 30; i++) assert.equal(ears.feed(0.03, 40, true), '', 'her own voice coming back');
+  const got = [];
+  for (let i = 0; i < 10; i++) got.push(ears.feed(0.2, 40, true));
+  assert.equal(got.filter(Boolean).join(), 'start');
+  assert.equal(got.indexOf('start'), 7);
+});
+
+test('the listener writes down each thing said, first word included, and lets go of the mic', async () => {
+  const calls = [], stopped = [];
+  let wavBytes = 0, done;
+  const text = new Promise((resolve) => { done = resolve; });
+  const listener = D.createListener({
+    media: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => stopped.push(1) }] }) },
+    AudioContext: function(){
+      this.sampleRate = 16000;
+      this.createGain = () => ({ gain: {}, connect(){} });
+      this.createScriptProcessor = () => ({ connect(){}, disconnect(){} });
+      this.createMediaStreamSource = () => ({ connect(){} });
+      this.destination = {};
+      this.close = () => {};
+    },
+    transcribe: async (wav) => { wavBytes = wav.byteLength; return ' find the report '; },
+    onStart: () => calls.push('start'),
+    onWriting: () => calls.push('writing'),
+    onText: (t) => { calls.push(t); done(); },
+  });
+  await listener.start();
+  assert.equal(listener.active(), true);
+  const block = (level) => new Float32Array(640).fill(level);
+  for (let i = 0; i < 30; i++) listener.hear(block(0.002), 16000);
+  for (let i = 0; i < 25; i++) listener.hear(block(0.2), 16000);
+  for (let i = 0; i < 26; i++) listener.hear(block(0.002), 16000);
+  await text;
+  assert.deepEqual(calls, ['start', 'writing', 'find the report']);
+  // 1 s said + 1 s of quiet + the lead kept from before the first word was heard.
+  assert.ok(wavBytes > 44 + 2 * 16000 * 2 && wavBytes < 44 + 3 * 16000 * 2, String(wavBytes));
+  listener.stop();
+  assert.equal(listener.active(), false);
+  assert.equal(stopped.length, 1);
+});

@@ -6067,7 +6067,7 @@
     // AI mode shows these same bots in this same order.
     sidebarBotRows=orderedBots.filter(function(bot){ return hiddenBots.indexOf(bot)<0; }).map(function(bot){
       var chat=teamBotChat(bot), roomId=chat && chat.id;
-      return { name: bot.name, working: sidebarEntryHasActivity({roomId: roomId}), line: roomPreview(roomId) || '' };
+      return { name: bot.name, working: sidebarEntryHasActivity({roomId: roomId}) };
     });
     if(window.MiaAiMode && window.MiaAiMode.bots) window.MiaAiMode.bots();
     hiddenGroup(myBotSection.list,'bots',hiddenBots.map(function(bot){ return function(){ return teamBotRow(bot); }; }),
@@ -18615,7 +18615,7 @@
     allEntries = allEntries.filter(function(e){ return !isBotEntry(e); });
     // AI mode shows these same bots in this same order.
     sidebarBotRows = pinnedEntries.filter(isBotEntry).concat(botEntries).map(function(e){
-      return { name: e.name, working: sidebarEntryHasActivity(e), line: roomPreview(e.roomId) || '' };
+      return { name: e.name, working: sidebarEntryHasActivity(e) };
     });
     if(window.MiaAiMode && window.MiaAiMode.bots) window.MiaAiMode.bots();
 

@@ -30,6 +30,7 @@ var MARKUP=
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
       '<button class="btn ghost" id="web" hidden>Browser</button>'+
       '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
+      '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="full" hidden>Full screen</button>'+
@@ -263,18 +264,17 @@ function choiceHtml(){
   return '<div class="panel ask open">'+(R.options.length?'<span class="lbl">Needs your judgment</span><div class="opts">'+R.options.map(function(o,i){return '<button class="btn" data-opt="'+i+'">'+esc(o)+'</button>';}).join('')+'</div>':'')+
     (R.next&&!R.options.length?'<span class="lbl">Next</span><div class="opts"><button class="btn" data-next="1">'+esc(R.next)+'</button></div>':'')+'</div>';
 }
-// The person's own bots, in the order the chat list keeps them, so the two never disagree.
-function rosterHtml(){
-  var list=window.MiaBots?window.MiaBots.list():[];
-  if(!list.length)return '';
-  return '<span class="lbl">Your bots</span><div class="roster">'+list.slice(0,12).map(function(b){
-    return '<div class="rb'+(b.working?' busy':'')+'"><img alt="" '+moteArt(b.name)+'><span><b>'+esc(b.name)+'</b><small>'+esc(b.working?'Working':str(b.line,80))+'</small></span></div>';
-  }).join('')+'</div>';
-}
+// Bots at work: the workers of this run, then the person's own bots that are working right now.
+// A bot that is not working is not shown.
 function botsHtml(){
-  if(!R.bots.length)return '';
-  return '<span class="lbl">'+(R.bots.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
+  var own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
+    return b.working&&!R.bots.some(function(w){return w.name===b.name;});
+  }).slice(0,8);
+  if(!R.bots.length&&!own.length)return '';
+  return '<span class="lbl">'+(R.bots.length+own.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
     return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:b.failed?'Could not finish':'Done')+'</span></button>';
+  }).join('')+own.map(function(b){
+    return '<div class="bot busy"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step">Working</span></div>';
   }).join('')+'</div>'+R.bots.filter(function(b){return b.open;}).map(function(b){
     return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" '+moteArt(b.name)+'><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
       (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
@@ -293,7 +293,6 @@ function draw(){
   if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
   else{
     var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
-    if(!quiet)side+=rosterHtml();
     h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
@@ -759,7 +758,7 @@ function hush(){
 // The words are written down on this computer by the same recorder the chat box uses.
 // Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
 var ear=null,earState='';
-function boxHint(){return R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function boxHint(){return talkOn?'Listening\u2026 just talk':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
 function earParts(){
   var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
   return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
@@ -797,6 +796,51 @@ function earToggle(){
     var denied=error&&(error.name==='NotAllowedError'||error.name==='SecurityError');
     earStop(denied?'The microphone is blocked. Allow Mia to use it in your computer\'s settings.':'The mic could not start. Type it here.');
   });
+}
+// Hands-free: the mic stays open and each thing the person says goes to Mia when they stop talking,
+// with no button. Talking over her voice stops it, and "stop" by itself stops the work.
+var talk=null,talkOn=false;
+function talkShow(){
+  var b=$('talk');b.textContent=talkOn?'Hands-free on':'Hands-free off';b.setAttribute('aria-pressed',talkOn?'true':'false');
+  $('mic').hidden=talkOn||!earParts();
+  if(!earState)$('box').placeholder=boxHint();
+}
+function talkStop(note){
+  talkOn=false;if(talk)talk.stop();
+  if(host){earShow('',note);talkShow();}
+}
+function talkStart(){
+  var parts=earParts();if(!parts||talkOn)return;
+  earStop();talkOn=true;talkShow();
+  if(!talk)talk=parts.D.createListener({media:parts.media,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe,
+    loud:function(){return busy;},
+    onStart:function(){hush();earShow('on','I am listening\u2026');},
+    onWriting:function(){earShow('wait');},
+    onDrop:function(){earShow('');},
+    onError:function(){earShow('','I could not write down what you said. Say it again.');},
+    onText:function(t){
+      earShow('');
+      if(!t||!open)return;
+      if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
+      direct(t.slice(0,2000));
+    }});
+  window.MiaSpeech.ready({
+    confirm:function(text){return window.confirm(text);},
+    onDownloading:function(){earShow('wait','Downloading the speech model\u2026 (one time, about 142 MB)');}
+  }).then(function(ok){
+    if(!ok||!open||!talkOn)return talkStop();
+    earShow('');
+    return talk.start();
+  }).catch(function(error){
+    var denied=error&&(error.name==='NotAllowedError'||error.name==='SecurityError');
+    talkStop(denied?'The microphone is blocked. Allow Mia to use it in your computer\'s settings.':'The mic could not start. Type it here.');
+  });
+}
+function talkKept(){try{return localStorage.getItem('miaAiModeTalk')==='1';}catch(e){return false;}}
+function talkToggle(){
+  var on=!talkOn;
+  try{localStorage.setItem('miaAiModeTalk',on?'1':'0');}catch(e){}
+  if(on)talkStart();else talkStop();
 }
 // Sound: wind is shaped noise; each drop is a short rising tone, placed left or right where it lands.
 var ac=null,master=null,muted=false;
@@ -864,7 +908,7 @@ function build(){
   $('leave').onclick=leave;
   $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t)return;$('box').value='';direct(t.slice(0,2000));};
   $('stop').onclick=function(){hush();halt('');};
-  $('mic').onclick=earToggle;
+  $('mic').onclick=earToggle;$('talk').onclick=talkToggle;
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
   $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
   siteWire();
@@ -920,7 +964,8 @@ function enter(){
   host.classList.remove('driving');$('back').hidden=true;
   host.hidden=false;hold(false);draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
-  $('mic').hidden=!earParts();
+  $('mic').hidden=!earParts();$('talk').hidden=!earParts();talkShow();
+  if(talkKept())talkStart();
   if(pane()&&!webOff)webOff=web.onState(siteState);
   if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
@@ -937,7 +982,7 @@ function enter(){
 function leave(){
   if(!open)return;
   if(R&&R.running)halt('');
-  open=false;clearTimeout(drawTimer);drawTimer=null;hush();earStop();seedId++;
+  open=false;clearTimeout(drawTimer);drawTimer=null;hush();earStop();talkStop();seedId++;
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
