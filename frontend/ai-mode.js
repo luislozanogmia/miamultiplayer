@@ -1,24 +1,28 @@
 // AI mode: the person gives direction and watches Mia work. One full-screen
 // stage over the app, drawn in its own shadow root. What the person says goes
-// to Mia's model (POST /api/ai-mode/direct), which answers with one plan: what
-// she says, the traces of what she is weighing, the bots on it and the thing
-// being made, part by part. This file only draws that plan.
+// to Mia herself, in a chat of hers that no list shows (POST
+// /api/conversations/ai-mode): her real run, with her tools, her bots, the
+// browser and her approvals. This file draws that run as it happens: each
+// step she takes, what she is weighing, the reply as she writes it, and
+// whatever needs the person.
 //
 // There is no chat history here on purpose: the stage shows the last thing the
 // person said and the work, nothing older.
 (function(){
 'use strict';
 var KINDS=['research','inbox','calendar','sales','general','black'];
-function mote(kind){return 'assets/mote/mote-'+kind+'.svg';}
+function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-1">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-2">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
     '<div class="hud pad" id="hud">'+
       '<span class="who"><span id="hudMark" style="width:20px;height:20px"></span>AI mode</span>'+
       '<span class="sp"></span>'+
+      '<button class="btn" id="stop" hidden>Stop</button>'+
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
+      '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="leave">Leave</button>'+
     '</div>'+
@@ -27,40 +31,26 @@ var MARKUP=
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
     '</form></div>'+
-  '</div>';
+  '</div>'+
+  '<button class="btn primary back" id="back" hidden>Hand it back to Mia</button>';
 
-var host=null,root=null,open=false;
-var s=1,P=null,stage='arrive',saidText='',note='',sel=0,drive=false,built=0,stepAt=[],finished=false,answer='',turn=0;
-var foc=-1,judge=false,edits={},hold='',holdN=0,closing='',mindMap={},mindTotal=0;
-var turns=[],bots=[],ctl=null,tick=null,t2=null,planId=0;
+var MAX_STEPS=8;
+var host=null,root=null,open=false,drive=false;
+// One run: what the person said and everything Mia has done about it so far.
+var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},mindMap={},seedId=0,drawTimer=null;
 function $(id){return root.getElementById(id);}
 function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function str(v,n,d){v=typeof v==='string'?v.trim():'';return (v||d||'').slice(0,n);}
-// Whatever comes back is cut to the shape and sizes the canvas can show.
-function norm(r){
-  r=r&&typeof r==='object'?r:{};var used={};
-  function list(v,n,max){return (Array.isArray(v)?v:[]).map(function(x){return str(x,n);}).filter(Boolean).slice(0,max);}
-  var crew=(Array.isArray(r.bots)?r.bots:[]).slice(0,4).map(function(b,i){
-    b=b&&typeof b==='object'?b:{};var m=KINDS.indexOf(b.mote)>=0&&!used[b.mote]?b.mote:KINDS.filter(function(k){return !used[k];})[0];used[m]=1;
-    var steps=list(b.steps,48,4);
-    var finds=(Array.isArray(b.finds)?b.finds:[]).slice(0,4).map(function(f){f=f||{};return {label:str(f.label,40),value:str(f.value,48)};}).filter(function(f){return f.label;});
-    return {name:str(b.name,22,'Bot '+(i+1)),mote:m,steps:steps.length?steps:['Working'],finds:finds};
-  });
-  if(!crew.length)crew=[{name:'General',mote:'general',steps:['Working'],finds:[]}];
-  var a=r.artifact&&typeof r.artifact==='object'?r.artifact:{},raw=(Array.isArray(a.items)?a.items:[]).slice(0,8);
-  var items=raw.map(function(it){it=it||{};return {title:str(it.title,48,'Untitled'),lines:list(it.lines,90,3)};});
-  if(!items.length)items=[{title:'Result',lines:[str(r.done,90)]}];
-  // Only the last part may wait on the person's judgment, and only with two real options.
-  var c=raw.length?(raw[raw.length-1]||{}).choice:null;
-  if(c&&typeof c==='object'&&str(c.question,110)){
-    var os=(Array.isArray(c.options)?c.options:[]).slice(0,2).map(function(o){o=o||{};return {label:str(o.label,40),lines:list(o.lines,90,2)};}).filter(function(o){return o.label;});
-    if(os.length===2){var last=items[items.length-1];last.lines=[];last.choice={question:str(c.question,110),options:os,after:str(c.after,120,'Done.')};}
-  }
-  var q=r.ask&&typeof r.ask==='object'&&str(r.ask.question,90)?{question:str(r.ask.question,90),detail:str(r.ask.detail,120),yes:str(r.ask.yes,24,'Yes'),no:str(r.ask.no,24,'No'),after:str(r.ask.after,120)}:null;
-  return {traces:list(r.traces,26,12),glyphs:list(r.glyphs,8,5),palette:(Array.isArray(r.palette)?r.palette:[]).filter(function(x){return /^#[0-9a-f]{6}$/i.test(x);}).slice(0,4),
-    images:list(r.images,60,4),pics:[],notes:list(r.notes,60,5),
-    say:str(r.say,120,'On it.'),done:str(r.done,140,'Done.'),bots:crew,artifact:{title:str(a.title,40,'Result'),kind:str(a.kind,16,'parts'),items:items},ask:q};
+function str(v,n){return (typeof v==='string'?v.trim():'').slice(0,n);}
+function appHost(){return window.miaAiModeHost||{};}
+function workspace(){try{return appHost().workspace()||'solo';}catch(e){return 'solo';}}
+function format(t){try{return appHost().format(t);}catch(e){return '<p>'+esc(t)+'</p>';}}
+function call(path,body){
+  var o={credentials:'include',headers:{'Accept':'application/json','X-MiaOS-Workspace':workspace()}};
+  if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+  return fetch(path,o).then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {status:r.status,data:d||{}};});});
 }
+function chat(id,rest){return '/api/conversations/'+encodeURIComponent(id)+(rest||'');}
+
 // Mindspace: each trace is a word, a glyph, a color or a picture Mia named; nothing is shown that she did not.
 function rnd(a,b){return a+Math.random()*(b-a);}
 function mindAdd(cls,text){
@@ -87,186 +77,292 @@ function mindSet(p){
   (p.traces||[]).forEach(function(x){keep['w'+x]=['w',x];});(p.pics||[]).forEach(function(x){keep['p'+x]=['p',x];});
   Object.keys(mindMap).forEach(function(k){if(!keep[k])mindDrop(k);});
   Object.keys(keep).forEach(function(k){mindAdd(keep[k][0],keep[k][1]);});
-  mindTotal=Object.keys(mindMap).filter(function(k){return k[0]!=='c';}).length;
 }
-// As parts get built the traces thin out: fewer open questions, more finished work. Pictures go last.
-function converge(){
-  var ks=Object.keys(mindMap).filter(function(k){return k[0]!=='c';}).sort(function(a,b){return (a[0]==='p'?0:1)-(b[0]==='p'?0:1);}),n=P.artifact.items.length;
-  var want=finished?0:Math.ceil(mindTotal*(1-built/n));
-  while(ks.length>want)mindDrop(ks.pop());
-}
-// The pictures are the references Mia named for this plan, searched by her words, not the person's.
-function loadPictures(plan,id){
-  plan.images.forEach(function(q){
-    fetch('/api/ai-mode/images?q='+encodeURIComponent(q),{credentials:'include',headers:{'Accept':'application/json'}})
-      .then(function(r){return r.ok?r.json():{images:[]};})
-      .then(function(d){
-        if(id!==planId||!open||finished)return;
-        (Array.isArray(d.images)?d.images:[]).slice(0,2).forEach(function(u){
-          if(typeof u!=='string'||u.indexOf('/api/ai-mode/image?u=')!==0||mindMap['p'+u])return;
-          P.pics.push(u);mindAdd('p',u);mindTotal++;
-        });
+// Until Mia's own steps arrive, the traces are words for the subject and the pictures it calls up.
+function seed(text){
+  var my=++seedId;
+  mindSet({});
+  (text.toLowerCase().match(/[a-z0-9À-ɏ']{4,}/g)||[]).filter(function(w){return !/^(that|this|with|from|into|about|what|want|need|have|make|your|please|could|would)$/.test(w);}).slice(0,8).forEach(function(w){mindAdd('w',w);});
+  call('/api/ai-mode/seed',{said:text}).then(function(r){
+    var p=r.data.seed;if(my!==seedId||!open||!p||!R||!R.running)return;
+    (p.palette||[]).forEach(function(x){mindAdd('c',x);});(p.glyphs||[]).forEach(function(x){mindAdd('g',x);});(p.traces||[]).forEach(function(x){mindAdd('w',x);});
+    (p.images||[]).forEach(function(q){
+      call('/api/ai-mode/images?q='+encodeURIComponent(q)).then(function(d){
+        if(my!==seedId||!open||!R||!R.running)return;
+        (Array.isArray(d.data.images)?d.data.images:[]).slice(0,2).forEach(function(u){if(typeof u==='string'&&u.indexOf('/api/ai-mode/image?u=')===0)mindAdd('p',u);});
       },function(){});
-  });
+    });
+  },function(){});
 }
+// When the work stops the open questions are gone: only the colors stay.
+function settle(){Object.keys(mindMap).forEach(function(k){if(k[0]!=='c')mindDrop(k);});}
 
 function mark(px,mode){return '<span class="mk" data-mm="'+px+'" data-mode="'+(mode||'')+'" style="width:'+px+'px;height:'+px+'px"></span>';}
 function mount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.render(m,+m.dataset.mm,m.dataset.mode);});}
 function unmount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.destroy(m);});}
-function mia(t,cls){return '<div class="mia '+(cls||'in')+'">'+mark(22,drive||finished||judge||stage==='oops'?'static':'activity')+'<span id="miaLine">'+esc(t)+'</span></div>';}
-function line(){
-  if(drive)return 'You have the wheel. I paused the bots.';
-  if(judge)return P.done;if(finished)return closing||P.done;if(hold)return hold;
-  var n=P.notes||[];return n.length?n[Math.min(n.length-1,Math.floor(built/P.artifact.items.length*n.length))]:P.say;
-}
-function said(t){return '<div class="said in"><small>You said</small><p>'+esc(t)+'</p></div>';}
-function isDone(i){return stepAt[i]>=P.bots[i].steps.length;}
-function stepText(i){return drive?'Paused':isDone(i)?'Done':P.bots[i].steps[stepAt[i]];}
-function stepCls(i){return 'step'+(!drive&&isDone(i)?' done':'');}
-function busy(i){return !drive&&!isDone(i);}
-function count(){var n=P.artifact.items.length;return (built<n?built+' of '+n:n)+' '+P.artifact.kind;}
-function focusAt(){return foc>=0&&foc<built?foc:built-1;}
-function itemHtml(it,i,fresh){
-  var cls=fresh===i?' new':'',e=function(k){return drive?' contenteditable="plaintext-only" spellcheck="false" data-e="'+i+':'+k+'"':'';};
-  if(i===built&&!finished){
-    if(!judge||!it.choice)return '<div class="it now'+cls+'"><em>'+esc(it.title)+'</em></div>';
-    return '<div class="it now focus'+cls+'"><span class="lbl">Needs your judgment</span><em>'+esc(it.title)+'</em><p class="q">'+esc(it.choice.question)+'</p><div class="opts">'+
-      it.choice.options.map(function(o,k){return '<button class="opt" data-o="'+k+'"><b>'+esc(o.label)+'</b>'+o.lines.map(function(l){return '<span>'+esc(l)+'</span>';}).join('')+'</button>';}).join('')+'</div></div>';
+
+// A reply opens with the sentence Mia says out loud; choices she leaves to the person close it.
+function readReply(text){
+  var lines=String(text||'').replace(/\r/g,'').split('\n'),options=[];
+  while(lines.length){
+    var last=lines[lines.length-1].trim(),m=/^(?:[-*]\s*)?\**Option:?\**:?\s*(.+)$/i.exec(last);
+    if(m){options.unshift(str(m[1].replace(/\*+/g,''),80));lines.pop();}else if(!last)lines.pop();else break;
   }
-  var size=drive||(finished&&foc<0)?'':i===focusAt()?' focus':' small';
-  return '<div class="it'+size+(edits[i]?' mine':'')+cls+'" data-it="'+i+'"><em'+e('t')+'>'+esc(it.title)+'</em>'+it.lines.map(function(l,k){return '<p'+e(k)+'>'+esc(l)+'</p>';}).join('')+'</div>';
+  while(lines.length&&!lines[0].trim())lines.shift();
+  var first=(lines[0]||'').replace(/^[#>\s]+/,'').replace(/\*+/g,'').trim(),sayable=first&&first.length<=200&&!/^[-*|`]|^\d+[.)]\s/.test(first);
+  return {say:sayable?first:'',body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
 }
-// Only what exists is drawn: finished parts and the one being made. Nothing is laid out ahead of the work.
-function itemsHtml(fresh){
-  var n=P.artifact.items.length,h='';
-  for(var i=0;i<Math.min(n,finished?n:built+1);i++)h+=itemHtml(P.artifact.items[i],i,fresh);
-  return h;
+function newRun(text){
+  return {said:text,running:true,sent:false,line:'Thinking…',thought:'',steps:[],stepCount:0,draft:'',say:'',body:'',options:[],next:'',files:[],touched:[],
+    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:''};
 }
-function bindItems(){
-  var box=$('items');if(!box)return;
-  box.querySelectorAll('[data-it]').forEach(function(el){el.onclick=function(){if(drive)return;var i=+el.dataset.it;foc=foc===i?-1:i;box.innerHTML=itemsHtml(-1);bindItems();};});
-  box.querySelectorAll('[data-o]').forEach(function(b){b.onclick=function(){
-    var it=P.artifact.items[built],o=it.choice.options[+b.dataset.o];
-    it.lines=[o.label].concat(o.lines);closing=it.choice.after;
-    turns.push({role:'user',content:'(For "'+it.title+'" I chose: '+o.label+')'});
-    delete it.choice;judge=false;finish();
-  };});
+function miaLine(){
+  if(R.note)return R.note;
+  var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
+  if(ask)return 'I need your OK before I go on.';
+  return R.line;
 }
-function artifact(){
-  return '<div class="panel in d1"><div class="p-head"><b>'+esc(P.artifact.title)+'</b><span id="count">'+esc(count())+'</span></div>'+
-    (drive?'<p class="hint p-note">Change any text. Hand it back and I continue from your version.</p>':'')+
-    '<div class="items" id="items">'+itemsHtml(-1)+'</div></div>';
+function stepHtml(st){
+  return '<li class="st'+(st.done?(st.ok===false?' bad':' done'):' now')+'"><i></i><span><b>'+esc(st.label)+'</b>'+(st.detail?' <em>'+esc(st.detail)+'</em>':'')+
+    (st.files.length?' <em>'+esc(st.files.join(', '))+'</em>':'')+(st.done&&st.ok===false?' <em class="warn">did not work</em>':'')+'</span></li>';
 }
-function crew(){
-  return '<div class="crew">'+P.bots.map(function(b,i){
-    return '<button class="bot'+(i===sel?' on':'')+(busy(i)?' busy':'')+'" data-i="'+i+'" aria-pressed="'+(i===sel)+'"><img alt="" src="'+mote(b.mote)+'"><b>'+esc(b.name)+'</b><span class="'+stepCls(i)+'" data-step="'+i+'">'+esc(stepText(i))+'</span></button>';
-  }).join('')+'</div>';
+function stepsHtml(){
+  if(!R.steps.length)return '';
+  var shown=R.steps.slice(-MAX_STEPS),hidden=R.stepCount-shown.length;
+  return '<div class="panel steps"><div class="p-head"><b>'+(R.running?'Working':'What I did')+'</b><span>'+R.stepCount+(R.stepCount===1?' step':' steps')+'</span></div><ol>'+
+    (hidden>0?'<li class="st more"><i></i><span><em>'+hidden+' earlier</em></span></li>':'')+shown.map(stepHtml).join('')+'</ol></div>';
 }
-// The mini-map is a small window onto one bot's work; the bot sits on its corner.
-function mini(){
-  if(sel<0||!P.bots[sel])return '<p class="hint">Tap a bot to see what it is doing.</p>';
-  var b=P.bots[sel],n=Math.min(b.finds.length,stepAt[sel]+1);
-  var rows=b.finds.slice(0,n).map(function(f,i){return '<div><span>'+esc(f.label)+'</span><span'+(i===n-1&&busy(sel)?' class="hi"':'')+'>'+esc(f.value)+'</span></div>';}).join('');
-  return '<div class="mini'+(busy(sel)?' busy':'')+'"><img class="perch" alt="" src="'+mote(b.mote)+'"><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="'+stepCls(sel)+'">'+esc(stepText(sel))+'</span></div>'+
-    (rows?'<div class="rows">'+rows+'</div>':'')+'</div></div>';
+function resultHtml(){
+  // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
+  var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
+  if(!text)return '';
+  return '<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(text)+'</div></div>';
 }
-function askCard(){
-  if(!finished||!P.ask)return '';
-  if(answer)return '<div class="panel ask"><b>'+(answer==='yes'?'Done.':'Left as it is.')+'</b>'+(answer==='yes'&&P.ask.after?'<p>'+esc(P.ask.after)+'</p>':'')+'</div>';
-  return '<div class="panel ask in d2"><span class="lbl">Needs you</span><b>'+esc(P.ask.question)+'</b>'+(P.ask.detail?'<p>'+esc(P.ask.detail)+'</p>':'')+'<div class="acts"><button class="btn primary" data-a="yes">'+esc(P.ask.yes)+'</button><button class="btn" data-a="no">'+esc(P.ask.no)+'</button></div></div>';
+function askHtml(a){
+  if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
+  return '<div class="panel ask open"><span class="lbl">Needs you</span><b>Do you approve?</b>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+(a.summary?'<pre>'+esc(a.summary)+'</pre>':'')+
+    '<div class="acts"><button class="btn primary" data-ask="'+esc(a.id)+'" data-ok="1">Yes</button><button class="btn" data-ask="'+esc(a.id)+'" data-ok="0">No</button></div></div>';
 }
-function draw(quiet){
-  var cv=$('cv'),h='';
+function choiceHtml(){
+  if(R.running||(!R.options.length&&!R.next))return '';
+  // Her own choices come first; a suggested next step shows only when she left none.
+  return '<div class="panel ask open">'+(R.options.length?'<span class="lbl">Needs your judgment</span><div class="opts">'+R.options.map(function(o,i){return '<button class="btn" data-opt="'+i+'">'+esc(o)+'</button>';}).join('')+'</div>':'')+
+    (R.next&&!R.options.length?'<span class="lbl">Next</span><div class="opts"><button class="btn" data-next="1">'+esc(R.next)+'</button></div>':'')+'</div>';
+}
+function botsHtml(){
+  if(!R.bots.length)return '';
+  return '<span class="lbl">'+(R.bots.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
+    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" src="'+mote(b.name)+'"><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:'Done')+'</span></button>';
+  }).join('')+'</div>'+R.bots.filter(function(b){return b.open;}).map(function(b){
+    return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" src="'+mote(b.name)+'"><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
+      (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
+  }).join('');
+}
+function filesHtml(){
+  var made=R.files.map(function(f){return '<a class="file" href="'+esc(f.url)+'" target="_blank" rel="noopener">'+esc(f.name)+'</a>';});
+  var seen={},touched=R.touched.filter(function(n){if(seen[n])return false;seen[n]=1;return true;}).slice(-8).map(function(n){return '<span class="file">'+esc(n)+'</span>';});
+  if(!made.length&&!touched.length)return '';
+  return '<span class="lbl">Files</span><div class="files">'+made.concat(touched).join('')+'</div>';
+}
+function draw(){
+  clearTimeout(drawTimer);drawTimer=null;
+  var cv=$('cv'),h='',top=cv.scrollTop,atEnd=cv.scrollHeight-cv.scrollTop-cv.clientHeight<60;
   unmount(cv);
-  if(s===1)h='<div class="wrap center">'+'<span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
-  if(s>=2){
-    var w='<div class="wrap'+(stage==='reveal'?'':' center')+(quiet?' still':'')+(drive?' driving':'')+'">'+(saidText?said(saidText):'');
-    if(stage==='think')w+=mia('Thinking…','in d1');
-    if(stage==='oops')w+=mia(note,'in d1');
-    if(stage==='arrive')w+=mia(P.say,'in d1')+'<div class="arrive" style="grid-template-columns:repeat('+P.bots.length+',minmax(0,1fr));width:min('+(P.bots.length*210)+'px,100%)">'+P.bots.map(function(b,i){return '<div class="arr in d'+(i+2)+'"><img alt="" src="'+mote(b.mote)+'"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.steps[0])+'</span></div>';}).join('')+'</div>';
-    if(stage==='reveal')w+=mia(line(),'in d1')+
-      '<div class="work">'+artifact()+'<div class="side in d2">'+askCard()+'<span class="lbl">'+(P.bots.length===1?'Bot at work':'Bots at work')+'</span>'+crew()+'<div id="miniBox">'+mini()+'</div></div></div>';
-    h=w+'</div>';
+  if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
+  else{
+    var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=stepsHtml()+resultHtml(),quiet=!main&&!side;
+    h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
+      '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
+      (R.running&&R.thought&&!R.draft?'<p class="thought">'+esc(R.thought)+'</p>':'')+
+      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
   }
   cv.innerHTML=h;mount(cv);
-  var rev=s>=2&&stage==='reveal';
-  $('intent').classList.toggle('on',!drive);
-  $('box').placeholder=rev?'Guide, redirect, or ask to see more':'Say what you want';
-  $('drive').hidden=!rev;
-  $('drive').textContent=drive?'Hand it back':'Let me drive';
-  $('drive').className='btn'+(drive?' primary':'');
-  cv.querySelectorAll('.bot').forEach(function(t){t.onclick=function(){var i=+t.dataset.i;sel=sel===i?-1:i;draw(true);};});
-  cv.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){answer=b.dataset.a;turns.push({role:'user',content:'(I answered "'+b.textContent+'" to: '+P.ask.question+')'});draw(true);if(answer==='yes')speak(P.ask.after);};});
-  bindItems();$('mind').classList.toggle('hold',drive);if(rev)converge();
-  clearInterval(tick);
-  if(rev&&!drive&&!finished&&!judge)tick=setInterval(work,2200);
+  // The finished work is read from its top; while it grows the view follows the newest line.
+  if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
+  var live=s===2&&R&&R.running;
+  $('stop').hidden=!live;$('drive').hidden=s!==2;
+  $('box').placeholder=live?'Guide or redirect':s===2?'Say what is next':'Say what you want';
 }
-// The plan arrives whole; the canvas then brings it out part by part, at a pace a person can follow.
-function finish(){
-  built=P.artifact.items.length;stepAt=P.bots.map(function(b){return b.steps.length;});finished=true;judge=false;foc=-1;
-  if(hold){closing=closing||hold;hold='';}
-  draw(true);speak((closing||P.done)+(P.ask?' '+P.ask.question:''));
+// Signals arrive in bursts while Mia writes; the stage redraws at most a few times a second.
+function redraw(){if(!drawTimer)drawTimer=setTimeout(function(){if(open)draw();},120);}
+function say(t){if(!t||t===R.spoken)return;R.spoken=t;speak(t);}
+
+// What the run sends while it is going: steps, thoughts, lines said between steps, the reply being written.
+function onActivity(a){
+  if(!R||!a||typeof a!=='object')return;
+  // A last signal can land after the reply it belongs to; that run is over.
+  if(a.dispatchId&&R.over[a.dispatchId])return;
+  if(a.dispatchId&&!R.dispatch)R.dispatch=a.dispatchId;
+  if(a.aiMode==='thought')R.thought=lastThought(a.text);
+  else if(a.aiMode==='said'){R.line=readReply(a.text).say||str(a.text,200);say(R.line);}
+  else if(a.aiMode==='writing')R.draft=String(a.text||'').slice(0,20000);
+  else if(a.aiMode==='handoff')(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);
+  else if(a.phase==='start'){
+    var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
+    R.steps.push({id:a.toolId||'',label:str(a.label,60)||'Working',detail:str(a.detail,60),files:files,done:false,ok:true});
+    R.stepCount=Math.max(R.stepCount+1,+a.step||0);if(R.steps.length>40)R.steps.shift();
+    R.touched=R.touched.concat(files);R.draft='';R.line=str(a.label,60)||'Working';
+    if(a.detail)mindAdd('w',str(a.detail,26));
+  }else if(a.phase==='complete'){
+    for(var i=R.steps.length-1;i>=0;i--){var st=R.steps[i];if(!st.done&&(!a.toolId||st.id===a.toolId)){st.done=true;st.ok=a.ok!==false;break;}}
+  }else return;
+  R.running=true;redraw();
 }
-// The last part can be one Mia leaves to the person: she stops there and says so.
-function waits(){
-  var n=P.artifact.items.length,it=P.artifact.items[n-1];
-  if(built!==n-1||!it.choice)return false;
-  judge=true;stepAt=P.bots.map(function(b){return b.steps.length;});foc=-1;draw(true);speak(P.done);
-  var o=root.querySelector('.opts');if(o&&o.scrollIntoView)o.scrollIntoView({block:'nearest'});return true;
+// Of what Mia is thinking, the stage keeps the sentence she is on.
+function lastThought(t){
+  var parts=String(t||'').replace(/\s+/g,' ').trim().split(/(?<=[.!?…])\s+/).filter(function(x){return x.length>12;});
+  return str(parts[parts.length-1]||'',200);
 }
-function work(){
-  if(waits())return;
-  turn++;var n=P.artifact.items.length,i=turn%P.bots.length,fresh=-1;
-  if(hold&&--holdN<=0)hold='';
-  if(turn%2===1&&stepAt[i]<P.bots[i].steps.length-1)stepAt[i]++;else{built++;fresh=built;}
-  if(built>=n){finish();return;}
-  if(waits())return;
-  $('items').innerHTML=itemsHtml(fresh);bindItems();converge();
-  var c=$('count');if(c)c.textContent=count();
-  var l=$('miaLine'),tx=line();if(l&&l.textContent!==tx){l.style.opacity=0;setTimeout(function(){l.textContent=tx;l.style.opacity=1;},350);}
-  root.querySelectorAll('[data-step]').forEach(function(e){var k=+e.dataset.step;e.textContent=stepText(k);e.className=stepCls(k);});
-  var m=$('miniBox');if(m)m.innerHTML=mini();
+function ended(){
+  R.running=false;R.top=true;R.steps.forEach(function(st){st.done=true;});settle();
 }
-function begin(plan,text,follow){
-  P=plan;saidText=text;stage=follow?'reveal':'arrive';built=0;turn=0;answer='';sel=0;drive=false;
-  foc=-1;judge=false;edits={};hold='';closing='';finished=false;
-  stepAt=P.bots.map(function(){return 0;});
-  mindSet(P);draw();speak(P.say);loadPictures(P,++planId);
-  clearTimeout(t2);if(!follow)t2=setTimeout(function(){if(stage==='arrive'){stage='reveal';draw();}},3800);
+// What the run leaves in the chat: an approval it needs, and the reply.
+function onEvent(ev){
+  if(!ev||!R||typeof ev!=='object')return;
+  if(+ev.sequence>seq)seq=+ev.sequence;
+  var meta=ev.metadata&&typeof ev.metadata==='object'?ev.metadata:{},content=ev.content&&typeof ev.content==='object'?ev.content:{};
+  if(meta.askBeforeDo&&meta.askBeforeDo.id){
+    var q=meta.askBeforeDo,old=R.asks.filter(function(a){return a.id===q.id;})[0];
+    if(old){if(old.status==='pending')old.status=q.status;}
+    else{R.asks.push({id:q.id,line:str(q.line,300),summary:str(q.summary,600),status:q.status||'pending'});if(q.status==='pending')speak('I need your OK before I go on.');}
+    redraw();return;
+  }
+  if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||!R.sent)return;
+  var text=typeof content.text==='string'?content.text:'';
+  if(!text)return;
+  var read=readReply(text);
+  if(meta.dispatchId)R.over[meta.dispatchId]=true;
+  R.say=read.say;R.body=read.body;R.options=read.options;R.draft='';R.thought='';
+  R.next=str(meta.nextStep,120);
+  R.line=read.say||(read.options.length?'This part needs your judgment.':'Done.');
+  R.files=R.files.concat((Array.isArray(content.attachments)?content.attachments:[]).filter(function(f){return f&&f.id;}).map(function(f){
+    return {name:str(f.filename,80)||'File',url:chat(conv,'/attachments/'+encodeURIComponent(f.id))+'?workspace='+encodeURIComponent(workspace())};
+  }));
+  say(R.line);redraw();
+  // A line said mid-run is saved like a reply; the run is over only when nothing of it is still going.
+  var my=R;call(chat(conv,'/dispatches/active')).then(function(r){
+    if(my!==R)return;var going=Array.isArray(r.data.dispatches)?r.data.dispatches:[];
+    if(!going.length){ended();draw();}
+  },function(){if(my===R){ended();draw();}});
 }
-function oops(text){note=text;stage='oops';draw();}
-// The person's words go to Mia's model, which answers with the work to show.
+function listen(id,onEv,onAct){
+  if(typeof WebSocket!=='function')return null;
+  var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/conversations/ws?workspace='+encodeURIComponent(workspace()));
+  ws.onopen=function(){ws.send(JSON.stringify({type:'subscribe',conversationId:id,afterSequence:id===conv?seq:0}));};
+  ws.onmessage=function(m){
+    var p;try{p=JSON.parse(m.data);}catch(e){return;}
+    if(p.type==='conversation.event')onEv(p.event);
+    if(p.type==='conversation.activity')onAct(p.activity);
+    if(p.type==='history')(p.events||[]).forEach(onEv);
+  };
+  return ws;
+}
+// Each bot Mia put on the work does it in its own chat; the stage follows it there.
+function followBot(b){
+  if(!b||!b.conversationId||!R||R.bots.some(function(x){return x.conversationId===b.conversationId;}))return;
+  var bot={name:str(b.name,40)||'Bot',conversationId:b.conversationId,running:true,line:'Starting',reply:'',open:false},my=R;
+  R.bots.push(bot);
+  if(botSocks[b.conversationId])return;
+  botSocks[b.conversationId]=listen(b.conversationId,function(ev){
+    var meta=(ev&&ev.metadata)||{};
+    if(my!==R||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<my.at)return;
+    var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+    if(text){bot.reply=text.slice(0,8000);bot.running=false;redraw();}
+  },function(a){
+    if(my!==R||!a)return;
+    if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
+  });
+}
+function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};}
+// Mia's chat for this visit: made once, then every direction goes into it.
+function openChat(){
+  if(conv)return Promise.resolve(conv);
+  if(!opening)opening=call('/api/conversations/ai-mode',{}).then(function(r){
+    opening=null;var id=r.data.conversation&&r.data.conversation.id;
+    if(!id)throw new Error(r.status===401?'signin':'closed');
+    conv=id;seq=0;
+    sock=listen(id,onEvent,onActivity);
+    if(sock)sock.onclose=function(){if(open&&conv===id)setTimeout(function(){if(open&&conv===id){sock=listen(id,onEvent,onActivity);if(sock)sock.onclose=this.onclose;}}.bind(this),1500);};
+    return id;
+  },function(e){opening=null;throw e;});
+  return opening;
+}
+function fail(my,e){
+  if(my!==R)return;
+  R.running=false;R.note=e&&e.message==='signin'?'Sign in to Mia first, then say it again.':'That did not go through. Say it again.';settle();draw();
+}
+// The person's words go to Mia as a direction. Said while she is working, they steer the same run.
 function direct(t,shown){
-  startAudio();clearTimeout(t2);clearInterval(tick);note='';shown=shown||t;
-  var follow=s===3&&stage==='reveal';
-  s=3;drive=false;judge=false;saidText=shown;stage='think';turns.push({role:'user',content:t});draw();
-  // Until Mia answers, the only traces are the person's own words; hers replace them.
-  if(!follow){mindSet({});(shown.toLowerCase().match(/[a-z0-9À-ɏ']{4,}/g)||[]).filter(function(w){return !/^(that|this|with|from|into|about|what|want|need|have|make|your|please|could|would)$/.test(w);}).slice(0,8).forEach(function(w){mindAdd('w',w);});}
-  if(ctl)ctl.abort();var my=ctl=new AbortController();
-  fetch('/api/ai-mode/direct',{method:'POST',credentials:'include',signal:my.signal,headers:{'Accept':'application/json','Content-Type':'application/json'},body:JSON.stringify({turns:turns,bots:bots})})
-    .then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {status:r.status,plan:d&&d.plan};});})
-    .then(function(r){
-      if(my!==ctl)return;
-      if(!r.plan){turns.pop();oops(r.status===401?'Sign in to Mia first, then say it again.':r.status===502?'That did not come back whole. Say it again.':'That did not go through. Say it again.');return;}
-      turns.push({role:'assistant',content:JSON.stringify(r.plan)});begin(norm(r.plan),shown,follow);
-    },function(e){
-      if(my!==ctl||(e&&e.name==='AbortError'))return;
-      turns.pop();oops('That did not go through. Say it again.');
-    });
+  startAudio();
+  var steering=s===2&&R&&R.running&&R.sent;
+  if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
+  else{closeBots();R=newRun(shown||t);R.at=Date.now()-2000;seed(shown||t);}
+  s=2;draw();
+  var my=R;
+  openChat().then(function(id){
+    return call(chat(id,'/events'),{type:'message',content:{text:t},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)});
+  }).then(function(r){
+    if(my!==R)return;
+    if(r.status!==200&&r.status!==201)throw new Error(r.status===401?'signin':'closed');
+    R.sent=true;
+    var ds=r.data.dispatch&&Array.isArray(r.data.dispatch.dispatches)?r.data.dispatch.dispatches:[];
+    if(ds[0]&&ds[0].id)R.dispatch=ds[0].id;
+  }).catch(function(e){fail(my,e);});
 }
-// Taking the wheel is a real intervention: what the person changed stands, and Mia continues from it.
+function halt(reason){
+  if(!R||!conv)return Promise.resolve();
+  var my=R;
+  return call(chat(conv,'/dispatches/active')).then(function(r){
+    var ids=(Array.isArray(r.data.dispatches)?r.data.dispatches:[]).map(function(d){return d&&d.id;}).filter(Boolean);
+    if(!ids.length&&my.dispatch)ids=[my.dispatch];
+    return Promise.all(ids.map(function(id){return call(chat(conv,'/dispatches/'+encodeURIComponent(id)+'/stop'),reason?{reason:reason,page:''}:{});}));
+  }).then(function(){
+    if(my!==R)return;
+    ended();R.body=R.body||R.draft;R.draft='';R.line=reason?'You have the wheel. I stopped where I was.':'Stopped.';draw();
+  },function(){});
+}
+function answer(id,ok){
+  var a=R.asks.filter(function(x){return x.id===id;})[0];if(!a)return;
+  a.status=ok?'approved':'declined';draw();
+  call('/api/ask-before-do/'+encodeURIComponent(id),{approved:ok}).then(function(r){if(r.status>=400){a.status='gone';draw();}},function(){a.status='gone';draw();});
+}
+// Taking the wheel is a real intervention: Mia stops, the app is the person's, and she picks up from what they left.
+function takeWheel(){
+  drive=true;hush();halt('take-over');
+  host.classList.add('driving');$('back').hidden=false;
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
+}
 function handBack(){
-  drive=false;var ks=Object.keys(edits);
-  if(!ks.length){draw(true);return;}
-  var names=ks.map(function(k){return '"'+P.artifact.items[k].title+'"';}).join(', ');
-  direct('(I took the wheel and edited these parts myself: '+ks.map(function(k){var it=P.artifact.items[k];return 'part '+(+k+1)+' "'+it.title+'": '+it.lines.join(' / ');}).join('; ')+'. Keep my versions word for word, change anything else that should now change to fit them, then continue.)','You changed '+names+'.');
+  drive=false;host.classList.remove('driving');$('back').hidden=true;
+  if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
+  direct('(I took over and did part of this myself in the app. Look at how things stand now, keep what I did, and continue from there.)','You took the wheel, then handed it back.');
 }
-// Mia's lines are spoken with the voice this browser has; the words stay on screen either way.
+// Mia's lines are read in the voice the person picked when this computer has one, else in the browser's own.
+var voices=0,voice=0,speaking=null,speakId=0;
 function speak(t){
-  if(muted||!t||!window.speechSynthesis)return;
-  try{window.speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(String(t).slice(0,600));u.rate=0.95;window.speechSynthesis.speak(u);}catch(e){}
+  if(muted||!t||drive)return;
+  hush();var my=++speakId;t=String(t).slice(0,600);
+  if(voices&&ac){
+    fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:voice})})
+      .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
+      .then(function(b){return ac.decodeAudioData(b);})
+      .then(function(buf){
+        if(my!==speakId||muted||!open)return;
+        var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.start();speaking=src;
+      }).catch(function(){if(my===speakId)speakOwn(t);});
+    return;
+  }
+  speakOwn(t);
 }
-function hush(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}}
+function speakOwn(t){
+  if(!window.speechSynthesis)return;
+  try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;window.speechSynthesis.speak(u);}catch(e){}
+}
+function hush(){
+  speakId++;
+  try{if(speaking){speaking.stop();speaking=null;}}catch(e){}
+  try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
+}
 // Sound: wind is shaped noise; each drop is a short rising tone, placed left or right where it lands.
 var ac=null,master=null,muted=false;
 function noise(){var b=ac.createBuffer(1,ac.sampleRate*3,ac.sampleRate),d=b.getChannelData(0);for(var i=0;i<d.length;i++)d[i]=Math.random()*2-1;var n=ac.createBufferSource();n.buffer=b;n.loop=true;n.start();return n;}
@@ -317,37 +413,44 @@ function build(){
   window.MiaMark.render($('hudMark'),20,'');
   $('leave').onclick=leave;
   $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t)return;$('box').value='';direct(t.slice(0,2000));};
-  $('drive').onclick=function(){if(drive)handBack();else{drive=true;edits={};draw(true);}};
-  $('cv').addEventListener('input',function(e){
-    var d=e.target&&e.target.dataset&&e.target.dataset.e;if(!d)return;
-    var p=d.split(':'),it=P.artifact.items[+p[0]],v=e.target.textContent.replace(/\s+/g,' ').slice(0,120);
-    if(p[1]==='t')it.title=v;else it.lines[+p[1]]=v;
-    edits[p[0]]=true;e.target.parentNode.classList.add('mine');
+  $('stop').onclick=function(){hush();halt('');};
+  $('drive').onclick=takeWheel;$('back').onclick=handBack;
+  $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);speak('This is how I sound now.');};
+  $('cv').addEventListener('click',function(e){
+    var b=e.target&&e.target.closest&&e.target.closest('button');if(!b||!R)return;
+    if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
+    else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
+    else if(b.dataset.next)direct(R.next);
+    else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
   });
-  $('cv').addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target.isContentEditable){e.preventDefault();e.target.blur();}});
   $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.
-  host.addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape')leave();});
+  host.addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape'&&!drive)leave();});
 }
 function enter(){
   if(open)return;
   if(!host)build();
-  open=true;s=1;P=null;turns=[];saidText='';note='';drive=false;stage='arrive';mindSet({});
+  open=true;s=1;R=null;conv='';seq=0;drive=false;mindSet({});
+  host.classList.remove('driving');$('back').hidden=true;
   host.hidden=false;draw();
-  requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');});
+  requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
   startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
-  speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
+  call('/api/ai-mode/voices').then(function(r){
+    voices=+r.data.voices||0;voice=0;$('voice').hidden=voices<2;$('voice').textContent='Voice 1';
+    if(open&&s===1)speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
+  },function(){speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');});
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else requestAnimationFrame(frame);
   setTimeout(function(){if(open)$('box').focus();},400);
-  // Mia puts the person's own bots on the work under their own names.
-  fetch('/api/private-agents',{credentials:'include',headers:{'Accept':'application/json'}}).then(function(r){return r.ok?r.json():{};}).then(function(d){
-    bots=(Array.isArray(d.agents)?d.agents:[]).map(function(a){return str(a&&a.name,40);}).filter(Boolean).slice(0,8);
-  },function(){});
+  openChat().catch(function(){});
 }
+// Leaving ends the run: nothing keeps working on a stage nobody is watching.
 function leave(){
   if(!open)return;
-  open=false;clearInterval(tick);clearTimeout(t2);if(ctl){ctl.abort();ctl=null;}hush();
+  if(R&&R.running)halt('');
+  open=false;clearTimeout(drawTimer);drawTimer=null;hush();seedId++;
+  var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
+  host.classList.remove('driving');$('back').hidden=true;drive=false;
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
   setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';mindSet({});}},1600);
 }

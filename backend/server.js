@@ -7805,6 +7805,8 @@ function splitHermesDebugText(text, maxLength = 7000) {
 // message.complete/status change).
 const HERMES_DELTA_FLUSH_CHARS = 1200;
 const HERMES_DELTA_FLUSH_MS = 1500;
+// How often AI mode is sent the reply Mia is writing.
+const AI_MODE_DRAFT_MS = 300;
 
 // Where to cut an over-cap buffer: the last newline or sentence end inside
 // the cap, provided it keeps at least half a chunk; otherwise the last
@@ -8638,8 +8640,45 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       },
     })).catch(() => {});
   };
+  // AI mode has no chat to read, so its screen is drawn from the run itself:
+  // what Mia is weighing, what she says between steps and the reply as she
+  // writes it. Never saved; only the person who gave the direction is here.
+  const aiModeRun = dispatch.targetType === 'gateway' && aiMode.isAiModeConversation(conversation);
+  const publishAiModeSignal = (signal) => {
+    try {
+      nativeConversationRealtime.publishActivity(dispatch.conversationId, {
+        dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...signal,
+      });
+    } catch (_) { /* the stage must never break a turn */ }
+  };
+  const aiModeThoughts = aiModeRun ? createHermesDeltaCoalescer((_kind, text) => {
+    const thought = redactHermesChatDetail(text).trim();
+    if (thought) publishAiModeSignal({ aiMode: 'thought', text: thought });
+  }) : null;
+  let aiModeDraft = '';
+  let aiModeDraftTimer = null;
+  const publishAiModeDraft = () => {
+    aiModeDraftTimer = null;
+    const text = stripAgentActionBlocks(redactHermesChatDetail(aiModeDraft)).trim();
+    if (text) publishAiModeSignal({ aiMode: 'writing', text });
+  };
+  const postAiModeSignal = (type, payload) => {
+    const text = String((payload && (payload.text || payload.rendered)) || '');
+    if (type === 'thinking.delta' || type === 'reasoning.delta') return aiModeThoughts.push('Thought', text);
+    aiModeThoughts.flush();
+    if (type === 'message.delta' && text) {
+      aiModeDraft += text;
+      if (!aiModeDraftTimer) aiModeDraftTimer = setTimeout(publishAiModeDraft, AI_MODE_DRAFT_MS);
+      return;
+    }
+    if (type === 'tool.start') aiModeDraft = '';
+    if (type === 'message.interim' && text.trim()) {
+      publishAiModeSignal({ aiMode: 'said', text: stripAgentActionBlocks(redactHermesChatDetail(text)).trim() });
+    }
+  };
   const postHermesProgress = (type, payload) => {
     if (onProgress) onProgress(type, payload);
+    if (aiModeRun) postAiModeSignal(type, payload);
     if (trackBudget) trackBudget(type, payload);
     if (type !== 'session.info') {
       const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
@@ -8676,6 +8715,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       try {
         nativeConversationRealtime.publishActivity(dispatch.conversationId, {
           dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), step: dispatch.toolSteps || 0, ...toolActivity,
+          ...(aiModeRun && toolActivity.phase === 'start' ? { detail: aiMode.toolTrace(payload) } : {}),
         });
       } catch (_) { /* the status panel must never break a turn */ }
     }
@@ -8740,6 +8780,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
+    aiModeRun ? aiMode.turnNote() : '',
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     ownsMiaChat = ownsPrivateAgentConversation && !slashCommand && !privateAgent;
@@ -9085,7 +9126,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   });
   recordTidyPlanEvent(result, tidyPlan);
   if (dispatch.targetType === 'gateway') {
-    await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
+    const handoffs = await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
+    // The stage follows each bot Mia handed the work to, in that bot's own chat.
+    const bots = aiModeRun ? handoffs.filter(Boolean).map((handoff) => ({
+      id: handoff.targetId, name: (handoff.metadata && handoff.metadata.botName) || handoff.targetId,
+      conversationId: handoff.conversationId, dispatchId: handoff.id,
+    })) : [];
+    if (bots.length) publishAiModeSignal({ aiMode: 'handoff', bots });
   }
   return result;
 }
@@ -9462,20 +9509,33 @@ app.post('/api/space/suggestions', requireAuth, async (req, res) => {
   }
 });
 
-// AI mode: the person directs, Mia answers with the work as one plan the
-// screen draws. Body: {turns: [{role, content}], bots: [names of their bots]}.
-// This is the person's own request, so it runs on the 'reply' tier.
-app.post('/api/ai-mode/direct', requireAuth, async (req, res) => {
-  const body = req.body || {};
-  const prompt = aiMode.buildPrompt({ turns: body.turns, bots: body.bots });
-  if (!prompt) return res.status(400).json({ error: 'turns must end on what the person said' });
+// AI mode: what to picture behind the stage while Mia works on a direction.
+// Body: {said: the direction}. Mia's run itself goes through her hidden chat
+// (POST /api/conversations/ai-mode); this only picks the pictures and colors.
+app.post('/api/ai-mode/seed', requireAuth, async (req, res) => {
+  const prompt = aiMode.seedPrompt((req.body || {}).said);
+  if (!prompt) return res.status(400).json({ error: 'said is required' });
   try {
-    const reply = await scheduleInference(prompt, 'reply', await inferenceOptionsForUser(req.userEmail));
-    const plan = aiMode.parseReply(reply);
-    if (!plan) return res.status(502).json({ error: 'no_plan' });
-    res.status(200).json({ plan });
+    const reply = await scheduleInference(prompt, 'background', await inferenceOptionsForUser(req.userEmail));
+    res.status(200).json({ seed: aiMode.parseSeed(reply) });
   } catch (err) {
-    res.status(502).json({ error: 'inference_failed' });
+    res.status(200).json({ seed: aiMode.parseSeed('') });
+  }
+});
+
+// Mia's voice in AI mode. GET says how many voices there are to pick from (0:
+// the page uses the computer's own voice); POST {text, voice} returns the line
+// spoken.
+app.get('/api/ai-mode/voices', requireAuth, (req, res) => {
+  res.status(200).json({ voices: aiMode.speechVoices().length });
+});
+app.post('/api/ai-mode/speech', requireAuth, async (req, res) => {
+  try {
+    const spoken = await aiMode.synthesize((req.body || {}).text, Number((req.body || {}).voice));
+    if (!spoken) return res.status(404).json({ error: 'speech unavailable' });
+    res.set('Content-Type', spoken.type).set('Cache-Control', 'no-store').status(200).send(spoken.body);
+  } catch (err) {
+    res.status(502).json({ error: 'speech failed' });
   }
 });
 

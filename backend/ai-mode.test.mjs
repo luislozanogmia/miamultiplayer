@@ -3,38 +3,46 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { cleanTurns, buildPrompt, parseReply, isImageUrl, searchImages, fetchImage } = require('./ai-mode');
+const {
+  speechVoices, synthesize, isAiModeConversation, turnNote, toolTrace, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+} = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
 
-test('the prompt carries what was said, most recent last, and the names of the person\'s bots', () => {
-  const prompt = buildPrompt({
-    turns: [{ role: 'user', content: 'Make a board update.' }, { role: 'assistant', content: '{"say":"On it."}' }, { role: 'user', content: 'Shorter.' }],
-    bots: ['Scout', '  Ledger\nbot  ', ''],
-  });
-  assert.match(prompt, /Person: Make a board update\.\nMia: \{"say":"On it\."\}\nPerson: Shorter\.$/);
-  assert.match(prompt, /The person's own bots: Scout, Ledger bot\./);
-  assert.match(prompt, /never invent their private facts/);
+test('only the chat marked for AI mode is an AI mode run', () => {
+  assert.equal(isAiModeConversation({ metadata: { source: 'ai-mode' } }), true);
+  assert.equal(isAiModeConversation({ metadata: { agentId: 'gateway' } }), false);
+  assert.equal(isAiModeConversation(null), false);
 });
 
-test('nothing said means no prompt, and a turn list must end on the person', () => {
-  assert.equal(buildPrompt({ turns: [] }), '');
-  assert.equal(buildPrompt({ turns: [{ role: 'user', content: '   ' }] }), '');
-  assert.deepEqual(cleanTurns([{ role: 'user', content: 'Hi' }, { role: 'assistant', content: 'Plan' }]), []);
-  const many = Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i}` }));
-  const kept = cleanTurns(many.concat({ role: 'user', content: 'last' }));
-  assert.equal(kept[0].role, 'user');
-  assert.equal(kept[kept.length - 1].content, 'last');
-  assert.ok(kept.length <= 12);
-  assert.equal(cleanTurns([{ role: 'user', content: 'x'.repeat(9000) }])[0].content.length, 4000);
-  assert.doesNotMatch(buildPrompt({ turns: [{ role: 'user', content: 'Hi' }] }), /The person's own bots/);
+test('the turn note tells Mia to do the work for real and how to hand a choice back', () => {
+  const note = turnNote();
+  assert.match(note, /not reading a chat/);
+  assert.match(note, /Do not describe work you did not do/);
+  assert.match(note, /Option: </);
 });
 
-test('a reply becomes a plan only when it holds one object with the thing being made', () => {
-  assert.deepEqual(parseReply('Here you go:\n```json\n{"say":"On it.","artifact":{"title":"Deck","items":[]}}\n```'), { say: 'On it.', artifact: { title: 'Deck', items: [] } });
-  assert.equal(parseReply('I could not do that.'), null);
-  assert.equal(parseReply('{"say":"On it."}'), null);
-  assert.equal(parseReply('{"artifact": broken}'), null);
+test('a step shows what it is about, never a command, code or file contents', () => {
+  assert.equal(toolTrace({ name: 'web_search', args: { query: '  pixel   art trees ' } }), 'pixel art trees');
+  assert.equal(toolTrace({ name: 'browser_navigate', arguments: '{"url":"https://www.example.org/a/b?token=abc"}' }), 'example.org');
+  assert.equal(toolTrace({ name: 'terminal', args: { command: 'cat ~/.ssh/id_rsa' } }), '');
+  assert.equal(toolTrace({ name: 'write_file', args: { path: '/tmp/a.txt', content: 'private words' } }), '');
+  assert.equal(toolTrace({ name: 'web_search', args: { query: 'x'.repeat(200) } }).length, 60);
+  assert.equal(toolTrace(null), '');
+});
+
+test('the picture seed is asked from the direction alone and nothing said means no prompt', () => {
+  assert.equal(seedPrompt('   '), '');
+  const prompt = seedPrompt('Make a  board update\nfor Friday');
+  assert.match(prompt, /The direction: Make a board update for Friday$/);
+  assert.match(prompt, /never a person's name/);
+});
+
+test('a seed keeps only short strings and real colors, and an empty reply is an empty seed', () => {
+  assert.deepEqual(parseSeed('I cannot.'), { traces: [], glyphs: [], palette: [], images: [] });
+  const seed = parseSeed('```json\n{"traces":["tone?", 7, ""],"glyphs":["🌳","🎮"],"palette":["#3a7d44","red","#12345"],"images":["pixel art tree"]}\n```');
+  assert.deepEqual(seed, { traces: ['tone?', '7'], glyphs: ['🌳', '🎮'], palette: ['#3a7d44'], images: ['pixel art tree'] });
+  assert.equal(parseSeed('{"images":["a","b","c","d","e","f"]}').images.length, 4);
 });
 
 test('only https pictures on the Commons file host are allowed', () => {
@@ -79,4 +87,26 @@ test('a picture is passed on only from the allowed host, as a picture, under the
   let called = false;
   assert.equal(await fetchImage('https://example.com/a.jpg', { request: async () => { called = true; } }), null);
   assert.equal(called, false);
+});
+
+test('speech is off without a key, and a line is read in the voice picked', async () => {
+  assert.deepEqual(speechVoices({ MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234' }), []);
+  const env = { MIAOS_ELEVENLABS_API_KEY: 'test-key', MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234, ijklmnop5678, ../bad' };
+  assert.deepEqual(speechVoices(env), ['abcdefgh1234', 'ijklmnop5678']);
+  const calls = [];
+  const request = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+  };
+  const spoken = await synthesize('  Done.\nSeven slides. ', 1, { env, request });
+  assert.equal(spoken.type, 'audio/mpeg');
+  assert.equal(spoken.body.length, 3);
+  assert.match(calls[0].url, /\/text-to-speech\/ijklmnop5678\?/);
+  assert.equal(JSON.parse(calls[0].options.body).text, 'Done. Seven slides.');
+  assert.equal(calls[0].options.headers['xi-api-key'], 'test-key');
+  await synthesize('Hi', 9, { env, request });
+  assert.match(calls[1].url, /\/abcdefgh1234\?/);
+  assert.equal(await synthesize('', 0, { env, request }), null);
+  assert.equal(await synthesize('Hi', 0, { env: {}, request }), null);
+  assert.equal(await synthesize('Hi', 0, { env, request: async () => ({ ok: false }) }), null);
 });

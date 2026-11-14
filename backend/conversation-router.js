@@ -170,6 +170,11 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(201).json({ conversation });
   }));
 
+  router.post('/conversations/ai-mode', handle((req, res) => {
+    const { companyId, principal } = context(req);
+    res.status(201).json({ conversation: service.openAiModeConversation({ companyId, principal }) });
+  }));
+
   router.get('/conversations/:conversationId', handle((req, res) => {
     const { companyId, principal } = context(req);
     const conversation = service.getConversation({ companyId, conversationId: req.params.conversationId, principal });

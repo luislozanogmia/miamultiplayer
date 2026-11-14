@@ -44,6 +44,8 @@ function publicDispatch(dispatch) {
 }
 
 const TEAM_WORKSPACE_PATTERN = /^hub_[a-f0-9]{32}$/;
+// The mark on the chat that carries a person's AI mode run with Mia.
+const { AI_MODE_SOURCE, isAiModeConversation } = require('./ai-mode');
 
 // A bot's main Solo chat: not a "New conversation" and not a team's chat.
 function canonicalBotConversationCandidates(conversations) {
@@ -318,9 +320,40 @@ function createConversationService({ repository, authorization, realtime = null,
     return conversation;
   }
 
+
+  // AI mode has no chat on screen, so its run with Mia lives in a chat of its
+  // own that no list shows. Each time the person enters, they get a new one
+  // and the ones they left are put away.
+  function openAiModeConversation({ companyId, principal, createdAt } = {}) {
+    const normalizedCompanyId = required(companyId, 'companyId');
+    const owner = {
+      principalId: required(principal && principal.principalId, 'principalId'),
+      principalType: required(principal && principal.principalType, 'principalType'),
+      joinedAt: createdAt,
+    };
+    const now = createdAt || new Date().toISOString();
+    for (const earlier of repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })) {
+      if (!isAiModeConversation(earlier) || earlier.createdBy !== owner.principalId) continue;
+      repository.updateConversation({ companyId: normalizedCompanyId, id: earlier.id, deletedAt: now, updatedAt: now });
+    }
+    const conversation = repository.createConversation({
+      companyId: normalizedCompanyId,
+      type: 'agent',
+      name: 'Mia',
+      createdBy: owner.principalId,
+      createdAt,
+      metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE },
+      owner,
+    });
+    ensureGatewayMember(conversation);
+    ensureConversationMembers(conversation);
+    return conversation;
+  }
+
   function listConversations({ companyId, principal, includeDeleted = false, limit = 100 } = {}) {
     const normalizedCompanyId = required(companyId, 'companyId');
-    const rows = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted, limit });
+    const rows = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted, limit })
+      .filter((conversation) => !isAiModeConversation(conversation));
     return rows.filter((conversation) => {
       const allowed = authorization.can(callerPrincipal(principal, normalizedCompanyId, conversation.id, 'read'));
       if (allowed) ensureConversationMembers(conversation);
@@ -672,6 +705,7 @@ function createConversationService({ repository, authorization, realtime = null,
   return {
     createConversation,
     createFreshBotConversation,
+    openAiModeConversation,
     listConversations,
     getConversation,
     deleteConversation,

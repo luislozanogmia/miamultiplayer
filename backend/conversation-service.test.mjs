@@ -581,3 +581,34 @@ test("a system line the app posts as the owner in Mia's chat starts her turn onc
   assert.equal(again.event.id, sent.event.id);
   assert.equal(again.dispatch.idempotent, true);
 });
+
+test('the AI mode chat is the person\'s own, hidden from lists, and replaces the one before', (t) => {
+  const { db, repository, service } = fixture();
+  t.after(() => db.close());
+  const mia = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' },
+  });
+  const first = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
+  const second = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
+
+  assert.equal(first.type, 'agent');
+  assert.equal(first.metadata.source, 'ai-mode');
+  assert.equal(first.metadata.agentId, 'gateway');
+  assert.notEqual(first.id, mia.id);
+  assert.notEqual(second.id, first.id);
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: second.id, principalId: 'gateway', principalType: 'agent',
+  }).role, 'agent');
+  assert.deepEqual(
+    service.listConversations({ companyId: 'company-a', principal: owner() }).map((row) => row.id),
+    [mia.id],
+    'neither AI mode chat shows in the person\'s list',
+  );
+  assert.ok(repository.getConversation({ companyId: 'company-a', id: first.id, includeDeleted: true }).deletedAt,
+    'the earlier AI mode chat is put away');
+  assert.equal(service.getConversation({ companyId: 'company-a', conversationId: second.id, principal: owner() }).id, second.id);
+  assert.throws(() => service.getConversation({
+    companyId: 'company-a', conversationId: second.id,
+    principal: { companyId: 'company-a', principalId: 'member@example.com', principalType: 'user' },
+  }));
+});

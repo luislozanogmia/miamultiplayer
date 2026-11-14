@@ -19380,6 +19380,10 @@
   })();
   window.miaAppNav = appNav;
 
+  // What AI mode's stage needs from the app: which workspace Mia's own chats
+  // live in, and the one formatter replies go through.
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, format: mdLite};
+
   // The artifacts you opened last, listed first on the Artifacts page.
   var RECENT_ARTIFACTS_STORE = 'mia.recentArtifacts.v1';
   function recentArtifactIds(){

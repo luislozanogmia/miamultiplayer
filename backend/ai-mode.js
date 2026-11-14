@@ -1,18 +1,20 @@
 'use strict';
 
-// AI mode: the person gives direction, Mia answers with the work itself. One
-// reply is one plan: what she says, the traces of what she is weighing, the
-// bots on it, and the thing being made, part by part. The screen draws that
-// plan; nothing here draws.
+// AI mode: the person gives direction and watches Mia do the work. The work is
+// Mia's own run, in a chat of hers that no list shows: her tools, her bots,
+// her browser, her approvals. This module holds what is particular to that
+// screen: the note that tells Mia she is on a stage, the short trace of each
+// step, and the pictures behind her.
 //
-// The person's words and their earlier turns are what they said to Mia. The
-// pictures come from Wikimedia Commons, searched only with the short subject
-// words Mia picked, never with the person's own sentence.
+// The pictures come from Wikimedia Commons, searched only with the short
+// subject words Mia picked, never with the person's own sentence.
 
-const MAX_TURNS = 12;
-const MAX_TURN_CHARS = 4000;
-const MAX_BOTS = 8;
-const MAX_BOT_NAME_CHARS = 40;
+const AI_MODE_SOURCE = 'ai-mode';
+const MAX_SAID_CHARS = 2000;
+const MAX_TRACE_CHARS = 60;
+const MAX_TRACES = 12;
+const MAX_GLYPHS = 5;
+const MAX_PALETTE = 4;
 const MAX_QUERY_CHARS = 60;
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 600 * 1024;
@@ -26,93 +28,100 @@ const FETCH_TIMEOUT_MS = 8000;
 
 const oneLine = (value, limit) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, limit);
 
-const RULES =
-  'You are Mia, working in "AI mode": the person only gives direction, you do the work with a small team of ' +
-  'bots and show it as it happens. Answer from what you know and can reason out; do not use tools for this ' +
-  'reply. Do the thinking and writing for real: the artifact must be your genuine, specific best work on the ' +
-  'request. You cannot see the person\'s files, mail or calendar here, so never invent their private facts ' +
-  '(their numbers, names, dates): where one belongs, write what is needed in square brackets, like ' +
-  '"[your Q3 revenue]".\n' +
-  'Answer with ONE JSON object and nothing else, with the keys in this order:\n' +
-  '{"traces": [string], "glyphs": [string], "palette": [string], "images": [string], "notes": [string], ' +
-  '"say": string, "done": string, "bots": [{"name": string, "mote": string, "steps": [string, string, string], ' +
-  '"finds": [{"label": string, "value": string}]}], "artifact": {"title": string, "kind": string, "items": ' +
-  '[{"title": string, "lines": [string]}]}, "ask": null or {"question": string, "detail": string, "yes": ' +
-  'string, "no": string, "after": string}}\n' +
-  '- traces: 8 to 12 fragments of what you are really weighing for this request, shown blurred in the ' +
-  'background as you think: references, options, open questions, constraints. One to three words each, some ' +
-  'ending in a question mark. They must be true to your reasoning, not decoration.\n' +
-  '- glyphs: 3 to 5 single emoji that picture the subject and its references. palette: 2 to 4 hex colors like ' +
-  '"#3a7d44" that fit the subject.\n' +
-  '- images: 2 to 4 picture searches for references you are drawing on, one to three plain words each, like ' +
-  '"pixel art tree" or "board meeting". Subjects only: never a person\'s name, a company name or anything ' +
-  'private from the request.\n' +
-  '- notes: 3 or 4 short lines you say in order while working, under 6 words each, like "Exploring styles." ' +
-  'or "Thinking through mechanics.", ending with building the result.\n' +
-  '- say: what you say as you start, under 12 words, plain and calm. done: under 16 words, said when the ' +
-  'work stops.\n' +
-  '- bots: 1 to 4, only as many as the work needs; a simple request gets one. name: one or two words for its ' +
-  'job. mote: one of research, inbox, calendar, sales, general, black; a different one per bot. steps: three ' +
-  'steps of under 6 words each, in order. finds: exactly three things that bot worked out or made, label ' +
-  'under 5 words and value under 6 words.\n' +
-  '- artifact: the thing being made. title under 4 words. kind: one plural word for its parts (slides, ' +
-  'sections, steps, rows, tasks). items: 3 to 8 parts in order; each title under 5 words and 1 to 3 lines of ' +
-  'under 9 words each, with the real content.\n' +
-  '- Judgment: when one part turns on taste, priority or risk that is the person\'s to decide, make it the ' +
-  'LAST item, give it "lines": [] and add "choice": {"question": string, "options": [{"label": string, ' +
-  '"lines": [string]}, {"label": string, "lines": [string]}], "after": string}: two real alternatives, each ' +
-  'with 1 or 2 lines, and "after", the line you say once they choose. Then "done" says what you prepared and ' +
-  'that the last part needs their judgment, like "I\'ve prepared seven slides. The eighth needs your ' +
-  'judgment." A first answer to a new request usually has one. Otherwise leave "choice" out.\n' +
-  '- ask: null, unless finishing needs one action only the person can approve (sending, booking, paying, ' +
-  'deleting). Then: a short question, one line of detail, short yes and no button labels, and "after", the ' +
-  'line you say once they agree.\n' +
-  'When the person sends a follow-up, change the work as they direct and return the whole updated object. ' +
-  'When they say they edited parts themselves, keep those parts word for word. No markdown, no dashes used ' +
-  'as punctuation.';
+// isAiModeConversation(conversation) -> true for the chat that carries a
+// person's AI mode run.
+const isAiModeConversation = (conversation) => Boolean(conversation && conversation.metadata
+  && conversation.metadata.source === AI_MODE_SOURCE);
 
-// cleanTurns([{role, content}]) -> the latest turns worth sending, oldest
-// first, ending on what the person just said.
-function cleanTurns(turns) {
-  const kept = (Array.isArray(turns) ? turns : [])
-    .map((turn) => ({
-      role: turn && turn.role === 'assistant' ? 'assistant' : 'user',
-      content: String((turn && turn.content) == null ? '' : turn.content).trim().slice(0, MAX_TURN_CHARS),
-    }))
-    .filter((turn) => turn.content)
-    .slice(-MAX_TURNS);
-  while (kept.length && kept[0].role !== 'user') kept.shift();
-  return kept.length && kept[kept.length - 1].role === 'user' ? kept : [];
-}
-
-// buildPrompt({turns, bots}) -> the prompt, or '' when the person said nothing.
-// `bots` are the names of the person's own bots, so Mia can put them on the work.
-function buildPrompt({ turns, bots } = {}) {
-  const said = cleanTurns(turns);
-  if (!said.length) return '';
-  const names = (Array.isArray(bots) ? bots : []).map((name) => oneLine(name, MAX_BOT_NAME_CHARS)).filter(Boolean).slice(0, MAX_BOTS);
+// turnNote() -> what Mia is told on every turn of an AI mode run.
+function turnNote() {
   return (
-    RULES + '\n\n' +
-    (names.length
-      ? `The person's own bots: ${names.join(', ')}. Put one on the work under its own name when its job fits; name any other bot by its job.\n\n`
-      : '') +
-    'The conversation so far, most recent last:\n' +
-    said.map((turn) => `${turn.role === 'assistant' ? 'Mia' : 'Person'}: ${turn.content}`).join('\n')
+    '[AI mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
+    'stage that shows your steps as you take them, then your reply.\n' +
+    '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
+    '- Begin your reply with one short sentence, under 16 words, that can be said out loud: what you did or ' +
+    'what you need. Then the result itself.\n' +
+    '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
+    'question, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
+    '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.'
   );
 }
 
-// parseReply(reply) -> the plan object, or null when the reply holds none.
-function parseReply(reply) {
+// The arguments a step may show a few words of. Commands, code and file
+// contents are never shown.
+const TRACE_KEYS = ['query', 'q', 'search', 'title', 'name', 'goal', 'task'];
+
+function traceArgs(payload) {
+  const event = payload && typeof payload === 'object' ? payload : {};
+  const raw = event.args !== undefined ? event.args
+    : event.arguments !== undefined ? event.arguments
+      : event.input !== undefined ? event.input : event.args_text;
+  if (raw && typeof raw === 'object') return raw;
+  try {
+    const parsed = JSON.parse(String(raw || ''));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// toolTrace(payload) -> a few words on what a step is about: what is being
+// searched for, or the site being opened. '' when the step has nothing safe
+// to show.
+function toolTrace(payload) {
+  const args = traceArgs(payload);
+  for (const key of TRACE_KEYS) {
+    if (typeof args[key] === 'string' && args[key].trim()) return oneLine(args[key], MAX_TRACE_CHARS);
+  }
+  if (typeof args.url === 'string') {
+    try {
+      return new URL(args.url).hostname.replace(/^www\./, '').slice(0, MAX_TRACE_CHARS);
+    } catch { /* not an address */ }
+  }
+  return '';
+}
+
+// seedPrompt(said) -> the prompt that picks what to picture behind the stage,
+// or '' when the person said nothing.
+function seedPrompt(said) {
+  const direction = oneLine(said, MAX_SAID_CHARS);
+  if (!direction) return '';
+  return (
+    'A person gave an assistant this direction. Pick what to picture in the background while the assistant ' +
+    'works on it. Answer with ONE JSON object and nothing else:\n' +
+    '{"traces": [string], "glyphs": [string], "palette": [string], "images": [string]}\n' +
+    '- traces: 6 to 10 fragments of what someone doing this work would weigh: references, options, open ' +
+    'questions, constraints. One to three words each, some ending in a question mark.\n' +
+    '- glyphs: 3 to 5 single emoji that picture the subject.\n' +
+    '- palette: 2 to 4 hex colors like "#3a7d44" that fit the subject.\n' +
+    '- images: 2 to 4 picture searches, one to three plain words each, like "pixel art tree" or "board ' +
+    'meeting". Subjects only: never a person\'s name, a company name or anything private from the direction.\n\n' +
+    `The direction: ${direction}`
+  );
+}
+
+const strings = (value, limit, each) => (Array.isArray(value) ? value : [])
+  .map((item) => oneLine(item, each)).filter(Boolean).slice(0, limit);
+
+// parseSeed(reply) -> {traces, glyphs, palette, images}, each empty when the
+// reply held none.
+function parseSeed(reply) {
   const text = String(reply || '');
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    const plan = JSON.parse(text.slice(start, end + 1));
-    return plan && typeof plan === 'object' && !Array.isArray(plan) && plan.artifact && typeof plan.artifact === 'object' ? plan : null;
-  } catch {
-    return null;
+  let seed = {};
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) seed = parsed;
+    } catch { /* no seed in this reply */ }
   }
+  return {
+    traces: strings(seed.traces, MAX_TRACES, MAX_TRACE_CHARS),
+    glyphs: strings(seed.glyphs, MAX_GLYPHS, 8),
+    palette: strings(seed.palette, MAX_PALETTE, 7).filter((color) => /^#[0-9a-f]{6}$/i.test(color)),
+    images: strings(seed.images, MAX_IMAGES, MAX_QUERY_CHARS),
+  };
 }
 
 // isImageUrl(value) -> true for an https picture on Wikimedia's own file hosts.
@@ -164,4 +173,42 @@ async function fetchImage(value, { request = fetch } = {}) {
   return body.length && body.length <= MAX_IMAGE_BYTES ? { type, body } : null;
 }
 
-module.exports = { cleanTurns, buildPrompt, parseReply, isImageUrl, searchImages, fetchImage };
+// Mia's voice. With a speech key set on this computer her lines are read by
+// ElevenLabs in a voice the person picked; without one the page falls back to
+// the computer's own voice. Only the line Mia says out loud is sent.
+const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
+const SPEECH_MODEL = 'eleven_turbo_v2_5';
+const MAX_SPEECH_CHARS = 600;
+const MAX_VOICES = 4;
+const SPEECH_TIMEOUT_MS = 20000;
+
+// speechVoices(env) -> the voice ids to choose from, or [] when speech is not
+// set up (no key, or no voice).
+function speechVoices(env = process.env) {
+  if (!String(env.MIAOS_ELEVENLABS_API_KEY || '').trim()) return [];
+  return String(env.MIAOS_ELEVENLABS_VOICES || '').split(',').map((id) => id.trim())
+    .filter((id) => /^[A-Za-z0-9]{8,40}$/.test(id)).slice(0, MAX_VOICES);
+}
+
+// synthesize(text, voice) -> {type, body} of the spoken line, or null.
+// `voice` is the position in speechVoices().
+async function synthesize(text, voice, { env = process.env, request = fetch } = {}) {
+  const voices = speechVoices(env);
+  const line = oneLine(text, MAX_SPEECH_CHARS);
+  const voiceId = voices[Number.isInteger(voice) && voice >= 0 && voice < voices.length ? voice : 0];
+  if (!line || !voiceId) return null;
+  const response = await request(`${SPEECH_API}${voiceId}?output_format=mp3_44100_128`, {
+    method: 'POST',
+    headers: { 'xi-api-key': String(env.MIAOS_ELEVENLABS_API_KEY).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+    body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
+    signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
+  });
+  if (!response.ok) return null;
+  const body = Buffer.from(await response.arrayBuffer());
+  return body.length ? { type: 'audio/mpeg', body } : null;
+}
+
+module.exports = {
+  speechVoices, synthesize,
+  AI_MODE_SOURCE, isAiModeConversation, turnNote, toolTrace, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+};
