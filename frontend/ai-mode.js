@@ -30,6 +30,7 @@ var MARKUP=
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
       '<button class="btn ghost" id="web" hidden>Browser</button>'+
       '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
+      '<button class="btn ghost" id="modelBtn" aria-expanded="false" hidden>Model</button>'+
       '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
@@ -40,6 +41,8 @@ var MARKUP=
       '<button class="btn ghost more" id="more" aria-expanded="false" aria-label="Show the controls">\u2039</button>'+
     '</div>'+
     '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
+    '<label class="blur-bar" id="modelBar" hidden><small>Model</small><select id="model" aria-label="The model Mia works with in AI mode"></select></label>'+
+    '<div id="hold" hidden></div>'+
     '<div class="phone-bar" id="phoneBar" hidden>'+
       '<b>AI mode on your phone</b>'+
       '<p id="phoneNote"></p>'+
@@ -153,7 +156,7 @@ function readReply(text){
   return {say:sayable?first:'',ask:ask,body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
 }
 // The result comes as cards: a title, a picture found for the words Mia gave, and a line or two.
-var MAX_CARDS=8,pics={};
+var MAX_CARDS=9,pics={};
 function readCards(body){
   var cards=[],rest=[],cur=null;
   String(body||'').split('\n').forEach(function(line){
@@ -165,6 +168,43 @@ function readCards(body){
     else rest.push(line);
   });
   return {cards:cards.filter(function(c){return c.title;}).slice(0,MAX_CARDS),rest:rest.join('\n').trim()};
+}
+// Mia's canvas: a view she draws herself when cards are not the best way to show it. It lives in a
+// frame that runs no scripts and loads nothing from outside.
+var CANVAS_BASE='<!doctype html><meta charset="utf-8"><style>:root{color-scheme:dark;--accent:#E3A61B;--soft:rgba(255,255,255,.62);--rule:rgba(255,255,255,.16);--panel:rgba(255,255,255,.06)}'+
+  'html{background:#14120f}body{margin:0;padding:18px;color:#fff;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}</style>';
+var canvas={el:null,src:'',at:0,timer:null};
+function readCanvas(text){
+  text=String(text||'');
+  var m=/(^|\n)```canvas[^\n]*\n([\s\S]*?)(\n```[^\n]*(?=\n|$)|$)/i.exec(text);
+  if(!m)return {html:'',rest:text};
+  var html=m[2].slice(0,200000);
+  // While she is still writing it, only whole tags are drawn.
+  if(!m[3])html=html.slice(0,html.lastIndexOf('>')+1);
+  return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
+}
+function hasCanvas(){return !!R&&/(^|\n)```canvas/i.test(R.running?R.draft:R.body);}
+// The frame is kept across redraws, so what she drew does not blink each time the stage changes.
+function canvasHold(){
+  var el=canvas.el,hold=$('hold');
+  if(el&&el.isConnected&&hold.moveBefore){try{hold.moveBefore(el,null);}catch(e){}}
+}
+function canvasPlace(){
+  var slot=$('canvasSlot'),el=canvas.el;
+  if(!slot){if(el)el.remove();return;}
+  if(!el){
+    el=canvas.el=document.createElement('iframe');el.className='canvas-f';
+    el.setAttribute('sandbox','');el.setAttribute('title','What Mia drew');
+  }
+  var html=slot.dataset.html||'',wait=900-(Date.now()-canvas.at);
+  clearTimeout(canvas.timer);canvas.timer=null;
+  if(html!==canvas.src){
+    if(R&&R.running&&canvas.src&&wait>0)canvas.timer=setTimeout(function(){canvas.timer=null;if(open)draw();},wait);
+    else{canvas.src=html;canvas.at=Date.now();el.srcdoc=CANVAS_BASE+html;}
+  }
+  if(el.parentNode!==slot){
+    try{if(el.isConnected&&slot.moveBefore)slot.moveBefore(el,null);else slot.appendChild(el);}catch(e){slot.appendChild(el);}
+  }
 }
 function pic(q){
   if(!q)return '';
@@ -246,11 +286,12 @@ function resultHtml(){
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
   // One short line on its own is her narration, shown beside her mark, not a result.
   if(R.running&&narrating())text='';
-  var read=readCards(text),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
-  if(pageOn())items.unshift({key:'page'});
+  var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
+  // With a canvas the page waits behind the Browser button unless the person brought it forward.
+  if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return (front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
-    :items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':'')+
+    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
     (read.rest?'<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
@@ -289,7 +330,9 @@ function filesHtml(){
 function draw(){
   clearTimeout(drawTimer);drawTimer=null;
   var cv=$('cv'),h='',top=cv.scrollTop,atEnd=cv.scrollHeight-cv.scrollTop-cv.clientHeight<60;
-  unmount(cv);
+  unmount(cv);canvasHold();
+  // What she drew takes the place of the page she read it from.
+  if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
   else{
     var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
@@ -297,7 +340,7 @@ function draw(){
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
   }
-  cv.innerHTML=h;mount(cv);
+  cv.innerHTML=h;mount(cv);canvasPlace();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -446,7 +489,9 @@ function direct(t,shown){
   var my=R;
   var send=function(text){
     return openChat().then(function(id){
-      return call(chat(id,'/events'),{type:'message',content:{text:text},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)});
+      var pick=modelPick(),ev={type:'message',content:{text:text},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)};
+      if(pick)ev.metadata={chatModelSelection:pick};
+      return call(chat(id,'/events'),ev);
     });
   };
   send(t).then(function(r){
@@ -526,14 +571,33 @@ function sitePlace(){
 function tools(fold){
   var m=$('more');$('tools').hidden=fold;m.textContent=fold?'\u2039':'\u203a';m.setAttribute('aria-expanded',fold?'false':'true');
   m.setAttribute('aria-label',fold?'Show the controls':'Hide the controls');
-  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);}
+  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');modelShow(false);phoneShow(false);}
+}
+// The model Mia works with here. Her own pick stays unless the person chooses one of the models
+// they have connected, the same ones the chat offers.
+function modelList(){var h=window.miaAiModeHost;try{return h&&h.models?h.models()||[]:[];}catch(e){return [];}}
+function modelKept(){try{return localStorage.getItem('miaAiModeModel')||'';}catch(e){return '';}}
+function modelPick(){
+  var k=modelKept();if(!k)return null;
+  var m=modelList().filter(function(e){return e.provider+'|'+e.model===k;})[0];
+  return m?{provider:m.provider,model:m.model,reasoningEffort:'high',speed:'normal',fast:false}:null;
+}
+function modelShow(on){
+  $('modelBar').hidden=!on;$('modelBtn').setAttribute('aria-expanded',on?'true':'false');
+  if(!on)return;
+  $('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);
+  var k=modelKept();
+  $('model').innerHTML='<option value="">Mia\'s pick</option>'+modelList().map(function(e){
+    var v=e.provider+'|'+e.model;
+    return '<option value="'+esc(v)+'"'+(v===k?' selected':'')+'>'+esc(e.family+' '+e.variant+' \u00b7 '+e.providerLabel)+'</option>';
+  }).join('');
 }
 // A phone the person paired uses AI mode on this computer through the Hub.
 // The computer shows a code; the person types it on the phone once.
 var phone={code:'',until:0,list:[],note:'',busy:false,tick:null};
 function phoneShow(on){
   $('phoneBar').hidden=!on;$('phoneBtn').setAttribute('aria-expanded',on?'true':'false');
-  if(on){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneLoad();}
+  if(on){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');$('modelBar').hidden=true;$('modelBtn').setAttribute('aria-expanded','false');phoneLoad();}
   else{phone.code='';clearInterval(phone.tick);phone.tick=null;}
 }
 function phoneWhy(e){
@@ -591,7 +655,7 @@ function siteState(st){
   if(open&&!drive&&R&&R.running){
     var hers=tabs.filter(function(t){return t.botActivity;})[0];
     if(hers){
-      if(!site.open&&!R.picked){site.open=true;R.focus='page';draw();}
+      if(!site.open&&!R.picked&&!hasCanvas()){site.open=true;R.focus='page';draw();}
       if(site.open&&!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
     }
   }
@@ -919,7 +983,10 @@ function build(){
   $('blur').oninput=function(){blur(+this.value);try{localStorage.setItem('miaAiModeBlur',this.value);}catch(e){}};
   // The controls stay folded behind one mark until the person asks for them.
   $('more').onclick=function(){tools(!$('tools').hidden);};
-  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden)phoneShow(false);};
+  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden){phoneShow(false);modelShow(false);}};
+  $('modelBtn').hidden=!modelList().length;
+  $('modelBtn').onclick=function(){modelShow($('modelBar').hidden);};
+  $('model').onchange=function(){try{localStorage.setItem('miaAiModeModel',this.value);}catch(e){}};
   phoneWire();
   // Full screen: the stage takes the whole screen, and gives it back on leaving.
   var page=document.documentElement;

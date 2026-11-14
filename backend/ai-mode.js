@@ -22,6 +22,7 @@ const MAX_IMAGE_BYTES = 600 * 1024;
 const IMAGE_HOSTS = new Set(['upload.wikimedia.org', 'thumb.wikimedia.org']);
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
+const WIKIPEDIA_API = 'https://en.wikipedia.org/w/api.php';
 // Wikimedia asks every client to say who it is.
 const USER_AGENT = 'MiaApp/0.3 (https://github.com/luislozanogmia/miamultiplayer)';
 const FETCH_TIMEOUT_MS = 8000;
@@ -48,7 +49,7 @@ function turnNote() {
     '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
     '- Begin your reply with one short sentence, under 16 words, that can be said out loud: what you did or ' +
     'what you need.\n' +
-    '- Then the result as cards, not prose: the stage is for looking, not reading. Three to six cards, each ' +
+    '- Then the result as cards, not prose: the stage is for looking, not reading. Three to nine cards, shown three in a row, each ' +
     'as three lines: "Card: <a title, six words at most>", "Image: <one to three plain words to picture it, ' +
     'like rainforest canopy>", "Text: <one or two short sentences, 30 words at most>". Image words are ' +
     'subjects only, never anything private from the direction. They name the real thing the card is about, ' +
@@ -66,6 +67,17 @@ function turnNote() {
     'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +
     'ready for you.", "You asked for X, so it is better that I do Y first." Plain words, no lists, no names of tools.\n' +
     '- A page you open in the browser shows in a window on the stage, so the person watches you use it.\n' +
+    '- Your canvas. When cards are not the best way to show the result (a week, a plan, a comparison, a ' +
+    'chart, a board, a map of steps), draw it yourself: write a block that opens with a line "```canvas" ' +
+    'and closes with a line "```", holding HTML and CSS of your own. The stage shows it large, in place of ' +
+    'cards, and draws it as you write. No scripts, and nothing from outside (no linked files, fonts or ' +
+    'pictures): draw with CSS, inline SVG and text. The canvas is dark, with white text on a clear ground ' +
+    'already set, and these colors ready: var(--accent) the gold, var(--soft) quiet text, var(--rule) ' +
+    'lines, var(--panel) a raised surface. Fill the width, keep it readable from a step back, and one ' +
+    'screen tall when you can. It is yours to edit: when the person asks for a change, write the whole ' +
+    'canvas again with the change. One canvas in a reply, after your first sentence, and no cards beside ' +
+    'it. Never build a page as a file and open it in the browser to show something you made: the canvas ' +
+    'is where you show it. The browser is for real sites.\n' +
     '- Workers are yours to start here. When a job splits into parts that can go on at the same time, hand ' +
     'each part to a background worker with delegate_task, and say that you did. The person sees each one on ' +
     'the stage as a bot at work. Start each goal with a job name of one to three words and a colon, like ' +
@@ -189,29 +201,36 @@ function parseSeed(reply) {
 function isImageUrl(value) {
   try {
     const url = new URL(String(value || ''));
-    return url.protocol === 'https:' && IMAGE_HOSTS.has(url.hostname) && !url.username && !url.port && url.pathname.startsWith('/wikipedia/commons/');
+    return url.protocol === 'https:' && IMAGE_HOSTS.has(url.hostname) && !url.username && !url.port && /^\/wikipedia\/(commons|en)\//.test(url.pathname);
   } catch {
     return false;
   }
 }
 
 // searchImages(query) -> up to four picture addresses for a short subject.
+// The picture at the top of the encyclopedia article on the subject comes
+// first, because it shows the thing itself; the file search is the fallback.
 async function searchImages(query, { request = fetch } = {}) {
   const subject = oneLine(query, MAX_QUERY_CHARS);
   if (!subject) return [];
-  const params = new URLSearchParams({
-    action: 'query', format: 'json', generator: 'search', gsrsearch: `${subject} filetype:bitmap`,
-    gsrnamespace: '6', gsrlimit: '8', prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: '320',
+  const ask = async (api, params) => {
+    const response = await request(`${api}?${new URLSearchParams({ action: 'query', format: 'json', generator: 'search', ...params })}`, {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Object.values((data && data.query && data.query.pages) || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
+  };
+  const articles = await ask(WIKIPEDIA_API, {
+    gsrsearch: subject, gsrlimit: '4', prop: 'pageimages', piprop: 'thumbnail', pithumbsize: '480', pilicense: 'any',
+  }).catch(() => []);
+  const lead = articles.map((page) => page.thumbnail && page.thumbnail.source).filter(isImageUrl);
+  if (lead.length) return lead.slice(0, MAX_IMAGES);
+  const files = await ask(COMMONS_API, {
+    gsrsearch: `${subject} filetype:bitmap`, gsrnamespace: '6', gsrlimit: '8', prop: 'imageinfo', iiprop: 'url|mime', iiurlwidth: '480',
   });
-  const response = await request(`${COMMONS_API}?${params}`, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) return [];
-  const data = await response.json();
-  const pages = Object.values((data && data.query && data.query.pages) || {});
-  return pages
-    .sort((a, b) => (a.index || 0) - (b.index || 0))
+  return files
     .map((page) => (page.imageinfo && page.imageinfo[0]) || {})
     .filter((info) => IMAGE_TYPES.has(info.mime) && isImageUrl(info.thumburl))
     .map((info) => info.thumburl)

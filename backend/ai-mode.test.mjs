@@ -84,6 +84,34 @@ test('a picture search asks Commons for the subject and keeps only allowed pictu
   assert.deepEqual(await searchImages('tree', { request: async () => ({ ok: false }) }), []);
 });
 
+test('a picture search takes the picture at the top of the article on the subject first', async () => {
+  const asked = [];
+  const lead = 'https://upload.wikimedia.org/wikipedia/en/thumb/a/ab/Chip.jpg/480px-Chip.jpg';
+  const request = async (url) => {
+    asked.push(new URL(url));
+    return {
+      ok: true,
+      json: async () => ({ query: { pages: {
+        7: { index: 2, thumbnail: { source: 'https://example.com/a.png' } },
+        8: { index: 1, thumbnail: { source: lead } },
+        9: { index: 3 },
+      } } }),
+    };
+  };
+  assert.deepEqual(await searchImages('graphics card chip', { request }), [lead]);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].hostname, 'en.wikipedia.org');
+  assert.equal(asked[0].searchParams.get('gsrsearch'), 'graphics card chip');
+});
+
+test('the turn note tells Mia about nine cards and her own canvas', () => {
+  const note = turnNote();
+  assert.match(note, /Three to nine cards, shown three in a row/);
+  assert.match(note, /```canvas/);
+  assert.match(note, /No scripts, and nothing from outside/);
+  assert.match(note, /Never build a page as a file and open it in the browser to show something you made/);
+});
+
 test('a picture is passed on only from the allowed host, as a picture, under the size limit', async () => {
   const reply = (type, bytes) => async () => ({ ok: true, headers: { get: () => type }, arrayBuffer: async () => new ArrayBuffer(bytes) });
   const picture = await fetchImage(THUMB, { request: reply('image/jpeg; charset=binary', 10) });
