@@ -193,8 +193,6 @@ async function fetchImage(value, { request = fetch } = {}) {
 // the computer's own voice. Only the line Mia says out loud is sent.
 const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const SPEECH_MODEL = 'eleven_turbo_v2_5';
-// A little slower than the voice's own pace, so a line is easy to follow while watching.
-const SPEECH_SPEED = 0.8;
 const MAX_SPEECH_CHARS = 600;
 const MAX_VOICES = 4;
 const SPEECH_TIMEOUT_MS = 20000;
@@ -217,7 +215,7 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
   const response = await request(`${SPEECH_API}${voiceId}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'xi-api-key': String(env.MIAOS_ELEVENLABS_API_KEY).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-    body: JSON.stringify({ text: line, model_id: SPEECH_MODEL, voice_settings: { speed: SPEECH_SPEED } }),
+    body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });
   if (!response.ok) return null;
