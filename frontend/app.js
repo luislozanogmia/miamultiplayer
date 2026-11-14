@@ -13105,6 +13105,12 @@
     return '<div class="chat-msg-run"><span class="chat-msg-run-mark">' + mark.svg + '</span><b>' + esc(provider) + '</b><span>· ' + esc(rest) + '</span></div>';
   }
 
+  // A company bot's "Working on it…" reply for a run this computer is
+  // following gives way to the live thinking row below the messages, so a
+  // bot at work shows once. Others in the channel still see the reply.
+  function shownByThinkingRow(state, m){
+    return !!(state.thinking && m.hubWorking && hubChat.dispatches && hubChat.dispatches[m.hubMessageId]);
+  }
   function moveLiveProgressBelow(messages, superseded){
     var live = messages.filter(function(m, index){
       if(!m.nativeProgress || m.nativeDiagnostic || superseded(m)) return false;
@@ -14201,7 +14207,7 @@
     // capability answered.
     // Thread replies (m.threadRoot set) never appear in this main pass —
     // they render nested under their root instead, via chatThreadFooterHtml.
-    var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
+    var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && !shownByThinkingRow(state, m) && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
     mainMessages = MiaChatSteps.groupSteps(mainMessages);
     var dateDivider = '';
     if(mainMessages.length){
