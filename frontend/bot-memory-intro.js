@@ -77,13 +77,13 @@
   root.MiaBotMemoryIntro = {
     // Tried each time bots load, until the person has bots with a company
     // memory; then shown at most once per opening of Mia. Waits while
-    // another card is open.
+    // another card or AI mode's intro is open.
     showOnce: function(options, attempt){
       if(settled || checking) return;
       var list = options.bots();
       if(!list.length) return;
       attempt = attempt || 0;
-      if(document.querySelector('.app-confirm-overlay.open')){
+      if(document.querySelector('.app-confirm-overlay.open, [data-ai-mode-intro]')){
         if(attempt < 60) setTimeout(function(){ root.MiaBotMemoryIntro.showOnce(options, attempt + 1); }, 2000);
         return;
       }

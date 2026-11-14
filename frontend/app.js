@@ -3141,6 +3141,14 @@
   function moteSrcFor(name, isStatic){
     return 'assets/mote/mote-' + moteVariantFor(name) + moteSmileFor(name) + (isStatic ? '-static' : '') + '.svg';
   }
+  // One look for a bot everywhere: AI mode draws its bots with the same art and color.
+  window.MiaBots = {
+    art: function(name){
+      return { src: moteSrcFor(name, true), filter: moteColorFilterFor(name, agentAvatarColorFor(name, '')) };
+    },
+    // The bots as the chat list has them, in its order.
+    list: function(){ return sidebarBotRows.slice(); }
+  };
   function isMiaOrchestrator(name, agentId){
     var lower = String(name || '').trim().toLowerCase();
     return agentId === 'gateway' || lower === 'mia' || lower === 'mia os';
@@ -18431,6 +18439,7 @@
       '</span><span class="row-preview' + (preview ? '' : ' empty') + '">' + previewHtml + '</span></span>';
   }
 
+  var sidebarBotRows = [];
   function renderChatSidebar(){
     // Keep the placeholder bars until the live list has answered.
     if(sidebarPlaceholderShown){
@@ -18598,6 +18607,11 @@
     function isBotEntry(e){ return e.kind === 'agent' && !(e.agent && e.agent.id === 'gateway'); }
     var botEntries = orderSidebarBots(allEntries.filter(isBotEntry), function(e){ return e.roomId; }, function(e){ return e.createdTs || (e.agent && e.agent.createdAt); });
     allEntries = allEntries.filter(function(e){ return !isBotEntry(e); });
+    // AI mode shows these same bots in this same order.
+    sidebarBotRows = pinnedEntries.filter(isBotEntry).concat(botEntries).map(function(e){
+      return { name: e.name, working: sidebarEntryHasActivity(e), line: roomPreview(e.roomId) || '' };
+    });
+    if(window.MiaAiMode && window.MiaAiMode.bots) window.MiaAiMode.bots();
 
     allCountEl && (allCountEl.textContent = allEntries.length || '');
     if(el('#chatBotsCount')) el('#chatBotsCount').textContent = botEntries.length || '';
@@ -22256,22 +22270,40 @@
       if(window.MiaTabStrip && window.MiaTabStrip.mix.on()) return null;
       return classes.contains('automations-mode') ? 'automations' : classes.contains('artifacts-mode') ? 'artifacts' : classes.contains('apps-mode') ? 'apps' : classes.contains('browser-collab-mode') ? 'browser' : 'chat';
     },
-    blocked: function(){
-      if(!currentUser || tour.active || document.documentElement.classList.contains('workspace-handoff')) return true;
-      var login = el('#loginWall'), loading = el('#appLoadingOverlay');
-      if((login && !login.classList.contains('hidden')) || (loading && !loading.classList.contains('hidden'))) return true;
-      if(document.querySelector('.drawer-overlay.open, .styled-scrim.open')) return true;
-      // A closed drawer keeps its box off to the side; a dialog is open when
-      // it is what sits under its own middle.
-      return Array.prototype.some.call(document.querySelectorAll('[role="dialog"][aria-modal="true"]'), function(dialog){
-        var rect = dialog.getBoundingClientRect();
-        var x = rect.left + rect.width / 2, y = rect.top + Math.min(rect.height / 2, 40);
-        if(!rect.width || !rect.height || x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
-        var hit = document.elementFromPoint(x, y);
-        return !!hit && dialog.contains(hit);
-      });
-    }
+    blocked: appCovered
   }) : null;
+  // Something sits on top of the app: sign-in, loading, a dialog, the guided
+  // tour or AI mode's intro.
+  function appCovered(){
+    if(!currentUser || tour.active || document.documentElement.classList.contains('workspace-handoff')) return true;
+    if(document.querySelector('[data-ai-mode-intro], .app-confirm-overlay.open')) return true;
+    var login = el('#loginWall'), loading = el('#appLoadingOverlay');
+    if((login && !login.classList.contains('hidden')) || (loading && !loading.classList.contains('hidden'))) return true;
+    if(document.querySelector('.drawer-overlay.open, .styled-scrim.open')) return true;
+    // A closed drawer keeps its box off to the side; a dialog is open when
+    // it is what sits under its own middle.
+    return Array.prototype.some.call(document.querySelectorAll('[role="dialog"][aria-modal="true"]'), function(dialog){
+      var rect = dialog.getBoundingClientRect();
+      var x = rect.left + rect.width / 2, y = rect.top + Math.min(rect.height / 2, 40);
+      if(!rect.width || !rect.height || x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+      var hit = document.elementFromPoint(x, y);
+      return !!hit && dialog.contains(hit);
+    });
+  }
+  // AI mode's intro plays by itself the first time on this computer, once
+  // nothing else sits on top of Mia.
+  function maybePlayAiModeIntro(attempt){
+    var mode = window.MiaAiMode;
+    if(!mode || !mode.introDue()) return;
+    if(!appCovered()) return mode.intro();
+    if(attempt < 150) setTimeout(function(){ maybePlayAiModeIntro(attempt + 1); }, 2000);
+  }
+  setTimeout(function(){ maybePlayAiModeIntro(0); }, 3000);
+  var replayAiModeIntro = el('#settingsReplayAiModeIntro');
+  if(replayAiModeIntro) replayAiModeIntro.addEventListener('click', function(){
+    closeSettingsDrawer();
+    if(window.MiaAiMode) setTimeout(window.MiaAiMode.intro, 350);
+  });
   function maybeShowViewTips(){ if(viewTips) viewTips.maybeShow(); }
   var replayViewTips = el('#settingsReplayViewTips');
   if(replayViewTips) replayViewTips.addEventListener('click', function(){

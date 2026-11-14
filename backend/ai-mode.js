@@ -54,7 +54,9 @@ function turnNote() {
     'subjects only, never anything private from the direction. They name the real thing the card is about, ' +
     'something a photo exists of: for a brief on a chip maker, "graphics card chip", not "news brief". ' +
     'Never the kind of thing you made or opened (brief, report, page, tab, file, browser), and leave the ' +
-    'Image line out when no photo would show the subject. When there is more worth keeping than fits, ' +
+    'Image line out when no photo would show the subject. A card about one of the bots takes "Bot: <that ' +
+    'bot\'s exact name>" in place of the Image line, one bot per card, and the stage shows the bot itself. ' +
+    'When there is more worth keeping than fits, ' +
     'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
     'question, which is read out loud and not shown, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
@@ -70,7 +72,11 @@ function turnNote() {
     '"Price check: ...", then everything the worker needs, because it knows nothing of this conversation. ' +
     'A worker lasts for this job only. Put what it found into your own cards.\n' +
     '- A bot the person keeps (they ask for one by name, or for something to run again and again) is still ' +
-    'made the usual way. Do not make one just to get this job done.'
+    'made the usual way. Do not make one just to get this job done.\n' +
+    '- What a bot looks like: every bot is shown as its Mote, the small character Mia draws for it. The ' +
+    'drawings are part of the app itself, picked by the bot\'s name, and tinted with the color in the ' +
+    'bot\'s own record (avatarColor). A bot has no picture file, and none is missing. When the person ' +
+    'speaks of a bot\'s image, icon or picture they mean its Mote; its color is the part that can be changed.'
   );
 }
 

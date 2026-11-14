@@ -12,8 +12,13 @@
 'use strict';
 var KINDS=['research','inbox','calendar','sales','general','black'];
 function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
+// A bot looks the way it does everywhere else in Mia; the plain art is for a page without the app.
+function moteArt(name){
+  var a=window.MiaBots&&window.MiaBots.art(name);
+  return a?'src="'+esc(a.src)+'" style="filter:'+esc(a.filter)+'"':'src="'+mote(name)+'"';
+}
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-14">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-17">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -151,9 +156,10 @@ var MAX_CARDS=8,pics={};
 function readCards(body){
   var cards=[],rest=[],cur=null;
   String(body||'').split('\n').forEach(function(line){
-    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
-    if(k==='card'){cur={title:str(v,80),image:'',text:''};cards.push(cur);}
+    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Bot|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
+    if(k==='card'){cur={title:str(v,80),image:'',bot:'',text:''};cards.push(cur);}
     else if(k==='image'&&cur)cur.image=str(v,60);
+    else if(k==='bot'&&cur)cur.bot=str(v,60);
     else if(k==='text'&&cur)cur.text=str(v,400);
     else rest.push(line);
   });
@@ -175,18 +181,32 @@ function pic(q){
 // the others wait on a shelf beside it.
 function siteName(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return '';}}
 function pageOn(){return !!(R.page||(pane()&&site.open));}
+// A card whose title starts with one of the person's bots is about that bot, said so or not.
+function botNamed(title){
+  var t=String(title||'').toLowerCase(),hit='';
+  (window.MiaBots?window.MiaBots.list():[]).forEach(function(b){
+    var n=String(b.name||'').toLowerCase();
+    if(n&&n.length>hit.length&&t.indexOf(n)===0)hit=b.name;
+  });
+  return hit;
+}
+// A card about a bot shows that bot; any other card shows the picture found for it.
+function picHtml(v){
+  if(v.bot)return '<img alt="" class="mote" '+moteArt(v.bot)+'>';
+  return v.src?'<img alt=""'+(v.mark||'')+' src="'+esc(v.src)+'">':'';
+}
 function itemView(it){
-  if(it.key!=='page')return {title:it.card.title,text:it.card.text,src:pic(it.card.image),mark:''};
+  if(it.key!=='page'){var bot=it.card.bot||botNamed(it.card.title);return {title:it.card.title,text:it.card.text,bot:bot,src:bot?'':pic(it.card.image),mark:''};}
   var p=R.page||{};
   return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
 }
 function cardHtml(it,i){
   var v=itemView(it);
-  return '<article class="card'+(it.key==='page'?' page':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'"><div class="pic">'+(v.src?'<img alt=""'+v.mark+' src="'+esc(v.src)+'">':'')+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+  return '<article class="card'+(it.key==='page'?' page':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'"><div class="pic">'+picHtml(v)+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
 }
 function thumbHtml(it){
   var v=itemView(it);
-  return '<button class="thumb" data-item="'+it.key+'" title="'+esc(v.title)+'"><span class="pic">'+(v.src?'<img alt=""'+v.mark+' src="'+esc(v.src)+'">':'')+'</span><b>'+esc(v.title)+'</b></button>';
+  return '<button class="thumb" data-item="'+it.key+'" title="'+esc(v.title)+'"><span class="pic">'+picHtml(v)+'</span><b>'+esc(v.title)+'</b></button>';
 }
 function frontHtml(it){
   var v=itemView(it),x='<button class="front-x" data-item="" aria-label="Back to everything" title="Back to everything"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>';
@@ -194,7 +214,7 @@ function frontHtml(it){
   if(it.key==='page'&&pane())return '<div class="front live" id="frontPage"></div>';
   if(it.key==='page')return '<figure class="front shot">'+x+(v.src?'<img alt="The page Mia is in"'+v.mark+' src="'+esc(v.src)+'">':'<p class="hint">Opening the page.</p>')+
     '<figcaption><b>'+esc(v.title)+'</b><span>'+esc(v.text)+'</span><small>A picture of the page I am in. It follows what I do there.</small></figcaption></figure>';
-  return '<article class="front card">'+x+'<div class="pic">'+(v.src?'<img alt="" src="'+esc(v.src)+'">':'')+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+  return '<article class="front card">'+x+'<div class="pic">'+picHtml(v)+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
 }
 // focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
 // Mia's work does not undo for the rest of the run.
@@ -243,12 +263,20 @@ function choiceHtml(){
   return '<div class="panel ask open">'+(R.options.length?'<span class="lbl">Needs your judgment</span><div class="opts">'+R.options.map(function(o,i){return '<button class="btn" data-opt="'+i+'">'+esc(o)+'</button>';}).join('')+'</div>':'')+
     (R.next&&!R.options.length?'<span class="lbl">Next</span><div class="opts"><button class="btn" data-next="1">'+esc(R.next)+'</button></div>':'')+'</div>';
 }
+// The person's own bots, in the order the chat list keeps them, so the two never disagree.
+function rosterHtml(){
+  var list=window.MiaBots?window.MiaBots.list():[];
+  if(!list.length)return '';
+  return '<span class="lbl">Your bots</span><div class="roster">'+list.slice(0,12).map(function(b){
+    return '<div class="rb'+(b.working?' busy':'')+'"><img alt="" '+moteArt(b.name)+'><span><b>'+esc(b.name)+'</b><small>'+esc(b.working?'Working':str(b.line,80))+'</small></span></div>';
+  }).join('')+'</div>';
+}
 function botsHtml(){
   if(!R.bots.length)return '';
   return '<span class="lbl">'+(R.bots.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
-    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" src="'+mote(b.name)+'"><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:b.failed?'Could not finish':'Done')+'</span></button>';
+    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:b.failed?'Could not finish':'Done')+'</span></button>';
   }).join('')+'</div>'+R.bots.filter(function(b){return b.open;}).map(function(b){
-    return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" src="'+mote(b.name)+'"><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
+    return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" '+moteArt(b.name)+'><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
       (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
   }).join('');
 }
@@ -265,6 +293,7 @@ function draw(){
   if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
   else{
     var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
+    if(!quiet)side+=rosterHtml();
     h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
@@ -921,13 +950,20 @@ document.addEventListener('click',function(e){
   var b=e.target&&e.target.closest&&e.target.closest('[data-ai-mode-enter]');
   if(!b)return;
   e.preventDefault();
-  // The first time on this computer, a short intro shows what AI mode is.
+  if(introDue())intro();else enter();
+});
+// The intro shows what AI mode is. Mia plays it by itself the first time on
+// this computer, and Settings can play it again.
+function introDue(){
   var seen=true;try{seen=localStorage.getItem('miaAiModeIntroSeen')==='1';}catch(err){}
-  if(seen||!window.MiaAiModeIntro)return enter();
+  return !seen&&!open&&!!window.MiaAiModeIntro;
+}
+function intro(){
+  if(open||!window.MiaAiModeIntro)return;
   window.MiaAiModeIntro.play({sound:!muted,say:introSay}).then(function(r){
     try{localStorage.setItem('miaAiModeIntroSeen','1');}catch(err){}
     if(r==='try')enter();
   });
-});
-window.MiaAiMode={enter:enter,leave:leave};
+}
+window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();}};
 })();
