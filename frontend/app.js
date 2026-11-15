@@ -12991,10 +12991,13 @@
       if(t === ''){ i++; continue; }
       if(/^```/.test(t)){
         var code = [];
+        // What Mia drew in AI mode is a page, not something to read as code.
+        var drawn = /^```canvas\b/i.test(t);
         i++;
         while(i < lines.length && !/^```\s*$/.test(lines[i].trim())){ code.push(lines[i]); i++; }
         if(i < lines.length) i++;
-        blocks.push('<pre class="chat-md-code"><code>' + esc(code.join('\n')) + '</code></pre>');
+        blocks.push(drawn ? '<p><em>Mia drew a view here. Open AI mode and step back to see it.</em></p>'
+          : '<pre class="chat-md-code"><code>' + esc(code.join('\n')) + '</code></pre>');
         continue;
       }
       if(mathStartsAt(i)){
@@ -19502,7 +19505,34 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch};
+  // What the AI mode search bar can pull besides Mia's own views: the person's
+  // chats kept on this computer, and their artifacts.
+  var aiModeArtifactsAsked = false;
+  function aiModeSearch(query){
+    var q = String(query || '').trim().toLowerCase();
+    if(!q) return [];
+    if(!aiModeArtifactsAsked){ aiModeArtifactsAsked = true; try { loadArtifacts(); } catch(_artifactsError) {} }
+    var rows = [], seen = {};
+    function chat(id, name, sub){
+      if(!id || seen[id] || String(name || '').toLowerCase().indexOf(q) < 0) return;
+      seen[id] = true;
+      rows.push({kind:'chat', id:id, label:String(name), sub:sub});
+    }
+    chatSearchDirectorySnapshot().agents.forEach(function(agent){
+      var record = chatSearchAgentRecord(agent) || agent;
+      chat(record.roomId, record.name || agent.name, 'Chat with a bot');
+    });
+    (chatWs.nativeConversations || []).map(nativeConversationToRoom).forEach(function(room){
+      var created = Date.parse(room.createdAt || '');
+      chat(room.roomId, room.name, 'Chat' + (created ? ', ' + new Date(created).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : ''));
+    });
+    rows = rows.slice(0, 6);
+    artifactsPage.items.filter(function(item){ return String(item.name || '').toLowerCase().indexOf(q) >= 0; }).slice(0, 4).forEach(function(item){
+      rows.push({kind:'artifact', label:String(item.name), sub:'Artifact', url:item.kind === 'app' ? item.url : item.path});
+    });
+    return rows;
+  }
 
   // The artifacts you opened last, listed first on the Artifacts page.
   var RECENT_ARTIFACTS_STORE = 'mia.recentArtifacts.v1';

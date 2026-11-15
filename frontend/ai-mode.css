@@ -14,6 +14,7 @@
 :host{--top:calc(52px + env(safe-area-inset-top,0px));--bottom:calc(76px + max(env(safe-area-inset-bottom,0px),var(--keys,0px)));position:fixed;inset:0;z-index:2147483000;display:block;color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
 :host([hidden]){display:none}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 button{font:inherit;color:inherit}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mia-mark{display:block;max-width:100%;max-height:100%}
@@ -49,7 +50,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .hud .tools[hidden]{display:none}
 .hud .more{padding:0 10px;font-size:18px;line-height:1}
 .cv{position:absolute;inset:var(--top) 0 var(--bottom) 0;overflow-y:auto;display:flex;flex-direction:column;z-index:2}
-.cv>.wrap{width:100%;max-width:1120px;margin:auto;padding-block:8px;display:flex;flex-direction:column;gap:18px}
+.cv>.wrap{width:100%;max-width:1120px;margin:auto;padding-block:8px 44px;display:flex;flex-direction:column;gap:18px}
 .center{align-items:center;text-align:center}
 .hello{margin:18px 0 0;font:500 clamp(26px,4.4vw,40px)/1.15 var(--sans);letter-spacing:-.02em;text-wrap:balance}
 .line{margin:0;font-size:clamp(16px,2vw,20px);color:var(--soft)}
@@ -90,11 +91,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .rail{position:fixed;top:calc(var(--top) + 8px);right:max(14px,env(safe-area-inset-right,0px));bottom:var(--bottom);z-index:2;display:flex;flex-direction:column;align-items:center;gap:6px;overflow-y:auto;scrollbar-width:none}
 /* a window too narrow for an edge of its own: the bots go under what is shown */
 @media(max-width:1380px){.rail{position:static;flex:none;flex-direction:row;flex-wrap:wrap;justify-content:center;gap:6px 14px;overflow:visible;width:100%;max-width:1120px;margin:0 auto;padding-block:8px}}
-.bot{appearance:none;background:none;border:0;padding:4px 2px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:92px;min-width:0;text-align:center;opacity:.7;transition:opacity .2s ease}
+.bot{appearance:none;background:none;border:0;padding:4px 2px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:78px;min-width:0;text-align:center;opacity:.7;transition:opacity .2s ease}
 .bot:hover,.bot.on{opacity:1}
 /* one of the person's own bots at work: shown, with nothing to open */
 div.bot{cursor:default;opacity:1}
-.bot img{width:54px;height:auto}
+.bot img{width:34px;height:auto}
 .bot.busy img{animation:bob 2.6s ease-in-out infinite}
 .bot:nth-child(2) img{animation-delay:-.9s}.bot:nth-child(3) img{animation-delay:-1.7s}
 .bot b{font-weight:600;font-size:12px}
@@ -128,7 +129,7 @@ div.bot{cursor:default;opacity:1}
 .ink path{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
 .ink circle{fill:var(--accent)}
 .ink text{fill:var(--on-accent);font:600 12px var(--sans);text-anchor:middle;pointer-events:none}
-.intent #pen.on{animation:none}
+.intent #pen.on,.intent #find.on{animation:none}
 .intent .mic.on{background:var(--accent);color:var(--on-accent);animation:mic-on 1.6s ease-in-out infinite}
 @keyframes mic-on{50%{box-shadow:0 0 0 6px rgba(255,255,255,.12)}}
 @media(prefers-reduced-motion:reduce){.intent .mic.on{animation:none}}
@@ -313,3 +314,50 @@ a.file:hover{border-color:var(--accent)}
 .b-say b{font-size:20px;font-weight:500}.b-say span{color:var(--accent)}.b-say small{opacity:.62}
 @keyframes b-shine{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.b-lines i{animation:none}}
+
+/* Hands-free sits at the top right, above the bots, with its own mute. */
+.ears{position:absolute;top:calc(var(--top) + 6px);right:max(14px,env(safe-area-inset-right,0px));z-index:3;display:flex;align-items:center;gap:8px;height:36px;padding:0 4px 0 12px;border:1px solid var(--rule-strong);border-radius:18px;background:rgba(11,10,9,.8);font-size:12px;color:var(--soft);max-width:min(260px,70vw)}
+.ears span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ears i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--accent);animation:mic-on 1.6s ease-in-out infinite}
+.ears button{appearance:none;flex:none;width:28px;height:28px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.ears button:hover{color:var(--ink)}
+.ears .off{display:none}
+.ears button.on{background:rgba(255,255,255,.12);color:var(--ink)}
+.ears button.on .off{display:inline}
+.ears:has(button.on) i{background:var(--faint);animation:none}
+:host(.ears-on) .rail{top:calc(var(--top) + 50px)}
+@media(max-width:1380px){:host(.ears-on) .cv{padding-top:44px}}
+/* Earlier views: back, forward up to now. */
+.steps{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) + 4px);z-index:3;display:flex;align-items:center;gap:2px;height:30px;padding:0 4px;border:1px solid var(--rule);border-radius:15px;background:rgba(11,10,9,.85);font:11px var(--mono);color:var(--muted);white-space:nowrap}
+.steps span{padding:0 6px}
+.steps button{appearance:none;border:0;background:none;color:var(--soft);cursor:pointer;height:24px;min-width:24px;border-radius:12px;font-size:16px;line-height:1;padding:0 6px}
+.steps button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--ink)}
+.steps button:disabled{opacity:.3;cursor:default}
+.steps .now{font:500 11px var(--sans);color:var(--accent-text);padding:0 10px}
+/* What the search found, above the bar. */
+.finds{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) - 8px);z-index:4;width:min(560px,calc(100% - 32px));max-height:min(420px,60vh);overflow-y:auto;display:flex;flex-direction:column;padding:6px;border:1px solid var(--rule-strong);border-radius:14px;background:rgba(14,13,11,.96);box-shadow:0 12px 32px -8px rgba(0,0,0,.7)}
+.finds button{appearance:none;border:0;background:none;text-align:left;cursor:pointer;display:grid;grid-template-columns:64px minmax(0,1fr) auto;align-items:baseline;gap:10px;padding:8px 10px;border-radius:8px}
+.finds button:hover,.finds button.on{background:rgba(255,255,255,.07)}
+.finds small{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.finds b{font-weight:500;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.finds span{font-size:11px;color:var(--muted);white-space:nowrap}
+/* The drawer at the left edge: what was asked, what Mia reported. */
+.log-tab{appearance:none;position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:4;width:18px;height:56px;padding:0;border:1px solid var(--rule-strong);border-left:0;border-radius:0 9px 9px 0;background:rgba(11,10,9,.85);color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.log-tab:hover{color:var(--ink)}
+.log-tab svg,.log header svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.log{position:absolute;left:0;top:var(--top);bottom:var(--bottom);z-index:4;width:min(300px,86vw);display:flex;flex-direction:column;border:1px solid var(--rule-strong);border-left:0;border-radius:0 14px 14px 0;background:rgba(11,10,9,.94);backdrop-filter:blur(8px)}
+.log header{flex:none;display:flex;align-items:center;justify-content:space-between;padding:10px 8px 8px 14px;font-size:12px;color:var(--soft)}
+.log header button{appearance:none;border:0;background:none;color:var(--muted);cursor:pointer;width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
+.log header button:hover{color:var(--ink)}
+.log-l{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding:0 6px 10px}
+.turn{padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:2px}
+.turn[data-view]{cursor:pointer}
+.turn[data-view]:hover{background:rgba(255,255,255,.05)}
+.turn.on{background:rgba(255,255,255,.07)}
+.turn small{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.turn p{margin:0 0 4px;font-size:12.5px;color:var(--soft);overflow-wrap:anywhere}
+.turn p:first-of-type{color:var(--ink)}
+@media(prefers-reduced-motion:reduce){.ears i{animation:none}}
+:host(.calm) .ears i{animation-play-state:paused}
+/* On a wide screen the stage moves over so the drawer covers nothing. */
+@media(min-width:1000px){:host(.log-on) .cv{padding-left:316px}}

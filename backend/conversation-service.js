@@ -322,8 +322,8 @@ function createConversationService({ repository, authorization, realtime = null,
 
 
   // AI mode has no chat on screen, so its run with Mia lives in a chat of its
-  // own that no list shows. Each time the person enters, they get a new one
-  // and the ones they left are put away.
+  // own: one per person and place (Solo, or a company). It is kept and listed
+  // with the person's other chats, so what was said there can be read later.
   function openAiModeConversation({ companyId, principal, createdAt, teamWorkspace } = {}) {
     const normalizedCompanyId = required(companyId, 'companyId');
     const owner = {
@@ -331,15 +331,19 @@ function createConversationService({ repository, authorization, realtime = null,
       principalType: required(principal && principal.principalType, 'principalType'),
       joinedAt: createdAt,
     };
-    const now = createdAt || new Date().toISOString();
-    for (const earlier of repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })) {
-      if (!isAiModeConversation(earlier) || earlier.createdBy !== owner.principalId) continue;
-      repository.updateConversation({ companyId: normalizedCompanyId, id: earlier.id, deletedAt: now, updatedAt: now });
+    const place = teamWorkspace || '';
+    const kept = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })
+      .find((earlier) => isAiModeConversation(earlier) && earlier.createdBy === owner.principalId
+        && ((earlier.metadata || {}).teamWorkspace || '') === place);
+    // One kept from before this had a name of its own takes the name now.
+    if (kept && kept.name !== 'AI mode') {
+      repository.updateConversation({ companyId: normalizedCompanyId, id: kept.id, name: 'AI mode', updatedAt: kept.updatedAt || kept.createdAt });
+      kept.name = 'AI mode';
     }
-    const conversation = repository.createConversation({
+    const conversation = kept || repository.createConversation({
       companyId: normalizedCompanyId,
       type: 'agent',
-      name: 'Mia',
+      name: 'AI mode',
       createdBy: owner.principalId,
       createdAt,
       metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE, ...(teamWorkspace ? { teamWorkspace } : {}) },
@@ -352,8 +356,7 @@ function createConversationService({ repository, authorization, realtime = null,
 
   function listConversations({ companyId, principal, includeDeleted = false, limit = 100 } = {}) {
     const normalizedCompanyId = required(companyId, 'companyId');
-    const rows = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted, limit })
-      .filter((conversation) => !isAiModeConversation(conversation));
+    const rows = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted, limit });
     return rows.filter((conversation) => {
       const allowed = authorization.can(callerPrincipal(principal, normalizedCompanyId, conversation.id, 'read'));
       if (allowed) ensureConversationMembers(conversation);

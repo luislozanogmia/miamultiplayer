@@ -7288,20 +7288,38 @@ function aiModeRouterBots(conversation, email) {
 }
 
 // The jobs Mia handed over from each AI mode chat, newest last, so she is told where
-// every bot stands on her next turn. Kept while the app runs; one entry per bot.
+// every bot stands on her next turn and the stage can show them again after the person
+// leaves and comes back. One entry per bot, for a day; kept with the chat itself.
 const aiModeHandoffLedger = new Map();
 const AI_MODE_LEDGER_MAX = 8;
+const AI_MODE_LEDGER_MS = 24 * 60 * 60 * 1000;
 
-function rememberAiModeHandoff(conversationId, entry) {
-  const kept = (aiModeHandoffLedger.get(conversationId) || []).filter((item) => item.botId !== entry.botId);
-  kept.push(entry);
-  aiModeHandoffLedger.set(conversationId, kept.slice(-AI_MODE_LEDGER_MAX));
+function aiModeHandoffEntries(conversation) {
+  if (!aiModeHandoffLedger.has(conversation.id)) {
+    const saved = conversation.metadata && conversation.metadata.aiModeHandoffs;
+    aiModeHandoffLedger.set(conversation.id, (Array.isArray(saved) ? saved : [])
+      .filter((entry) => entry && entry.botId && entry.conversationId && entry.companyId));
+  }
+  return aiModeHandoffLedger.get(conversation.id).filter((entry) => Date.now() - entry.at < AI_MODE_LEDGER_MS);
 }
 
-// -> [{ name, brief, state: 'working' | 'finished' | 'stopped', report }]
+function rememberAiModeHandoff(conversation, entry) {
+  const kept = aiModeHandoffEntries(conversation).filter((item) => item.botId !== entry.botId).concat([entry]).slice(-AI_MODE_LEDGER_MAX);
+  aiModeHandoffLedger.set(conversation.id, kept);
+  try {
+    const current = nativeConversationRepository.getConversation({ companyId: conversation.companyId, id: conversation.id });
+    nativeConversationRepository.updateConversation({
+      companyId: current.companyId, id: current.id,
+      metadata: { ...(current.metadata || {}), aiModeHandoffs: kept },
+      updatedAt: current.updatedAt || current.createdAt,
+    });
+  } catch (_) { /* still remembered while the app runs */ }
+}
+
+// -> [{ name, brief, state: 'working' | 'finished' | 'stopped', report, conversationId, at }]
 function aiModeHandoffReports(conversation) {
-  return (aiModeHandoffLedger.get(conversation.id) || []).map((entry) => {
-    const report = { name: entry.botName, brief: entry.brief, state: 'working', report: '' };
+  return aiModeHandoffEntries(conversation).map((entry) => {
+    const report = { name: entry.botName, brief: entry.brief, state: 'working', report: '', conversationId: entry.conversationId, at: entry.at };
     try {
       const { events } = nativeConversationRepository.listEvents({
         companyId: entry.companyId, conversationId: entry.conversationId, latest: true, limit: 8, includeDeleted: false,
@@ -7413,7 +7431,7 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
       },
     });
     if (aiModeRun && result.dispatch) {
-      rememberAiModeHandoff(conversation.id, {
+      rememberAiModeHandoff(conversation, {
         botId: bot.id, botName: bot.name || bot.id, brief, at,
         companyId: botConversation.companyId, conversationId: botConversation.id, dispatchId: result.dispatch.id,
       });
@@ -9712,6 +9730,21 @@ app.get('/api/ai-mode/image', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(404).end();
   }
+});
+
+// The bots Mia put to work from this AI mode chat, for a stage that was closed and opened again.
+app.get('/api/ai-mode/handoffs', requireAuth, (req, res) => {
+  let bots = [];
+  try {
+    const principal = nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req));
+    const conversation = nativeConversationService.getConversation({
+      companyId: principal.companyId, conversationId: String(req.query.conversation || ''), principal,
+    });
+    if (aiMode.isAiModeConversation(conversation)) {
+      bots = aiModeHandoffReports(conversation).map(({ name, state, report, conversationId, at }) => ({ name, state, report, conversationId, at }));
+    }
+  } catch (_) { /* a chat that is not theirs has no bots to show */ }
+  res.set('Cache-Control', 'no-store').status(200).json({ bots });
 });
 
 // The page Mia is working in, as a picture on the stage. GET is the stage

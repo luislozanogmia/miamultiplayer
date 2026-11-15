@@ -6,8 +6,9 @@
 // step she takes, the line she says about it (shown and read out loud), the
 // reply as she writes it, and whatever needs the person.
 //
-// There is no chat history here on purpose: the stage shows the last thing the
-// person said and the work, nothing older.
+// The stage shows the last thing the person said and the work. What came
+// before is kept behind it: each earlier view can be stepped back to, and a
+// small drawer lists what was asked and what Mia reported, nothing else.
 (function(){
 'use strict';
 var KINDS=['research','inbox','calendar','sales','general','black'];
@@ -51,6 +52,13 @@ var MARKUP=
       '<button class="btn" id="phonePair">Connect a phone</button>'+
     '</div>'+
     '<div class="cv pad" id="cv"></div>'+
+    '<button class="log-tab" id="logTab" aria-expanded="false" aria-label="What you asked and what Mia reported" title="What you asked and what Mia reported" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>'+
+    '<aside class="log" id="log" aria-label="What you asked and what Mia reported" hidden></aside>'+
+    '<div class="ears" id="ears" hidden><i aria-hidden="true"></i><span id="earsSay">Just talk</span>'+
+      '<button id="earsMute" aria-pressed="false" aria-label="Mute the mic" title="Mute the mic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/><path class="off" d="M2.5 1.5l11 13"/></svg></button></div>'+
+    '<div class="steps" id="steps" hidden><button id="stepBack" aria-label="The view before" title="The view before">\u2039</button><span id="stepAt"></span>'+
+      '<button id="stepNext" aria-label="The view after" title="The view after">\u203a</button><button class="now" id="stepNow" hidden>Back to now</button></div>'+
+    '<div class="finds" id="finds" hidden></div>'+
     '<div class="ink" id="ink" aria-hidden="true" hidden><svg><g id="inkG"></g></svg></div>'+
     '<div class="site" id="site" hidden>'+
       '<div class="site-bar" id="siteBar">'+
@@ -66,6 +74,7 @@ var MARKUP=
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
+      '<button type="button" class="mic" id="find" aria-pressed="false" aria-label="Search your views, chats and artifacts" title="Search your views, chats and artifacts"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></button>'+
       '<button type="button" class="mic" id="pen" aria-pressed="false" aria-label="Mark on the screen" title="Draw on the screen to show Mia what you mean" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/><path d="M9.5 4l2.5 2.5"/></svg></button>'+
       '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
@@ -77,6 +86,10 @@ var host=null,root=null,open=false,drive=false;
 // One run: what the person said and everything Mia has done about it so far.
 var fullOwn=false;
 var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},crew=[],mindMap={},seedId=0,drawTimer=null;
+// What came before: each earlier run with the view Mia made for it, oldest first. view is the one
+// being looked at (-1 is now); peek is a chat pulled from search, shown the same way.
+var past=[],view=-1,peek=null,drawerOn=false,seqKnown=false,findOn=false,found=[],talkMuted=false;
+function seeing(){return peek||past[view]||null;}
 function $(id){return root.getElementById(id);}
 function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function str(v,n){return (typeof v==='string'?v.trim():'').slice(0,n);}
@@ -200,7 +213,7 @@ function readCanvas(text){
   if(!m[3])return {html:'',building:html.length,rest:text.slice(0,m.index).trim()};
   return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
 }
-function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.draft:R.body);}
+function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.keep||R.draft:R.body||R.keep);}
 // The frame is kept across redraws, so what she drew does not blink each time the stage changes.
 function canvasHold(){
   var el=canvas.el,hold=$('hold');
@@ -217,7 +230,7 @@ function canvasPlace(){
   var html=slot.dataset.html||'',wait=900-(Date.now()-canvas.at);
   clearTimeout(canvas.timer);canvas.timer=null;
   if(html!==canvas.src){
-    if(R&&R.running&&canvas.src&&wait>0)canvas.timer=setTimeout(function(){canvas.timer=null;if(open)draw();},wait);
+    if(R&&R.running&&!seeing()&&canvas.src&&wait>0)canvas.timer=setTimeout(function(){canvas.timer=null;if(open)draw();},wait);
     else{canvas.src=html;canvas.at=Date.now();el.srcdoc=CANVAS_BASE+html;}
   }
   if(el.parentNode!==slot){
@@ -239,7 +252,7 @@ function pic(q){
 // more view of what she found, so it sits with the cards. Picking an item brings it to the front and
 // the others wait on a shelf beside it.
 function siteName(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return '';}}
-function pageOn(){return !!(R.page||(pane()&&site.open));}
+function pageOn(){return !R.past&&!!(R.page||(pane()&&site.open));}
 // A card whose title starts with one of the person's bots is about that bot, said so or not.
 function botNamed(title){
   var t=String(title||'').toLowerCase(),hit='';
@@ -278,6 +291,8 @@ function frontHtml(it){
 // focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
 // Mia's work does not undo for the rest of the run.
 function focus(key,picked){
+  var old=seeing();
+  if(old){old.focus=key||'';draw();return;}
   if(!R)return;
   R.focus=key||'';if(picked)R.picked=true;
   if(pane()){
@@ -288,7 +303,7 @@ function focus(key,picked){
 }
 function newRun(text){
   return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
-    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
+    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',keep:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
 }
 function narrating(){var d=dropHandoffs(R.draft).trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
 function miaLine(){
@@ -296,6 +311,8 @@ function miaLine(){
   var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
   if(ask)return 'I need your OK before I go on.';
   if(R.running&&narrating())return dropHandoffs(R.draft).trim().replace(/[*_`]+/g,'');
+  // The last view stays up while she makes the next one, so her line says what she is on.
+  if(R.running&&R.keep&&R.draft.indexOf('\n')>0)return /```canvas/i.test(R.draft)?'Building your new view\u2026':'Writing this up\u2026';
   // With the sound off her question has to be read.
   return !R.running&&R.ask&&muted?R.ask:R.line;
 }
@@ -311,6 +328,9 @@ function resultHtml(){
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
   // One short line on its own is her narration, shown beside her mark, not a result.
   if(R.running&&narrating())text='';
+  // The view from before stays on the stage until the new one is whole; a reply with nothing to show keeps it.
+  var kept=!!R.keep&&(R.running||!text);
+  if(kept)text=R.keep;
   // What a bot brought back takes the stage while the person looks at it.
   var shown=shownBot(),from='';
   if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>brought this back</span><button class="btn" data-hide="1">Close</button></div>';}
@@ -320,7 +340,7 @@ function resultHtml(){
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
     :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
-    (read.rest?'<div class="panel result'+(R.running&&!shown?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
+    (read.rest?'<div class="panel result'+(R.running&&!shown&&!kept?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
   if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
@@ -335,10 +355,10 @@ function choiceHtml(){
 }
 // Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
 // bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
-function shownBot(){return crew.filter(function(b){return b.open&&b.reply;})[0]||null;}
+function shownBot(){return seeing()?null:crew.filter(function(b){return b.open&&b.reply;})[0]||null;}
 function botLine(b){return b.running?b.line:b.failed?'Could not finish':'Done';}
 function botsHtml(){
-  var named=crew.concat(R.bots),own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
+  var mine=R?R.bots:[],named=crew.concat(mine),own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
     return b.working&&!named.some(function(w){return w.name===b.name;});
   }).slice(0,8);
   if(!named.length&&!own.length)return '';
@@ -346,7 +366,7 @@ function botsHtml(){
     return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-'+kind+'="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(botLine(b))+'</span></button>';
   };}
   // The bots stand at the right edge of the screen, out of the way of what is being shown.
-  return '<div class="rail" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+R.bots.map(tile('bot')).join('')+own.map(function(b){
+  return '<div class="rail" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+mine.map(tile('bot')).join('')+own.map(function(b){
     return '<div class="bot busy"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step">Working</span></div>';
   }).join('')+'</div>';
 }
@@ -371,20 +391,119 @@ function filesHtml(){
   if(!made.length&&!touched.length)return '';
   return '<span class="lbl">Files</span><div class="files">'+made.concat(touched).join('')+'</div>';
 }
+// The stage for one run: the one going on now, or an earlier one the person stepped back to.
+function stageHtml(seen){
+  var rail=botsHtml(),now=R;
+  if(seen)R=seen;
+  try{
+    var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
+    var main=R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
+    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p></div>':'')+
+      '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
+      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
+  }finally{R=now;}
+}
+// Stepping through earlier views: left is the past, right comes back up to now. Nothing is sent to Mia.
+function stops(){var a=[];past.forEach(function(r,i){if(r.body)a.push(i);});return a;}
+function step(d){
+  var a=stops(),at=peek||view<0?a.length:a.indexOf(view);
+  if(at<0)at=a.length;
+  at=Math.max(0,Math.min(a.length,at+d));
+  peek=null;view=at===a.length?-1:a[at];
+  draw();$('cv').scrollTop=0;
+}
+function backToNow(){if(!seeing())return false;peek=null;view=-1;return true;}
+function stepsDraw(){
+  var a=stops(),at=view<0?a.length:a.indexOf(view),old=!!seeing();
+  $('steps').hidden=!a.length&&!peek;
+  $('stepBack').disabled=!peek&&at<=0;$('stepNext').disabled=!old;
+  $('stepBack').hidden=$('stepNext').hidden=!a.length;
+  $('stepAt').textContent=peek?'A chat you pulled':old?(at+1)+' of '+(a.length+1):'Now';
+  $('stepNow').hidden=!old;
+}
+// The drawer: what the person asked and what Mia reported, turn by turn. No steps, no tools.
+function told(r){
+  if(r.running)return 'Working on it\u2026';
+  var said=[r.say,r.ask].filter(Boolean).join(' ');
+  if(said)return said;
+  var drawn=readCanvas(r.body),read=readCards(drawn.rest);
+  return str(read.rest.replace(/[*_`#>|]+/g,'').replace(/\s+/g,' '),220)||(drawn.html?'I drew a view for this.':read.cards.length?'I laid it out as cards.':r.line||'Done.');
+}
+function logDraw(){
+  var turns=past.concat(R&&R.said?[R]:[]),tab=$('logTab'),box=$('log');
+  if(!turns.length)drawerOn=false;
+  tab.hidden=!turns.length||drawerOn;host.classList.toggle('log-on',drawerOn);tab.setAttribute('aria-expanded',drawerOn?'true':'false');
+  box.hidden=!drawerOn;
+  if(!drawerOn){box._h='';return;}
+  var seen=seeing();
+  var h='<header><b>You and Mia</b><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
+    var to=r===R?-1:r.body?i:null;
+    return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>You</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
+  }).join('')+'</div>';
+  if(box._h===h)return;
+  var fresh=!box._h,list=$('logL'),top=list?list.scrollTop:0;
+  box._h=h;box.innerHTML=h;list=$('logL');
+  // It opens on the newest turn; after that it stays where the person left it.
+  list.scrollTop=fresh?list.scrollHeight:top;
+}
+// Searching from the bar: Mia's earlier views, the person's chats and their artifacts. Picking one
+// shows it on the stage and sends nothing; the last row hands the typed words to Mia.
+function findMode(){return talkOn||findOn;}
+function findSet(on){
+  findOn=!!on;found=[];
+  $('find').classList.toggle('on',findMode());$('find').setAttribute('aria-pressed',findMode()?'true':'false');$('find').hidden=talkOn;
+  findDraw();if(!earState)$('box').placeholder=boxHint();
+}
+function findRun(){
+  var q=$('box').value.trim(),low=q.toLowerCase(),rows=[];
+  if(findMode()&&q){
+    past.forEach(function(r,i){if(r.body&&(r.said+' '+r.say).toLowerCase().indexOf(low)>=0)rows.push({kind:'view',label:r.said,sub:'A view Mia made',i:i});});
+    rows=rows.slice(-4).reverse();
+    try{rows=rows.concat((appHost().search(q)||[]).slice(0,10));}catch(e){}
+    rows.push({kind:'tell',label:q,sub:'Tell Mia'});
+  }
+  found=rows;findDraw();
+}
+function findDraw(){
+  var box=$('finds');box.hidden=!found.length;
+  box.innerHTML=found.map(function(r,i){
+    return '<button data-find="'+i+'"'+(i?'':' class="on"')+'><small>'+esc(r.kind==='tell'?'Tell Mia':r.kind==='view'?'View':r.kind==='chat'?'Chat':'Artifact')+'</small><b>'+esc(r.label)+'</b>'+(r.kind==='tell'?'':'<span>'+esc(r.sub||'')+'</span>')+'</button>';
+  }).join('');
+}
+function findPick(r){
+  if(!r)return;
+  $('box').value='';findSet(false);
+  if(r.kind==='tell'){direct(r.label.slice(0,2000));return;}
+  if(r.kind==='view'){peek=null;view=r.i;draw();$('cv').scrollTop=0;return;}
+  if(r.kind==='artifact'){
+    if(!r.url||!siteOpen(r.url)){peek=newRun(r.label);peek.running=false;peek.past=peek.plain=true;peek.line='Artifacts open in the Mia desktop app.';view=-1;draw();}
+    return;
+  }
+  // A chat is read here as it is: who said what, nothing else, and nothing is sent to it.
+  var p=peek=newRun(r.label);p.running=false;p.past=p.plain=true;p.line='Getting that conversation\u2026';view=-1;draw();
+  call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
+    if(peek!==p)return;
+    var lines=(Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
+      var meta=(ev&&ev.metadata)||{},text=ev&&ev.content&&typeof ev.content.text==='string'?ev.content.text.trim():'';
+      if(!text||ev.deletedAt||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return '';
+      return '**'+(ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label.replace(/[*_`]/g,''):'Someone')+'**\n\n'+text.slice(0,6000);
+    }).filter(Boolean).slice(-60);
+    p.body=lines.join('\n\n---\n\n');
+    p.line=lines.length?'Here is that conversation. Nothing was sent.':'That conversation has nothing in it yet.';
+    if(open){draw();$('cv').scrollTop=$('cv').scrollHeight;}
+  },function(){if(peek===p){p.line='That conversation could not be opened.';if(open)draw();}});
+}
 function draw(){
   clearTimeout(drawTimer);drawTimer=null;
   var cv=$('cv'),h='',top=cv.scrollTop,atEnd=cv.scrollHeight-cv.scrollTop-cv.clientHeight<60;
   unmount(cv);canvasHold();
   // What she drew takes the place of the page she read it from.
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
-  if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
-  else{
-    var side=R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
-    h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
-      '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
-      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+botsHtml();
-  }
-  cv.innerHTML=h;mount(cv);canvasPlace();
+  var seen=seeing();
+  if(seen)h=stageHtml(seen);
+  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
+  else h=stageHtml(null);
+  cv.innerHTML=h;mount(cv);canvasPlace();stepsDraw();logDraw();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -437,8 +556,9 @@ function ended(){
 }
 // What the run leaves in the chat: an approval it needs, and the reply.
 function onEvent(ev){
-  if(!ev||!R||typeof ev!=='object')return;
+  if(!ev||typeof ev!=='object')return;
   if(+ev.sequence>seq)seq=+ev.sequence;
+  if(!R)return;
   var meta=ev.metadata&&typeof ev.metadata==='object'?ev.metadata:{},content=ev.content&&typeof ev.content==='object'?ev.content:{};
   if(meta.askBeforeDo&&meta.askBeforeDo.id){
     var q=meta.askBeforeDo,old=R.asks.filter(function(a){return a.id===q.id;})[0];
@@ -472,14 +592,14 @@ function listen(id,onEv,onAct){
     var p;try{p=JSON.parse(m.data);}catch(e){return;}
     if(p.type==='conversation.event')onEv(p.event);
     if(p.type==='conversation.activity')onAct(p.activity);
-    if(p.type==='history')(p.events||[]).forEach(onEv);
+    if(p.type==='history'&&(id!==conv||seqKnown))(p.events||[]).forEach(onEv);
   };
   return ws;
 }
 // Each bot Mia put on the work does it in its own chat; the stage follows it there, and keeps
 // following while the person gives Mia the next thing.
 function followBot(b){
-  if(!b||!b.conversationId||!R)return;
+  if(!b||!b.conversationId)return;
   var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
   if(!bot){if(crew.length>=8)crew.shift();bot={name:str(b.name,40)||'Bot',conversationId:b.conversationId};crew.push(bot);}
   // A new job for a bot already on the stage starts it over.
@@ -519,14 +639,63 @@ function openChat(){
   if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',{teamWorkspace:company},token);})
     .then(function(r){return r.status===403?plain():r;},plain)
     :plain()).then(function(r){
-    opening=null;var id=r.data.conversation&&r.data.conversation.id;
+    var id=r.data.conversation&&r.data.conversation.id;
     if(!id)throw new Error(r.status===401?'signin':'closed');
-    conv=id;seq=0;
-    sock=listen(id,onEvent,onActivity);
-    if(sock)sock.onclose=function(){if(open&&conv===id)setTimeout(function(){if(open&&conv===id){sock=listen(id,onEvent,onActivity);if(sock)sock.onclose=this.onclose;}}.bind(this),1500);};
-    return id;
+    conv=id;seq=0;seqKnown=false;
+    // The chat is kept between visits: what was asked and made before comes back with it.
+    return call(chat(id,'/events?latest=true&limit=100')).then(function(e){
+      if(conv!==id||e.status!==200)return;
+      restore(Array.isArray(e.data.events)?e.data.events:[]);seqKnown=true;
+    },function(){}).then(function(){
+      opening=null;
+      if(conv!==id)return id;
+      sock=listen(id,onEvent,onActivity);
+      if(sock)sock.onclose=function(){if(open&&conv===id)setTimeout(function(){if(open&&conv===id){sock=listen(id,onEvent,onActivity);if(sock)sock.onclose=this.onclose;}}.bind(this),1500);};
+      crewRestore(id);
+      if(open)draw();
+      return id;
+    });
   },function(e){opening=null;throw e;});
   return opening;
+}
+function restore(events){
+  var runs=[],cur=null,keep='';
+  events.slice().sort(function(a,b){return a.sequence-b.sequence;}).forEach(function(ev){
+    if(+ev.sequence>seq)seq=+ev.sequence;
+    var meta=ev.metadata&&typeof ev.metadata==='object'?ev.metadata:{},text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+    if(!text||ev.deletedAt)return;
+    if(ev.senderType==='user'){
+      cur=newRun(str(meta.aiModeSaid,2000)||text.split('\n\n[Marked on the screen')[0].trim());
+      cur.running=false;cur.sent=cur.past=true;cur.line='';runs.push(cur);return;
+    }
+    if(!cur||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return;
+    var read=readReply(text);
+    cur.say=read.say;cur.ask=read.ask;cur.body=read.body;cur.line=read.say||'Done.';cur.done=true;
+  });
+  if(past.length)return;
+  past=runs.filter(function(r){return r.done;}).slice(-30);
+  past.forEach(function(r){r.keep=keep;keep=r.body||keep;});
+}
+// The bots Mia put on a job in the last day, still working or finished: they stand at the right again.
+function crewRestore(id){
+  call('/api/ai-mode/handoffs?conversation='+encodeURIComponent(id)).then(function(r){
+    if(!open||conv!==id)return;
+    (Array.isArray(r.data.bots)?r.data.bots:[]).forEach(function(b){
+      if(!b||crew.some(function(x){return x.conversationId===b.conversationId;}))return;
+      followBot(b);
+      var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
+      if(!bot)return;
+      bot.at=(+b.at||Date.now())-2000;
+      if(b.state!=='working'){bot.running=false;bot.seen=true;bot.failed=b.state==='stopped';bot.report=str(b.report,420);bot.reply=bot.report;}
+    });
+    draw();
+  },function(){});
+}
+// A run that is over goes behind the stage with the view it made.
+function shelve(r){
+  if(!r||!r.sent||!r.said)return;
+  r.running=false;r.asks=[];r.options=[];r.next='';r.bots=[];r.page=null;r.focus='';r.note='';r.draft='';r.past=true;r.line=r.say||r.line;
+  past.push(r);if(past.length>30)past.shift();
 }
 function fail(my,e){
   if(my!==R)return;
@@ -615,13 +784,23 @@ function direct(t,shown){
   var steering=s===2&&R&&R.running&&R.sent;
   var before=R&&R.sent?{said:str(R.said,400),ask:str(R.ask,200)}:null;
   if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
-  else{crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});R=newRun(shown||t);R.at=Date.now()-2000;seed(shown||t);}
-  s=2;draw();
+  else{
+    crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});
+    // The view on the stage stays there while Mia works on the next thing.
+    var was=R||past[past.length-1],keep=was?was.body||was.keep||'':'';
+    // A page the person opened or chose to keep open is theirs: it stays up through the next run.
+    var mine=!!(R&&R.picked&&site.open);
+    shelve(R);R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
+    if(mine){R.picked=true;R.focus='page';}
+  }
+  s=2;peek=null;view=-1;draw();if(!steering)$('cv').scrollTop=0;
   var my=R;
   var send=function(text){
     return openChat().then(function(id){
       var pick=modelPick(),ev={type:'message',content:{text:text},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)};
-      if(pick)ev.metadata={chatModelSelection:pick};
+      // What the person saw themselves say, so it reads the same when this chat is opened again.
+      ev.metadata={aiModeSaid:str(shown||t,2000)};
+      if(pick)ev.metadata.chatModelSelection=pick;
       return call(chat(id,'/events'),ev);
     });
   };
@@ -787,7 +966,7 @@ function siteState(st){
     var hers=tabs.filter(function(t){return t.botActivity;})[0];
     if(hers){
       if(!site.open&&!R.picked&&!hasCanvas()){site.open=true;R.focus='page';draw();}
-      if(site.open&&!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
+      if(site.open&&!R.picked&&!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
     }
   }
   if(!site.open||!tab)return;
@@ -953,7 +1132,7 @@ function hush(){
 // The words are written down on this computer by the same recorder the chat box uses.
 // Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
 var ear=null,earState='';
-function boxHint(){return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):talkOn?'Listening\u2026 just talk':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function boxHint(){return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):findMode()?'Search your views, chats and artifacts':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
 function earParts(){
   var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
   return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
@@ -961,10 +1140,14 @@ function earParts(){
 function earShow(state,note){
   earState=state;
   var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
-  $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
+  // Hands-free says where it is at the top right; the bar below is then for searching.
+  if(talkOn){$('earsSay').textContent=note||(state==='on'?'I am listening\u2026':state==='wait'?'Writing it down\u2026':talkMuted?'Mic is muted':'Just talk');$('box').placeholder=boxHint();}
+  else $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
   if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,0.1);
   hold(slow&&!!state);
 }
+// The speech model writes sounds it hears as notes, "(keyboard clicking)"; those are not the person's words.
+function heard(t){return String(t||'').replace(/\([^)]*\)|\[[^\]]*\]|\*[^*]*\*/g,' ').replace(/\s+/g,' ').trim();}
 function earStop(note){
   if(ear)ear.cancel();
   if(host)earShow('',note);
@@ -974,6 +1157,7 @@ function earToggle(){
   if(earState==='on'){
     earShow('wait');
     return ear.stop().then(function(t){
+      t=heard(t);
       if(earState!=='wait')return;
       earShow('',t?'':'I did not catch that. Press the mic and try again.');
       if(t&&open)direct(t.slice(0,2000));
@@ -998,15 +1182,26 @@ var talk=null,talkOn=false;
 function talkShow(){
   var b=$('talk');b.textContent=talkOn?'Hands-free on':'Hands-free off';b.setAttribute('aria-pressed',talkOn?'true':'false');
   $('mic').hidden=talkOn||!earParts();
-  if(!earState)$('box').placeholder=boxHint();
+  $('ears').hidden=!talkOn;host.classList.toggle('ears-on',talkOn);
+  $('earsMute').classList.toggle('on',talkMuted);$('earsMute').setAttribute('aria-pressed',talkMuted?'true':'false');
+  $('earsMute').title=talkMuted?'Turn the mic back on':'Mute the mic';$('earsMute').setAttribute('aria-label',$('earsMute').title);
+  findSet(findOn);
+}
+// Muting lets go of the mic; hands-free stays on and picks up again when it is turned back on.
+function talkMute(){
+  if(!talkOn||!talk)return;
+  talkMuted=!talkMuted;
+  if(talkMuted)talk.stop();
+  else Promise.resolve().then(function(){return talk.start();}).catch(function(){talkStop('The mic could not start. Type it here.');});
+  talkShow();earShow('');
 }
 function talkStop(note){
-  talkOn=false;if(talk)talk.stop();
-  if(host){earShow('',note);talkShow();}
+  talkOn=false;talkMuted=false;if(talk)talk.stop();
+  if(host){talkShow();earShow('',note);}
 }
 function talkStart(){
   var parts=earParts();if(!parts||talkOn)return;
-  earStop();talkOn=true;talkShow();
+  earStop();talkOn=true;talkMuted=false;talkShow();
   if(!talk)talk=parts.D.createListener({media:parts.media,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe,
     loud:function(){return busy;},
     onStart:function(){hush();earShow('on','I am listening\u2026');},
@@ -1014,7 +1209,7 @@ function talkStart(){
     onDrop:function(){earShow('');},
     onError:function(){earShow('','I could not write down what you said. Say it again.');},
     onText:function(t){
-      earShow('');
+      earShow('');t=heard(t);
       if(!t||!open)return;
       if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
       direct(t.slice(0,2000));
@@ -1101,7 +1296,22 @@ function build(){
   c=$('rain');x=c.getContext('2d');
   window.MiaMark.render($('hudMark'),20,'');
   $('leave').onclick=leave;
-  $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));};
+  $('form').onsubmit=function(e){
+    e.preventDefault();
+    if(findMode()){if(found.length)findPick(found[0]);return;}
+    var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));
+  };
+  $('box').addEventListener('input',function(){if(findMode())findRun();});
+  $('find').onclick=function(){findSet(!findOn);if(findOn)findRun();$('box').focus();};
+  $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
+  $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
+  $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
+  $('log').onclick=function(e){
+    if(e.target.closest('[data-x]')){drawerOn=false;logDraw();return;}
+    var turn=e.target.closest('[data-view]');
+    if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
+  };
+  $('earsMute').onclick=talkMute;
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
@@ -1131,17 +1341,24 @@ function build(){
     // A link in her reply opens on the stage, in the desktop app.
     var a=e.target&&e.target.closest&&e.target.closest('a[href]');
     if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
-    var it=R&&e.target&&e.target.closest&&e.target.closest('[data-item]');
+    var it=(R||seeing())&&e.target&&e.target.closest&&e.target.closest('[data-item]');
     if(it){focus(it.dataset.item,true);return;}
-    var b=e.target&&e.target.closest&&e.target.closest('button');if(!b||!R)return;
+    var b=e.target&&e.target.closest&&e.target.closest('button');if(!b)return;
+    if(b.dataset.crew||b.dataset.show){
+      var mate=crew[+(b.dataset.crew||b.dataset.show)];
+      if(mate&&mate.reply){
+        // A bot from an earlier visit can be opened before anything was said this time.
+        backToNow();
+        if(!R){R=newRun('');R.running=false;R.sent=true;R.line='Here is what '+mate.name+' brought back.';s=2;}
+        var was=mate.open;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.seen=true;R.top=true;draw();
+      }
+      return;
+    }
+    if(!R||seeing())return;
     if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
     else if(b.dataset.next)direct(R.next);
     else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
-    else if(b.dataset.crew||b.dataset.show){
-      var mate=crew[+(b.dataset.crew||b.dataset.show)];
-      if(mate&&mate.reply){var was=mate.open;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.seen=true;R.top=true;draw();}
-    }
     else if(b.dataset.hide){crew.forEach(function(x){x.open=false;});draw();}
     else if(b.dataset.manage){
       var left=crew[+b.dataset.manage];
@@ -1160,14 +1377,18 @@ function build(){
   host.addEventListener('keydown',function(e){
     e.stopPropagation();
     var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
+    var turn=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('.turn[data-view]');
     if(it){e.preventDefault();focus(it.dataset.item,true);}
-    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if(s===2&&R&&R.focus)focus('',true);else leave();}
+    else if(turn){e.preventDefault();turn.click();}
+    // Left and right step through the earlier views when nothing is being typed.
+    else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!$('box').value&&!ink.on&&!(e.target&&e.target.closest&&e.target.closest('.site'))&&stops().length){e.preventDefault();step(e.key==='ArrowLeft'?-1:1);}
+    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if(findOn||found.length){$('box').value='';findSet(false);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
   });
 }
 function enter(){
   if(open)return;
   if(!host)build();
-  open=true;s=1;R=null;conv='';seq=0;drive=false;mindSet({});
+  open=true;s=1;R=null;conv='';seq=0;drive=false;past=[];view=-1;peek=null;drawerOn=false;findOn=false;found=[];mindSet({});
   host.classList.remove('driving');$('back').hidden=true;
   host.hidden=false;hold(false);draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();

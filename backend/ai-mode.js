@@ -73,6 +73,8 @@ function turnNote(hub) {
     'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +
     'ready for you.", "You asked for X, so it is better that I do Y first." Plain words, no lists, no names of tools.\n' +
     '- A page you open in the browser shows in a window on the stage, so the person watches you use it.\n' +
+    '- A page the person has open in the browser is theirs. Never move it to another address and never ' +
+    'close it: do your own browser work in a new tab, and leave theirs where they left it.\n' +
     '- Your canvas. When cards are not the best way to show the result (a week, a plan, a comparison, a ' +
     'chart, a board, a map of steps), draw it yourself: write a block that opens with a line "```canvas" ' +
     'and closes with a line "```", holding HTML and CSS of your own. The stage shows it large, in place of ' +
