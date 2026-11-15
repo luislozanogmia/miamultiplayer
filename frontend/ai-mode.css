@@ -122,7 +122,12 @@ div.bot{cursor:default;opacity:1}
 .intent .send{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:var(--accent);color:var(--on-accent);cursor:pointer;display:grid;place-items:center}
 .intent .send:hover{background:var(--accent-hover)}
 .intent .mic{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
-.intent .mic:hover{color:var(--ink)}
+.intent .mic:hover,.intent .mode:hover{color:var(--ink)}
+/* the sign at the left of the bar: a keyboard while it takes a direction, a lens while it searches */
+.intent .mode{appearance:none;flex:none;width:28px;height:32px;margin-left:-8px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.intent .mode .m-find,.intent .mode.find .m-type{display:none}
+.intent .mode.find .m-find{display:block}
+.intent .mode.find{color:var(--accent-text)}
 /* The pen: marks drawn over the stage, numbered in the order drawn. */
 .ink{position:absolute;inset:var(--top) 0 var(--bottom) 0;z-index:2;cursor:crosshair;touch-action:none}
 .ink svg{display:block;width:100%;height:100%}
@@ -179,7 +184,7 @@ div.bot{cursor:default;opacity:1}
 .card[data-item]{cursor:pointer;transition:border-color .15s ease,transform .15s ease}
 .card[data-item]:hover{border-color:var(--border-strong);transform:translateY(-2px)}
 .card[data-item]:focus-visible,.thumb:focus-visible,.front-x:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
-.card.page .pic img,.thumb .pic img[data-page]{object-position:top}
+.card.page .pic img,.thumb .pic img[data-page],.pic img[data-shot]{object-position:top}
 .sm{display:grid;grid-template-columns:104px minmax(0,1fr);gap:16px;align-items:start}
 .shelf{display:flex;flex-direction:column;gap:10px;min-width:0;perspective:700px}
 .shelf:empty{display:none}
@@ -197,6 +202,10 @@ div.bot{cursor:default;opacity:1}
 .front.card .card-t{padding:16px 18px 18px}
 .front.card .card-t b{font-size:19px}
 .front.card .card-t p{font-size:15px}
+/* a card about a site Mia has not been in yet carries the site's name */
+.pic{position:relative}
+.site-n{position:absolute;inset:0;display:grid;place-items:center;padding:8px;text-align:center;font:500 13px/1.3 var(--mono);color:var(--soft);overflow-wrap:anywhere}
+.thumb .site-n{font-size:9px;padding:4px}
 /* a card about a bot shows that bot, not a photo */
 .pic img.mote{object-fit:contain;padding:8% 0;box-sizing:border-box}
 .front.shot{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px)}
@@ -351,6 +360,8 @@ a.file:hover{border-color:var(--accent)}
 .log header{flex:none;display:flex;align-items:center;justify-content:space-between;padding:10px 8px 8px 14px;font-size:12px;color:var(--soft)}
 .log header button{appearance:none;border:0;background:none;color:var(--muted);cursor:pointer;width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
 .log header button:hover{color:var(--ink)}
+.log header b{margin-right:auto}
+.log header .new{width:auto;height:26px;padding:0 10px;border:1px solid var(--rule-strong);border-radius:999px;font:500 11px/1 var(--sans);color:var(--soft)}
 .log-l{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding:0 6px 10px}
 .turn{padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:2px}
 .turn[data-view]{cursor:pointer}

@@ -59,6 +59,8 @@ function turnNote(hub) {
     'Never the kind of thing you made or opened (brief, report, page, tab, file, browser), and leave the ' +
     'Image line out when no photo would show the subject. A card about one of the bots takes "Bot: <that ' +
     'bot\'s exact name>" in place of the Image line, one bot per card, and the stage shows the bot itself. ' +
+    'A card about a website, a company with a site, or a profile page takes "Page: <its full web address>" in ' +
+    'place of the Image line, and the stage shows that page as you saw it in the browser. ' +
     'When there is more worth keeping than fits, ' +
     'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
@@ -144,7 +146,8 @@ function handoffText(brief) {
     '[From Mia, in AI mode] The person gave Mia this job and she passed it to you. Do it for real, in this chat. ' +
     'Begin your reply with a report of under 100 words: what you did, what you found, and what needs the person. ' +
     'Then the result. When it is a set of things to look at or pick from, write each one as three lines: ' +
-    '"Card: <a title, six words at most>", "Image: <one to three plain words to picture it>", ' +
+    '"Card: <a title, six words at most>", "Image: <one to three plain words to picture it>" (or, for a ' +
+    'website or a profile page, "Page: <its full web address>" in its place), ' +
     '"Text: <one or two short sentences>". Nine cards at most. Before anything that reaches a real person ' +
     '(a message, a connection request, a post, a payment), stop and ask first.'
   );

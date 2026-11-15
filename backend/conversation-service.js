@@ -324,7 +324,9 @@ function createConversationService({ repository, authorization, realtime = null,
   // AI mode has no chat on screen, so its run with Mia lives in a chat of its
   // own: one per person and place (Solo, or a company). It is kept and listed
   // with the person's other chats, so what was said there can be read later.
-  function openAiModeConversation({ companyId, principal, createdAt, teamWorkspace } = {}) {
+  // "New chat" there starts another one; the earlier ones stay in the list,
+  // and coming back opens the newest.
+  function openAiModeConversation({ companyId, principal, createdAt, teamWorkspace, fresh = false } = {}) {
     const normalizedCompanyId = required(companyId, 'companyId');
     const owner = {
       principalId: required(principal && principal.principalId, 'principalId'),
@@ -332,9 +334,10 @@ function createConversationService({ repository, authorization, realtime = null,
       joinedAt: createdAt,
     };
     const place = teamWorkspace || '';
-    const kept = repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })
-      .find((earlier) => isAiModeConversation(earlier) && earlier.createdBy === owner.principalId
-        && ((earlier.metadata || {}).teamWorkspace || '') === place);
+    const kept = fresh ? null : repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })
+      .filter((earlier) => isAiModeConversation(earlier) && earlier.createdBy === owner.principalId
+        && ((earlier.metadata || {}).teamWorkspace || '') === place)
+      .sort((one, other) => String(other.createdAt).localeCompare(String(one.createdAt)))[0];
     // One kept from before this had a name of its own takes the name now.
     if (kept && kept.name !== 'AI mode') {
       repository.updateConversation({ companyId: normalizedCompanyId, id: kept.id, name: 'AI mode', updatedAt: kept.updatedAt || kept.createdAt });

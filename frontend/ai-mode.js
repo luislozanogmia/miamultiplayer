@@ -73,8 +73,8 @@ var MARKUP=
       '<div class="site-page" id="sitePage"></div>'+
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
+      '<button type="button" class="mode" id="find"><svg class="m-type" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="3.75" width="13" height="8.5" rx="2"/><path d="M4.5 6.8h.01M7 6.8h.01M9.5 6.8h.01M11.5 6.8h.01M5.5 9.6h5"/></svg><svg class="m-find" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></button>'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
-      '<button type="button" class="mic" id="find" aria-pressed="false" aria-label="Search your views, chats and artifacts" title="Search your views, chats and artifacts"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></button>'+
       '<button type="button" class="mic" id="pen" aria-pressed="false" aria-label="Mark on the screen" title="Draw on the screen to show Mia what you mean" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/><path d="M9.5 4l2.5 2.5"/></svg></button>'+
       '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
@@ -190,10 +190,11 @@ var MAX_CARDS=9,pics={};
 function readCards(body){
   var cards=[],rest=[],cur=null;
   String(body||'').split('\n').forEach(function(line){
-    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Bot|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
-    if(k==='card'){cur={title:str(v,80),image:'',bot:'',text:''};cards.push(cur);}
+    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Bot|Page|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
+    if(k==='card'){cur={title:str(v,80),image:'',bot:'',page:'',text:''};cards.push(cur);}
     else if(k==='image'&&cur)cur.image=str(v,60);
     else if(k==='bot'&&cur)cur.bot=str(v,60);
+    else if(k==='page'&&cur)cur.page=str(v,300);
     else if(k==='text'&&cur)cur.text=str(v,400);
     else rest.push(line);
   });
@@ -263,12 +264,28 @@ function botNamed(title){
   return hit;
 }
 // A card about a bot shows that bot; any other card shows the picture found for it.
+// A card about a site or a profile shows the page itself: the last picture of it from Mia's browser.
+// Pictures are kept by address while the stage is open; a card that names only the site takes any
+// page of that site. Until she has been there the card carries the site's name.
+var shots={},shotKeys=[],MAX_SHOTS=40;
+function shotKey(u){
+  try{var x=new URL(/^https?:\/\//i.test(u)?u:'https://'+u),h=x.hostname.replace(/^www\./,'').toLowerCase(),p=x.pathname.replace(/\/+$/,'');return h?{site:h,page:h+p,whole:!p}:null;}catch(e){return null;}
+}
+function shotKeep(u,image){
+  var k=shotKey(u);if(!k)return;
+  [k.page,k.site].forEach(function(key){
+    if(!shots[key]){shotKeys.push(key);if(shotKeys.length>MAX_SHOTS)delete shots[shotKeys.shift()];}
+    shots[key]=image;
+  });
+}
+function shotOf(u){var k=shotKey(u);return k?shots[k.page]||(k.whole&&shots[k.site])||'':'';}
 function picHtml(v){
   if(v.bot)return '<img alt="" class="mote" '+moteArt(v.bot)+'>';
-  return v.src?'<img alt=""'+(v.mark||'')+' src="'+esc(v.src)+'">':'';
+  if(v.src)return '<img alt=""'+(v.mark||'')+' src="'+esc(v.src)+'">';
+  return v.site?'<span class="site-n">'+esc(v.site)+'</span>':'';
 }
 function itemView(it){
-  if(it.key!=='page'){var bot=it.card.bot||botNamed(it.card.title);return {title:it.card.title,text:it.card.text,bot:bot,src:bot?'':pic(it.card.image),mark:''};}
+  if(it.key!=='page'){var bot=it.card.bot||botNamed(it.card.title),shot=bot?'':shotOf(it.card.page);return {title:it.card.title,text:it.card.text,bot:bot,src:bot?'':shot||pic(it.card.image),mark:shot?' data-shot':'',site:it.card.page?siteName(/^https?:\/\//i.test(it.card.page)?it.card.page:'https://'+it.card.page):''};}
   var p=R.page||{};
   return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
 }
@@ -436,7 +453,7 @@ function logDraw(){
   box.hidden=!drawerOn;
   if(!drawerOn){box._h='';return;}
   var seen=seeing();
-  var h='<header><b>You and Mia</b><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
+  var h='<header><b>You and Mia</b><button class="new" data-new="1">New chat</button><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
     var to=r===R?-1:r.body?i:null;
     return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>You</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
   }).join('')+'</div>';
@@ -448,10 +465,13 @@ function logDraw(){
 }
 // Searching from the bar: Mia's earlier views, the person's chats and their artifacts. Picking one
 // shows it on the stage and sends nothing; the last row hands the typed words to Mia.
-function findMode(){return talkOn||findOn;}
+// The bar does one of two things: it takes a direction for Mia, or it searches. The small sign at its
+// left shows which; Tab in the box, or a click on the sign, changes it. Hands-free starts on search.
+function findMode(){return findOn;}
 function findSet(on){
   findOn=!!on;found=[];
-  $('find').classList.toggle('on',findMode());$('find').setAttribute('aria-pressed',findMode()?'true':'false');$('find').hidden=talkOn;
+  var tip=findOn?'Searching your views, chats and artifacts. Press Tab to type to Mia':'Typing to Mia. Press Tab to search';
+  $('find').classList.toggle('find',findOn);$('find').title=tip;$('find').setAttribute('aria-label',tip);
   findDraw();if(!earState)$('box').placeholder=boxHint();
 }
 function findRun(){
@@ -472,7 +492,7 @@ function findDraw(){
 }
 function findPick(r){
   if(!r)return;
-  $('box').value='';findSet(false);
+  $('box').value='';findSet(talkOn);
   if(r.kind==='tell'){direct(r.label.slice(0,2000));return;}
   if(r.kind==='view'){peek=null;view=r.i;draw();$('cv').scrollTop=0;return;}
   if(r.kind==='artifact'){
@@ -637,14 +657,24 @@ function followWorker(w){
   if(w.state==='step'){bot.running=true;bot.line=str(w.line,40)||'Working';}
   else if(w.state==='done'){bot.running=false;bot.failed=w.failed===true;}
 }
+// "New chat" in the drawer: the chat so far stays with the person's other chats, and the stage
+// starts over on a new one of the same kind.
+function newChat(){
+  if(R&&R.running)halt('');
+  var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
+  hush();inkSet(false);seedId++;
+  s=1;R=null;seq=0;drive=false;past=[];view=-1;peek=null;drawerOn=false;found=[];mindSet({});
+  host.classList.remove('driving');$('back').hidden=true;
+  draw();openChat(true).catch(function(){});$('box').focus();
+}
 function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];}
 // Mia's chat for this visit: made once, then every direction goes into it.
-function openChat(){
+function openChat(fresh){
   if(conv)return Promise.resolve(conv);
-  var company=team();
-  function plain(){return call('/api/conversations/ai-mode',{});}
+  var company=team(),more=fresh?{fresh:true}:{};
+  function plain(){return call('/api/conversations/ai-mode',more);}
   // A company that cannot be confirmed right now still gets AI mode, working as in Solo.
-  if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',{teamWorkspace:company},token);})
+  if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',Object.assign({teamWorkspace:company},more),token);})
     .then(function(r){return r.status===403?plain():r;},plain)
     :plain()).then(function(r){
     var id=r.data.conversation&&r.data.conversation.id;
@@ -827,11 +857,11 @@ function direct(t,shown){
 }
 function halt(reason){
   if(!R||!conv)return Promise.resolve();
-  var my=R;
-  return call(chat(conv,'/dispatches/active')).then(function(r){
+  var my=R,at=conv;
+  return call(chat(at,'/dispatches/active')).then(function(r){
     var ids=(Array.isArray(r.data.dispatches)?r.data.dispatches:[]).map(function(d){return d&&d.id;}).filter(Boolean);
     if(!ids.length&&my.dispatch)ids=[my.dispatch];
-    return Promise.all(ids.map(function(id){return call(chat(conv,'/dispatches/'+encodeURIComponent(id)+'/stop'),reason?{reason:reason,page:''}:{});}));
+    return Promise.all(ids.map(function(id){return call(chat(at,'/dispatches/'+encodeURIComponent(id)+'/stop'),reason?{reason:reason,page:''}:{});}));
   }).then(function(){
     if(my!==R)return;
     ended();R.body=R.body||R.draft;R.draft='';R.line=reason?'You have the wheel. I stopped where I was.':'Stopped.';draw();
@@ -1011,13 +1041,13 @@ function pagePoll(){
     var p=r&&r.data.page;
     if(first){if(r&&r.status<400)pageAt=p&&+p.at>0?+p.at:0;return;}
     if(!p||my!==R||typeof p.image!=='string'||p.image.indexOf('data:image/jpeg;base64,')!==0||!(+p.at>pageAt))return;
-    pageAt=+p.at;
+    pageAt=+p.at;shotKeep(p.url,p.image);
     if(pageAt<=R.pageBase)return;
     var was=R.page,im=$('cv').querySelectorAll('img[data-page]');
     R.page={url:str(p.url,300),title:str(p.title,120),image:p.image};
     // The first picture brings the page to the front while she works; later ones only change the picture.
     if(!was&&R.running&&!R.picked&&!R.focus)R.focus='page';
-    if(was&&im.length&&was.url===R.page.url&&was.title===R.page.title)im.forEach(function(i){i.src=p.image;});else redraw();
+    if(was&&im.length&&was.url===R.page.url&&was.title===R.page.title){im.forEach(function(i){i.src=p.image;});if($('cv').querySelector('.site-n'))redraw();}else redraw();
   },function(){}).then(function(){if(open&&!pageTimer)pageTimer=setTimeout(pagePoll,1500);});
 }
 (function(){
@@ -1204,12 +1234,12 @@ function talkMute(){
   talkShow();earShow('');
 }
 function talkStop(note){
-  talkOn=false;talkMuted=false;if(talk)talk.stop();
+  talkOn=false;talkMuted=false;findOn=false;if(talk)talk.stop();
   if(host){talkShow();earShow('',note);}
 }
 function talkStart(){
   var parts=earParts();if(!parts||talkOn)return;
-  earStop();talkOn=true;talkMuted=false;talkShow();
+  earStop();talkOn=true;talkMuted=false;findOn=true;talkShow();
   if(!talk)talk=parts.D.createListener({media:parts.media,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe,
     loud:function(){return busy;},
     onStart:function(){hush();earShow('on','I am listening\u2026');},
@@ -1310,12 +1340,17 @@ function build(){
     var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));
   };
   $('box').addEventListener('input',function(){if(findMode())findRun();});
+  $('box').addEventListener('keydown',function(e){
+    if(e.key!=='Tab'||e.shiftKey||e.altKey||e.ctrlKey||e.metaKey||ink.on)return;
+    e.preventDefault();findSet(!findOn);if(findOn)findRun();
+  });
   $('find').onclick=function(){findSet(!findOn);if(findOn)findRun();$('box').focus();};
   $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
   $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
   $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
   $('log').onclick=function(e){
     if(e.target.closest('[data-x]')){drawerOn=false;logDraw();return;}
+    if(e.target.closest('[data-new]')){newChat();return;}
     var turn=e.target.closest('[data-view]');
     if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
   };
@@ -1390,7 +1425,7 @@ function build(){
     else if(turn){e.preventDefault();turn.click();}
     // Left and right step through the earlier views when nothing is being typed.
     else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!$('box').value&&!ink.on&&!(e.target&&e.target.closest&&e.target.closest('.site'))&&stops().length){e.preventDefault();step(e.key==='ArrowLeft'?-1:1);}
-    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if(findOn||found.length){$('box').value='';findSet(false);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
+    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if((findOn&&(!talkOn||$('box').value))||found.length){$('box').value='';findSet(talkOn);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
   });
 }
 function enter(){

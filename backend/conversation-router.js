@@ -179,7 +179,7 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
         || typeof authorizeTeamWorkspace !== 'function' || !(await authorizeTeamWorkspace(req, teamWorkspace)))) {
       fail('FORBIDDEN', 'company membership is required for AI mode in a company');
     }
-    res.status(201).json({ conversation: service.openAiModeConversation({ companyId, principal, teamWorkspace }) });
+    res.status(201).json({ conversation: service.openAiModeConversation({ companyId, principal, teamWorkspace, fresh: (req.body || {}).fresh === true }) });
   }));
 
   router.get('/conversations/:conversationId', handle((req, res) => {

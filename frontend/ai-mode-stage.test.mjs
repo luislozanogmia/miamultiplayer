@@ -28,3 +28,28 @@ test('the drawer and the stage take their clicks back from the strip that moves 
   const rule = css.match(/([^{}]*)\{-webkit-app-region:no-drag\}/g).join(' ');
   for (const part of ['.log', '.log-tab', '.cv', '.ink']) assert.ok(rule.includes(part), part);
 });
+
+test('a card that names a page shows the kept picture of that page, or the name of the site', () => {
+  const at = js.indexOf('var shots={}');
+  const run = new Function(js.slice(at, js.indexOf('function picHtml(v){')) + 'return {shotKeep:shotKeep,shotOf:shotOf};');
+  const { shotKeep, shotOf } = run();
+  shotKeep('https://www.example.com/in/someone/', 'one');
+  assert.equal(shotOf('example.com/in/someone'), 'one');
+  assert.equal(shotOf('https://example.com'), 'one');
+  // Another page of the same site is not this page.
+  assert.equal(shotOf('https://example.com/in/other'), '');
+  assert.equal(shotOf('https://other.example'), '');
+  assert.match(js, /\(Card\|Image\|Bot\|Page\|Text\)/);
+  assert.match(js, /class="site-n"/);
+});
+
+test('"New chat" in the drawer starts another of the app\'s own chats and clears the stage', () => {
+  assert.match(js, /<button class="new" data-new="1">New chat<\/button>/);
+  assert.match(js, /if\(e\.target\.closest\('\[data-new\]'\)\)\{newChat\(\);return;\}/);
+  const fresh = js.slice(js.indexOf('function newChat(){'), js.indexOf('function closeBots(){'));
+  assert.match(fresh, /if\(R&&R\.running\)halt\(''\);/);
+  assert.match(fresh, /conv='';opening=null;/);
+  assert.match(fresh, /R=null;[^\n]*past=\[\];/);
+  assert.match(fresh, /openChat\(true\)/);
+  assert.match(js, /more=fresh\?\{fresh:true\}:\{\}/);
+});
