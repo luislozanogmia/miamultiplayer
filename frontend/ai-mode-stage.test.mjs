@@ -57,6 +57,14 @@ test('a card about a site takes its picture from an open tab of that site and op
   assert.match(js, /action:'spaceFrames',ids:hit\.map/);
 });
 
+test('a card about a site nobody has open is pictured out of sight, and a failed picture is tried again later', () => {
+  assert.match(js, /web\.command\(\{action:'pagePicture',url:w\.url,width:640,workspace:space\}\)/);
+  // An open tab that has not been asked yet goes first; a page that gave nothing waits a minute.
+  assert.match(js, /!\(now-tried\['u'\+x\.page\]<60000\)&&!all\.some\(function\(t\)\{return !t\.private&&!tried\[t\.id\]/);
+  // The workspace the browser shows is asked for at the start, not only heard on a change.
+  assert.match(js, /web\.onState\(state\);[^]*?web\.command\(\{action:'state'\}\)\.then\(state,/);
+});
+
 test('"New chat" in the drawer starts another of the app\'s own chats and clears the stage', () => {
   assert.match(js, /<button class="new" data-new="1">New chat<\/button>/);
   assert.match(js, /if\(e\.target\.closest\('\[data-new\]'\)\)\{newChat\(\);return;\}/);

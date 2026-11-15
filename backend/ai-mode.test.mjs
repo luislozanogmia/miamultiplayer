@@ -285,3 +285,7 @@ test('a model Mia names is matched to one the person has connected, or to none',
   assert.equal(matchModel('', providers), null);
   assert.equal(matchModel('opus', null), null);
 });
+
+test('Mia is told to close the browser tabs she opened and no longer needs', () => {
+  assert.match(turnNote(), /Close what you are done with\. When a piece of browser work is finished, close the tabs you opened /);
+});

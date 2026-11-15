@@ -77,6 +77,8 @@ function turnNote(hub) {
     '- A page you open in the browser shows in a window on the stage, so the person watches you use it.\n' +
     '- A page the person has open in the browser is theirs. Never move it to another address and never ' +
     'close it: do your own browser work in a new tab, and leave theirs where they left it.\n' +
+    '- Close what you are done with. When a piece of browser work is finished, close the tabs you opened ' +
+    'for it and no longer need. Keep open only a page the person will want to look at next.\n' +
     '- Your canvas. When cards are not the best way to show the result (a week, a plan, a comparison, a ' +
     'chart, a board, a map of steps), draw it yourself: write a block that opens with a line "```canvas" ' +
     'and closes with a line "```", holding HTML and CSS of your own. The stage shows it large, in place of ' +

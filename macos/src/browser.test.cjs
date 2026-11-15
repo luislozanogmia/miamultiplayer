@@ -3835,3 +3835,11 @@ test("each workspace keeps its own split view while Mia runs", () => {
     h.window.emit("closed");
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("only a web page can be pictured out of sight, and picturing opens no tab", async () => {
+  const h = harness();
+  for (const url of ["file:///etc/hosts", "javascript:alert(1)", "about:blank", "", null]) {
+    assert.equal((await h.command("pagePicture", { url })).error, "Only web pages can be pictured.");
+  }
+  assert.equal(h.views.length, 0);
+});

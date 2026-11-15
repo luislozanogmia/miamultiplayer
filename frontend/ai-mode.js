@@ -363,6 +363,7 @@ function resultHtml(){
   var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
   // With a canvas the page waits behind the Browser button unless the person brought it forward.
   shotWants=read.cards.map(function(c){return c.page&&!c.bot&&!botNamed(c.title)&&!shotOf(c.page)?shotKey(c.page):null;}).filter(Boolean);
+  shotWants.forEach(function(w){w.url='https://'+w.page;});
   if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
@@ -1063,7 +1064,7 @@ function pagePoll(){
 (function(){
   if(!web||!web.onState||!web.command)return;
   var tab=null,acting=false,seen=0,want=false,busy=false,space='solo',all=[],tried={},looking=false;
-  web.onState(function(st){
+  function state(st){
     // The browser only hands out pictures for the workspace it is showing.
     if(st&&typeof st.workspace==='string'&&st.workspace)space=st.workspace;
     var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],hers=tabs.filter(function(t){return t.botActivity;})[0];
@@ -1071,11 +1072,24 @@ function pagePoll(){
     if(hers){tab=hers;acting=true;return;}
     if(acting){acting=false;seen=Date.now();}
     if(tab)tab=tabs.filter(function(t){return t.id===tab.id;})[0]||null;
-  });
+  }
+  web.onState(state);
+  // The browser tells of changes only; what it shows now is asked for once.
+  web.command({action:'state'}).then(state,function(){});
   // A card's site that is open in the browser, whoever opened it, gives the card its picture.
   setInterval(function(){
     if(looking||!open||!shotWants.length)return;
     var now=Date.now(),hit=all.filter(function(t){return !t.private&&!t.loading&&t.url&&shotWanted(t.url)&&!(now-tried[t.id]<15000);}).slice(0,4);
+    // A site nobody has open, or whose open tab gave no picture, is loaded out of sight, one at a
+    // time, and pictured; no tab is opened.
+    var w=shotWants.filter(function(x){return !(now-tried['u'+x.page]<60000)&&!all.some(function(t){return !t.private&&!tried[t.id]&&t.url&&shotKey(t.url)&&shotKey(t.url).page===x.page;});})[0];
+    if(w){
+      looking=true;tried['u'+w.page]=now;
+      web.command({action:'pagePicture',url:w.url,width:640,workspace:space}).then(function(r){
+        if(r&&r.picture&&r.picture.dataUrl){shotKeep(w.url,r.picture.dataUrl);redraw();}
+      },function(){}).then(function(){looking=false;});
+      return;
+    }
     if(!hit.length)return;
     looking=true;hit.forEach(function(t){tried[t.id]=now;});
     web.command({action:'spaceFrames',ids:hit.map(function(t){return t.id;}),width:640,workspace:space}).then(function(r){

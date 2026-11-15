@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
+const { WebContentsView, BrowserWindow, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
@@ -1698,6 +1698,50 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     if (wait === "networkidle") await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  let picturing = Promise.resolve();
+  function pagePicture(address, width) {
+    const url = typeof address === "string" ? address.trim() : "";
+    if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be pictured." };
+    // One page at a time, so a row of cards never loads a row of sites at once.
+    const next = picturing.then(async () => {
+      // The page is drawn off screen: it is never part of the window, so nobody sees it.
+      const page = new BrowserWindow({ show: false, width: 1280, height: 800, webPreferences: {
+        session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
+        webSecurity: true, allowRunningInsecureContent: false, offscreen: true,
+      } });
+      const wc = page.webContents;
+      let timer, drawn = null;
+      // A link that turns out to be a file is dropped, never saved or asked about.
+      const noDownload = (event, _item, contents) => { if (contents === wc) event.preventDefault(); };
+      try {
+        profile.on("will-download", noDownload);
+        wc.on("paint", (_event, _dirty, image) => { drawn = image; });
+        wc.setAudioMuted(true);
+        wc.setWindowOpenHandler(() => ({ action: "deny" }));
+        const image = await Promise.race([
+          (async () => {
+            await wc.loadURL(url);
+            // A moment for the page to draw what it loaded.
+            await new Promise(resolve => setTimeout(resolve, 1200));
+            return drawn && !drawn.isEmpty() ? drawn : wc.capturePage();
+          })(),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 20000); }),
+        ]);
+        if (!image || image.isEmpty()) return { picture: null };
+        const small = image.resize({ width: Math.min(width, image.getSize().width), quality: "good" });
+        return { picture: { url, dataUrl: `data:image/jpeg;base64,${small.toJPEG(55).toString("base64")}` } };
+      } catch (_) {
+        return { picture: null };
+      } finally {
+        clearTimeout(timer);
+        profile.removeListener("will-download", noDownload);
+        try { if (!page.isDestroyed()) page.destroy(); } catch (_) { /* already gone */ }
+      }
+    });
+    picturing = next.catch(() => {});
+    return next;
   }
 
   async function captureHiddenPage(tab) {
@@ -3903,6 +3947,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
           } catch (_) { return null; }
         })).then(frames => ({ frames: frames.filter(Boolean) }));
       }
+      // A picture of a web page that is not open in any tab, for a card about
+      // that site. The page loads out of sight in a view of its own, with the
+      // browser's sign-ins, and is gone once pictured: no tab, no history.
+      if (command.action === "pagePicture") return pagePicture(command.url, boundedInteger(command.width, 640, 120, 640));
       if (command.action === "spacePointers") {
         const pointers = {};
         const fallback = active()?.view.getBounds();
