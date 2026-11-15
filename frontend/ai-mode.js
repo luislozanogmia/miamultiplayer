@@ -196,8 +196,8 @@ function readCanvas(text){
   var m=/(^|\n)```canvas[^\n]*\n([\s\S]*?)(\n```[^\n]*(?=\n|$)|$)/i.exec(text);
   if(!m)return {html:'',rest:text};
   var html=m[2].slice(0,200000);
-  // While she is still writing it, only whole tags are drawn.
-  if(!m[3])html=html.slice(0,html.lastIndexOf('>')+1);
+  // While she is still writing it nothing half-made is drawn; the stage says it is being built.
+  if(!m[3])return {html:'',building:html.length,rest:text.slice(0,m.index).trim()};
   return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
 }
 function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.draft:R.body);}
@@ -299,6 +299,13 @@ function miaLine(){
   // With the sound off her question has to be read.
   return !R.running&&R.ask&&muted?R.ask:R.line;
 }
+// Her view being made: one calm panel that says where she is, never the half-written page.
+// The motion is timed off the clock, so a redraw does not start it over.
+function buildingHtml(n){
+  var step=n<1500?'Laying out the structure':n<6000?'Filling in the details':'Adding the finishing touches';
+  return '<div class="canvas building" style="--t:-'+(Date.now()%2400)+'ms" role="status"><div class="b-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>'+
+    '<div class="b-say"><b>Building your view</b><span>'+step+'\u2026</span><small>I\'ve got this. It shows here the moment it is ready.</small></div></div>';
+}
 function resultHtml(){
   // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
@@ -312,7 +319,7 @@ function resultHtml(){
   if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
-    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
+    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
     (read.rest?'<div class="panel result'+(R.running&&!shown?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){

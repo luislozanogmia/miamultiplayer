@@ -304,3 +304,12 @@ a.file:hover{border-color:var(--accent)}
 .phone-bar li small{font:11px var(--mono);color:var(--faint)}
 .phone-bar .btn{align-self:flex-start}
 .phone-bar li .btn{align-self:auto;padding:0 8px}
+
+.building{position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--rule,rgba(255,255,255,.16));border-radius:14px;background:rgba(255,255,255,.04)}
+.b-lines{position:absolute;inset:28px;display:flex;flex-direction:column;gap:16px;opacity:.5}
+.b-lines i{display:block;height:14px;border-radius:7px;background:linear-gradient(90deg,rgba(255,255,255,.06) 25%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.06) 75%);background-size:200% 100%;animation:b-shine 2.4s linear infinite;animation-delay:var(--t)}
+.b-lines i:nth-child(1){width:42%;height:22px}.b-lines i:nth-child(2){width:88%}.b-lines i:nth-child(3){width:76%}.b-lines i:nth-child(4){width:82%}.b-lines i:nth-child(5){width:54%}
+.b-say{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:20px 28px;border-radius:14px;background:rgba(11,10,9,.72);backdrop-filter:blur(6px)}
+.b-say b{font-size:20px;font-weight:500}.b-say span{color:var(--accent)}.b-say small{opacity:.62}
+@keyframes b-shine{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.b-lines i{animation:none}}
