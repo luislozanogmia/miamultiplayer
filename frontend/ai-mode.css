@@ -208,6 +208,11 @@ div.bot{cursor:default;opacity:1}
 .thumb .site-n{font-size:9px;padding:4px}
 /* a card about a bot shows that bot, not a photo */
 .pic img.mote{object-fit:contain;padding:8% 0;box-sizing:border-box}
+/* A card about a bot is a small one: the bot stands beside its name, not over it. */
+.card.of-bot{flex-direction:row;align-items:flex-start;gap:12px;padding:12px 14px}
+.card.of-bot .pic{flex:none;width:52px;aspect-ratio:1;border-radius:12px;overflow:hidden}
+.card.of-bot .pic img.mote{padding:10%}
+.card.of-bot .card-t{padding:0}
 .front.shot{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px)}
 .front.shot img{display:block;width:100%;height:auto}
 .front.shot .hint{padding:60px 18px;text-align:center}
