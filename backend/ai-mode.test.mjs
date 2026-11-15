@@ -236,6 +236,9 @@ test('with bots, the turn note makes Mia the router and lists the bots, the mode
   assert.match(note, /What the person says about which model to use always wins/);
   assert.match(note, /- Scout, finished\. Job: Find ten prospects Report: Found ten\. Two need a look\./);
   assert.match(note, /- Writer, still working\. Job: Draft the note$/);
+  // When a bot is back Mia can get the turn herself, and comes back only with what needs the person.
+  assert.match(note, /starts with "\[On your own\]": nobody asked yet/);
+  assert.match(note, /Start no new work nobody asked for\./);
 });
 
 test('without bots the turn note is as before, with no router part', () => {
@@ -288,4 +291,11 @@ test('a model Mia names is matched to one the person has connected, or to none',
 
 test('Mia is told to close the browser tabs she opened and no longer needs', () => {
   assert.match(turnNote(), /Close what you are done with\. When a piece of browser work is finished, close the tabs you opened /);
+});
+
+test('the turn note tells Mia to show decisions as a deck and act on the answers', () => {
+  const note = turnNote();
+  assert.match(note, /"Decision: <what to settle, ten words at most>"/);
+  assert.match(note, /Approve, Not approve, Keep working or Show me more/);
+  assert.match(note, /Then act on every answer and say what you did\./);
 });

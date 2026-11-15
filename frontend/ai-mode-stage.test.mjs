@@ -39,7 +39,7 @@ test('a card that names a page shows the kept picture of that page, or the name 
   // Another page of the same site is not this page.
   assert.equal(shotOf('https://example.com/in/other'), '');
   assert.equal(shotOf('https://other.example'), '');
-  assert.match(js, /\(Card\|Image\|Bot\|Page\|Text\)/);
+  assert.match(js, /\(Card\|Decision\|Image\|Bot\|Page\|Text\)/);
   assert.match(js, /class="site-n"/);
 });
 
@@ -104,4 +104,39 @@ test('Mia\'s voice has a mute of its own, apart from the sound and from the pers
   assert.match(js, /R\.ask&&\(muted\|\|quiet\)\?R\.ask:R\.line/, 'a question she cannot say is written');
   assert.doesNotMatch(js.slice(js.indexOf('function quietSet'), js.indexOf('function hush')), /talk\.stop|master/, 'it leaves the mic and the other sounds alone');
   assert.match(css, /\.ears:has\(#earsMute\.on\) i\{/, 'only a muted mic stops the listening dot');
+});
+
+test('a website card picked on the stage shows the live page in the card, with no further click', () => {
+  assert.match(js, /if\(siteLive\(it\.key\)\)return '<article class="front card on-site"><div class="pic" id="frontPage"><\/div>/);
+  assert.match(js, /site\.card=url\?R\.focus:'';\s*if\(url\)\{site\.open=true;site\.wide=false;siteShow\(url\);\}/);
+  assert.match(js, /function siteLive\(key\)\{return !R\.past&&!!pane\(\)&&site\.open&&!!site\.card&&site\.card===key&&R\.focus===key;\}/);
+  assert.match(css, /\.front\.card\.on-site \.pic\{aspect-ratio:auto;height:min\(58vh,540px\)\}/);
+});
+
+test('decisions come as a deck gone through one at a time, and the answers go to Mia together', () => {
+  assert.match(js, /var DECIDE=\[\['yes','Approve'\],\['no','Not approve'\],\['work','Keep working'\],\['more','Show me more'\]\];/);
+  assert.match(js, /function isDeck\(items\)\{return items\.some\(function\(it\)\{return it\.key!=='page'&&it\.card\.decide;\}\);\}/);
+  assert.match(js, /if\(b\.dataset\.pick\)\{deckPick\(b\.dataset\.of,b\.dataset\.pick\);return;\}/);
+  assert.match(js, /if\(b\.dataset\.decided\)\{deckSend\(\);return;\}/);
+  const send = js.slice(js.indexOf('function deckSend('), js.indexOf('function deckSend(') + 1400);
+  assert.match(send, /My answers to the decisions you showed me:/);
+  assert.match(send, /direct\(/);
+  // Answers already sent stay on the deck and can no longer be changed.
+  assert.match(send, /R\.decided=true/);
+  assert.match(css, /\.leaves\{[^}]*scroll-snap-type:x mandatory/);
+  assert.match(css, /\.leaf\.card \.pic img\{position:absolute;inset:0\}/);
+});
+
+test('Mia reviews a finished bot by herself, waits while the person is busy, and has a switch', () => {
+  const own = js.slice(js.indexOf('function ownReview('), js.indexOf('// A background worker Mia started'));
+  assert.match(own, /if\(!own\|\|!open\)return false;/);
+  assert.match(own, /var held=drive\|\|seeing\(\)\|\|ink\.on\|\|earState==='on'\|\|earState==='wait'\|\|\$\('box'\)\.value\.trim\(\)\|\|\(R&&\(R\.running\|\|R\.ask\|\|/);
+  assert.match(own, /if\(held\)\{ownTimer=setTimeout\(ownReview,4000\);return false;\}/);
+  // Each finished bot is reviewed once, and the turn says it was Mia's own.
+  assert.match(own, /back\.forEach\(function\(b\)\{b\.seen=true;\}\);\s*direct\('\[On your own\] '/);
+  assert.match(own, /R\.own=true;/);
+  assert.match(js, /if\(!bot\.seen&&!ownReview\(\)\)speak\(bot\.name\+' has finished\. Want to see it\?'\);/);
+  assert.match(js, /localStorage\.setItem\('miaAiModeOwn',own\?'1':'0'\)/);
+  assert.match(js, /id="own" aria-pressed="true"/);
+  assert.match(js, /R\.own\?'Mia, on her own'/);
 });

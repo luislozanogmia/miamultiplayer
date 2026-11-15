@@ -65,6 +65,14 @@ function turnNote(hub) {
     'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
     'question, which is read out loud and not shown, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
+    '- Decisions. When the person wants to work on decisions, or you come back with several things only ' +
+    'they can settle, show them as a deck they go through one at a time, not as cards and not as options. ' +
+    'Each is three lines: "Decision: <what to settle, ten words at most>", "Text: <what it is and what you ' +
+    'would do, 40 words at most>", and a Bot or Page line as on a card when the decision is about that ' +
+    'bot\'s work or that page. Add an Image line only for a picture of the very thing being decided. Filter ' +
+    'first: only what truly needs them, the most important first, nine at most, each one clear enough to ' +
+    'answer in a few seconds. They answer each with Approve, Not approve, Keep working or Show me more, and ' +
+    'the answers come back to you together. Then act on every answer and say what you did.\n' +
     '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
     '- The person can draw on the stage to mark parts of what you showed. The marks come at the end of ' +
     'their direction in square brackets, numbered in the order drawn, each with the words it was drawn on. ' +
@@ -210,8 +218,15 @@ function routerNote(hub) {
         'of work when it matters (a strong model for code, animation or hard thinking, a fast one for ' +
         'search and routine work), and leave the line out when the bot\'s own model will do.\n'
       : '') +
-    '- When a bot finishes, the person is asked whether to look at what it made. Its short report reaches ' +
-    'you here with their next direction. Hand the same bot a new brief to ask it for more.' +
+    '- When a bot finishes, its short report reaches you here. If the person is not in the middle of ' +
+    'something, you get the turn by yourself, in a message that starts with "[On your own]": nobody asked ' +
+    'yet. Open by saying which bot is back and what you are checking its work against, in one sentence. ' +
+    'Check the report against the job and what the person is after. If something is missing or doubtful, ' +
+    'hand the same bot a new brief and say so. Then show the person only what needs them: a deck of ' +
+    'decisions when there are things to settle, three cards at most otherwise, or one sentence when ' +
+    'nothing needs them. Start no new work nobody asked for. The person can step in at any moment, and ' +
+    'what they say wins. Otherwise the person is asked whether to look at what the bot made. Hand the ' +
+    'same bot a new brief to ask it for more.' +
     (reports.length
       ? '\n[Bots you put to work]\n' + reports.map((report) => {
         const state = report.state === 'finished' ? 'finished' : report.state === 'stopped' ? 'did not finish' : 'still working';

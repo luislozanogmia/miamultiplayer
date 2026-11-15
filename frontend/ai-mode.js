@@ -35,6 +35,7 @@ var MARKUP=
       '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
+      '<button class="btn ghost" id="own" aria-pressed="true" title="When a bot finishes, Mia checks its work first and shows you only what needs you">Mia reviews on her own</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="full" hidden>Full screen</button>'+
       '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
@@ -194,12 +195,12 @@ var MAX_CARDS=9,pics={};
 function readCards(body){
   var cards=[],rest=[],cur=null;
   String(body||'').split('\n').forEach(function(line){
-    var m=/^\s*(?:[-*]\s*)?\**(Card|Image|Bot|Page|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
-    if(k==='card'){cur={title:str(v,80),image:'',bot:'',page:'',text:''};cards.push(cur);}
+    var m=/^\s*(?:[-*]\s*)?\**(Card|Decision|Image|Bot|Page|Text)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
+    if(k==='card'||k==='decision'){cur={title:str(v,k==='card'?80:120),image:'',bot:'',page:'',text:'',decide:k==='decision'};cards.push(cur);}
     else if(k==='image'&&cur)cur.image=str(v,60);
     else if(k==='bot'&&cur)cur.bot=str(v,60);
     else if(k==='page'&&cur)cur.page=str(v,300);
-    else if(k==='text'&&cur)cur.text=str(v,400);
+    else if(k==='text'&&cur)cur.text=str(v,cur.decide?600:400);
     else rest.push(line);
   });
   return {cards:cards.filter(function(c){return c.title;}).slice(0,MAX_CARDS),rest:rest.join('\n').trim()};
@@ -300,9 +301,13 @@ function itemView(it){
   var p=R.page||{};
   return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
 }
+// A card's text is one plain paragraph; a link written in it is shown as its words, and one cut short is left out.
+function cardText(t){
+  return esc(String(t||'').replace(/\(?\[[^\]]*\]?\s*(\([^)]*)?$/,'').trim()).replace(/\[([^\]]+)\]\s*\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
 function cardHtml(it,i){
   var v=itemView(it);
-  return '<article class="card'+(it.key==='page'?' page':'')+(v.bot?' of-bot':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'"><div class="pic">'+picHtml(v)+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+  return '<article class="card'+(it.key==='page'?' page':'')+(v.bot?' of-bot':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'"><div class="pic">'+picHtml(v)+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+cardText(v.text)+'</p>':'')+'</div></article>';
 }
 function thumbHtml(it){
   var v=itemView(it);
@@ -314,9 +319,73 @@ function frontHtml(it){
   if(it.key==='page'&&pane())return '<div class="front live" id="frontPage"></div>';
   if(it.key==='page')return '<figure class="front shot">'+x+(v.src?'<img alt="The page Mia is in"'+v.mark+' src="'+esc(v.src)+'">':'<p class="hint">Opening the page.</p>')+
     '<figcaption><b>'+esc(v.title)+'</b><span>'+esc(v.text)+'</span><small>A picture of the page I am in. It follows what I do there.</small></figcaption></figure>';
-  // A card about a site opens that site: in Mia's browser on the stage, or in a tab without the app.
+  // A card about a site is that site: in the desktop app the page itself is there to use the moment
+  // the card comes to the front. Anywhere else it is a picture that opens the site in a tab.
+  if(siteLive(it.key))return '<article class="front card on-site"><div class="pic" id="frontPage"></div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+cardText(v.text)+'</p>':'')+'</div></article>';
   var pic=v.url&&v.site?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':'<div class="pic">'+picHtml(v)+'</div>';
-  return '<article class="front card'+(v.bot?' of-bot':'')+'">'+x+pic+'<div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+  return '<article class="front card'+(v.bot?' of-bot':'')+'">'+x+pic+'<div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+cardText(v.text)+'</p>':'')+'</div></article>';
+}
+// Decisions stand as a deck: one in front, its neighbours at the edges, gone through by a swipe, an
+// arrow or a dot. Each takes one answer, and the answers go back to Mia together.
+var DECIDE=[['yes','Approve'],['no','Not approve'],['work','Keep working'],['more','Show me more']];
+function isDeck(items){return items.some(function(it){return it.key!=='page'&&it.card.decide;});}
+function deckHtml(items,picks,locked){
+  var n=items.length,done=items.filter(function(it){return picks[it.key];}).length;
+  var arrow=function(by,d){return '<button class="deck-go" data-turn="'+by+'" aria-label="'+(by<0?'The one before':'The next one')+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+d+'"/></svg></button>';};
+  return '<div class="deck" id="deck"><div class="leaves" id="leaves">'+items.map(function(it,i){
+    var v=itemView(it),pick=picks[it.key]||'';
+    return '<article class="leaf card'+(v.bot?' of-bot':'')+(pick?' decided':'')+'">'+(v.bot||v.src?'<div class="pic">'+picHtml(v)+'</div>':'')+
+      '<div class="card-t"><small>'+(i+1)+' of '+n+'</small><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+cardText(v.text)+'</p>':'')+'</div>'+
+      (it.card.decide?'<div class="decide">'+DECIDE.map(function(d){
+        return '<button class="btn'+(pick===d[0]?' primary':'')+'" data-pick="'+d[0]+'" data-of="'+it.key+'" aria-pressed="'+(pick===d[0]?'true':'false')+'"'+(locked?' disabled':'')+'>'+d[1]+'</button>';
+      }).join('')+'</div>':'')+'</article>';
+  }).join('')+'</div><div class="deck-nav">'+arrow(-1,'m14 6-6 6 6 6')+
+    '<span class="dots">'+items.map(function(it,i){return '<button class="dot'+(picks[it.key]?' done':'')+'" data-dot="'+i+'" aria-label="'+(i+1)+' of '+n+'"></button>';}).join('')+'</span>'+arrow(1,'m10 6 6 6-6 6')+'</div>'+
+    (locked?(done?'<p class="deck-sent">'+(done===1?'Your answer is':'Your '+done+' answers are')+' with Mia.</p>':'')
+      :done?'<div class="deck-send"><button class="btn primary big" data-decided="1">Send '+(done===1?'my answer':'my '+done+' answers')+' to Mia</button>'+(done<n?'<span>'+(n-done)+' still open</span>':'')+'</div>':'')+'</div>';
+}
+// The one in front is kept on the run, so a redraw or a step back opens the deck where it was.
+function deckMark(){
+  var el=$('leaves');if(!el)return;
+  var run=seeing()||R,at=run?run.leaf||0:0;
+  [].forEach.call(el.children,function(c,i){c.classList.toggle('on',i===at);});
+  [].forEach.call(root.querySelectorAll('.deck .dot'),function(d,i){d.classList.toggle('on',i===at);});
+}
+function deckTo(i,smooth){
+  var el=$('leaves'),run=seeing()||R;if(!el||!run)return;
+  i=Math.max(0,Math.min(el.children.length-1,i));run.leaf=i;
+  var c=el.children[i];
+  el.scrollTo({left:c.offsetLeft-(el.clientWidth-c.offsetWidth)/2,behavior:smooth?'smooth':'auto'});
+  deckMark();
+}
+function deckPlace(){
+  var el=$('leaves'),run=seeing()||R;if(!el||el._placed)return;
+  el._placed=true;deckTo(run?run.leaf||0:0,false);
+}
+function deckScrolled(el){
+  var run=seeing()||R,mid=el.scrollLeft+el.clientWidth/2,at=0,best=Infinity;if(!run)return;
+  [].forEach.call(el.children,function(c,i){var d=Math.abs(c.offsetLeft+c.offsetWidth/2-mid);if(d<best){best=d;at=i;}});
+  if(run.leaf!==at){run.leaf=at;deckMark();}
+}
+// An answer marks its decision and turns to the next one still open; the same answer again takes it back.
+function deckPick(key,pick){
+  if(!R||seeing()||R.running)return;
+  if(R.decided){R.decided=false;R.picks={};}
+  R.picks=R.picks||{};
+  if(R.picks[key]===pick)delete R.picks[key];else R.picks[key]=pick;
+  var all=stageItems,at=R.leaf||0,next=-1,i;
+  for(i=1;i<=all.length&&R.picks[key];i++){var j=(at+i)%all.length;if(all[j].card.decide&&!R.picks[all[j].key]){next=j;break;}}
+  draw();if(next>=0)deckTo(next,true);
+}
+// The answers go to Mia in one direction. The deck stays up, answered, while she acts on them.
+function deckSend(){
+  if(!R||seeing()||R.running)return;
+  var picks=R.picks||{},leaf=R.leaf||0,names={};DECIDE.forEach(function(d){names[d[0]]=d[1];});
+  var lines=stageItems.filter(function(it){return it.card&&it.card.decide&&picks[it.key];}).map(function(it,i){return (i+1)+'. '+it.card.title+': '+names[picks[it.key]];});
+  if(!lines.length)return;
+  direct('My answers to the decisions you showed me:\n'+lines.join('\n')+'\nAct on them. Carry out what I approved. Drop what I did not approve. Where I said keep working, go on with it and come back when it is ready. '+
+    'Where I asked for more, show me more on that one. Leave the ones I did not answer open.',lines.length===1?lines[0].slice(3):'My '+lines.length+' answers: '+lines.map(function(l){return l.slice(3);}).join('; '));
+  R.picks=picks;R.decided=true;R.leaf=leaf;draw();
 }
 // focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
 // Mia's work does not undo for the rest of the run.
@@ -326,11 +395,21 @@ function focus(key,picked){
   if(!R)return;
   R.focus=key||'';if(picked)R.picked=true;
   if(pane()){
-    if(R.focus==='page'&&!site.open){site.open=true;siteDo('state');}
-    if(R.focus!=='page')site.open=false;
+    var url=R.focus!=='page'&&innerWidth>=760?siteOf(R.focus):'';
+    site.card=url?R.focus:'';
+    if(url){site.open=true;site.wide=false;siteShow(url);}
+    else if(R.focus==='page'&&!site.open){site.open=true;siteDo('state');}
+    else if(R.focus!=='page')site.open=false;
   }
   draw();
 }
+// The web address a card stands for, and whether its page is the one live at the front.
+var stageItems=[];
+function siteOf(key){
+  var it=stageItems.filter(function(i){return i.key===key;})[0],v=it&&it.key!=='page'?itemView(it):null;
+  return v&&v.url&&v.site?v.url:'';
+}
+function siteLive(key){return !R.past&&!!pane()&&site.open&&!!site.card&&site.card===key&&R.focus===key;}
 function newRun(text){
   return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
     asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',keep:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
@@ -370,10 +449,15 @@ function resultHtml(){
   // With a canvas the page waits behind the Browser button unless the person brought it forward.
   shotWants=read.cards.map(function(c){return c.page&&!c.bot&&!botNamed(c.title)&&!shotOf(c.page)?shotKey(c.page):null;}).filter(Boolean);
   shotWants.forEach(function(w){w.url='https://'+w.page;});
-  if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
+  if(!R.past)stageItems=items.slice();
+  // Answers sent are shown on the deck they were given on, which no longer takes any.
+  var deck=isDeck(items)?deckHtml(items,R.decided&&!kept?{}:R.picks||{},!!R.past||R.running||(!!R.decided&&kept)):'';
+  // A card whose own page is live at the front is that page; it is not listed a second time.
+  if(pageOn()&&!siteLive(R.focus)&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
+  if(deck)items=items.filter(function(it){return it.key==='page';});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
-    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
+    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(deck&&items.length?'<div class="cards">'+cardHtml(items[0],0)+'</div>':'')+(deck||(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':'')))+
     (read.rest?'<div class="panel result'+(R.running&&!shown&&!kept?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
@@ -432,7 +516,7 @@ function stageHtml(seen){
   try{
     var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
     var main=R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
-    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p></div>':'')+
+    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':R.own?'Mia, on her own':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p></div>':'')+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
   }finally{R=now;}
@@ -472,7 +556,7 @@ function logDraw(){
   var seen=seeing();
   var h='<header><b>You and Mia</b><button class="new" data-new="1">New chat</button><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
     var to=r===R?-1:r.body?i:null;
-    return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>You</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
+    return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>'+(r.own?'Mia, on her own':'You')+'</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
   }).join('')+'</div>';
   if(box._h===h)return;
   var fresh=!box._h,list=$('logL'),top=list?list.scrollTop:0;
@@ -580,7 +664,7 @@ function draw(){
     cv.innerHTML=h;mount(cv);
     cv._h=h;cv._k=key;
   }
-  canvasPlace();stepsDraw();logDraw();chatsDraw();
+  canvasPlace();stepsDraw();logDraw();chatsDraw();deckPlace();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -628,6 +712,7 @@ function ownLine(label){
 }
 function ended(){
   R.running=false;R.top=true;settle();
+  if(own&&!ownTimer)ownTimer=setTimeout(ownReview,4000);
   // The work is done: everything she made is laid out together, the page among it.
   if(!R.picked){R.focus='';if(pane())site.open=false;}
 }
@@ -690,12 +775,33 @@ function followBot(b){
     bot.reply=text.slice(0,20000);bot.running=false;
     // Its report is the first paragraph it wrote, cut to what fits a card.
     bot.report=str(text.replace(/[*_`#>]+/g,'').split(/\n\s*\n|\n(?=\s*Card:)/i)[0].replace(/\s+/g,' '),420);
-    if(!bot.seen)speak(bot.name+' has finished. Want to see it?');
+    if(!bot.seen&&!ownReview())speak(bot.name+' has finished. Want to see it?');
     redraw();
   },function(a){
     if(!open||!a)return;
     if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
   });
+}
+// Mia looks at a finished bot's work by herself: she says the bot is back, checks what it brought
+// against the job, and comes back only with what needs the person. She waits while the person is
+// writing, talking, driving, looking at an earlier view, part way through a deck, or owes her an answer, and until then the
+// panel offers the same by hand. The person steps in by saying anything, or stops her.
+var own=true,ownTimer=null;try{own=localStorage.getItem('miaAiModeOwn')!=='0';}catch(e){}
+function ownShow(){var b=$('own');b.textContent=own?'Mia reviews on her own':'Mia asks before reviewing';b.setAttribute('aria-pressed',own?'true':'false');}
+function ownSet(){own=!own;try{localStorage.setItem('miaAiModeOwn',own?'1':'0');}catch(e){}ownShow();if(own)ownReview();}
+function ownReview(){
+  clearTimeout(ownTimer);ownTimer=null;
+  if(!own||!open)return false;
+  var back=crew.filter(function(b){return !b.running&&b.reply&&!b.seen&&!b.failed;});
+  if(!back.length)return false;
+  var held=drive||seeing()||ink.on||earState==='on'||earState==='wait'||$('box').value.trim()||(R&&(R.running||R.ask||(!R.decided&&R.picks&&Object.keys(R.picks).length)));
+  if(held){ownTimer=setTimeout(ownReview,4000);return false;}
+  var names=back.map(function(b){return b.name;}),who=names.length>1?names.slice(0,-1).join(', ')+' and '+names[names.length-1]:names[0];
+  back.forEach(function(b){b.seen=true;});
+  direct('[On your own] '+who+(names.length>1?' are':' is')+' back and I have not asked you anything yet. Review what '+(names.length>1?'they':'it')+' brought back against the job you gave and what I am after, work with the bot first if something needs checking, then show me only what needs me.',
+    'Mia is reviewing what '+who+' brought back.');
+  R.own=true;R.line=who+(names.length>1?' are':' is')+' back. I am reviewing it for you.';say(R.line);draw();
+  return true;
 }
 // A background worker Mia started for this job. It is drawn as a bot but has no chat of its own:
 // the run says when it starts, what step it is on and when it ends, and it is gone with the run.
@@ -753,7 +859,7 @@ function restore(events){
     if(!text||ev.deletedAt)return;
     if(ev.senderType==='user'){
       cur=newRun(str(meta.aiModeSaid,2000)||text.split('\n\n[Marked on the screen')[0].trim());
-      cur.running=false;cur.sent=cur.past=true;cur.line='';runs.push(cur);return;
+      cur.running=false;cur.sent=cur.past=true;cur.line='';cur.own=text.indexOf('[On your own]')===0;runs.push(cur);return;
     }
     if(!cur||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return;
     var read=readReply(text);
@@ -877,7 +983,7 @@ function direct(t,shown){
     var was=R||past[past.length-1],keep=was?was.body||was.keep||'':'';
     // A page the person opened or chose to keep open is theirs: it stays up through the next run.
     var mine=!!(R&&R.picked&&site.open);
-    shelve(R);R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
+    shelve(R);if(site.card){site.card='';site.open=false;}R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
     if(mine){R.picked=true;R.focus='page';}
   }
   s=2;peek=null;view=-1;draw();if(!steering)$('cv').scrollTop=0;
@@ -935,7 +1041,7 @@ function handBack(){
 // A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
 // native view, so it only exists in the desktop app; in a plain browser tab links open as they always did.
 var web=window.miaDesktop&&window.miaDesktop.browser,webOff=null,ZOOMS=[1,1.25,1.5,0.75];
-var site={open:false,wide:false,moving:false,docked:false,x:null,y:0,zoom:0};
+var site={open:false,wide:false,moving:false,docked:false,x:null,y:0,zoom:0,card:''};
 function pane(){var n=window.miaNativeBrowser;return web&&n&&n.stage?n:null;}
 function siteBox(){
   var W=innerWidth,H=innerHeight,top=60,bottom=H-92;
@@ -950,6 +1056,8 @@ function siteBox(){
 function sitePlace(){
   var n=pane();if(!n)return;
   var el=$('site'),show=site.open&&open&&!drive;
+  // A card's page belongs to its card: away from it (another step, a new direction) it waits out of sight.
+  if(site.card&&!site.wide&&!root.getElementById('frontPage'))show=false;
   // At the front of the stage the window sits in the item's place and follows it as the stage scrolls.
   var dock=show&&!site.wide&&innerWidth>=760?root.getElementById('frontPage'):null,b=null;
   site.docked=!!dock;
@@ -1065,9 +1173,17 @@ function siteDo(action,more){
   var c={action:action},k;for(k in more||{})c[k]=more[k];
   return web.command(c).then(function(st){if(st&&st.tabs)siteState(st);},function(){});
 }
+// siteShow(url): the tab already on that site comes forward; without one the site opens in a new tab.
+function siteShow(url){
+  web.command({action:'state'}).then(function(st){
+    var tab=(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return siteName(t.url)===siteName(url);})[0];
+    if(tab)return siteDo('select',{id:tab.id});
+    return siteDo('new').then(function(){return siteDo('navigate',{value:url});});
+  }).catch(function(){});
+}
 function siteOpen(url){
   if(!pane())return false;
-  site.open=true;
+  site.open=true;site.card='';
   if(R&&s===2){R.focus='page';R.picked=true;draw();}else sitePlace();
   // A link opens in a tab of its own, so the page the person left in the browser stays.
   if(url)siteDo('new').then(function(){return siteDo('navigate',{value:url});});else siteDo('state');
@@ -1075,7 +1191,7 @@ function siteOpen(url){
 }
 function siteClose(){
   site.open=false;
-  if(R&&s===2){R.picked=true;if(R.focus==='page')R.focus='';draw();}else sitePlace();
+  if(R&&s===2){R.picked=true;if(R.focus==='page'||R.focus===site.card)R.focus='';site.card='';draw();}else sitePlace();
 }
 // The page as a picture. The desktop app holds the page; it hands a picture of the one Mia is in to
 // this computer's Mia, and every stage shows that picture, so a stage in a plain browser tab sees the
@@ -1156,6 +1272,7 @@ function pagePoll(){
 function siteWire(){
   $('web').onclick=function(){if(site.open)siteClose();else siteOpen('');};
   $('cv').addEventListener('scroll',function(){if(site.open&&site.docked)sitePlace();},{passive:true});
+  $('cv').addEventListener('scroll',function(e){if(e.target&&e.target.id==='leaves')deckScrolled(e.target);},true);
   $('siteBack').onclick=function(){siteDo('back');};$('siteForward').onclick=function(){siteDo('forward');};
   $('siteReload').onclick=function(){siteDo('reload');};$('siteClose').onclick=siteClose;
   $('siteWide').onclick=function(){site.wide=!site.wide;sitePlace();};
@@ -1451,7 +1568,7 @@ function build(){
     var turn=e.target.closest('[data-view]');
     if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
   };
-  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();
+  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();$('own').onclick=ownSet;ownShow();
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
@@ -1483,7 +1600,13 @@ function build(){
     if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
     var it=(R||seeing())&&e.target&&e.target.closest&&e.target.closest('[data-item]');
     if(it){focus(it.dataset.item,true);return;}
+    // A decision at the edge of the deck is turned to, not answered.
+    var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
+    if(leaf&&!leaf.classList.contains('on')){deckTo([].indexOf.call(leaf.parentNode.children,leaf),true);return;}
     var b=e.target&&e.target.closest&&e.target.closest('button');if(!b)return;
+    if(b.dataset.turn||b.dataset.dot){var run=seeing()||R;deckTo(b.dataset.dot?+b.dataset.dot:(run&&run.leaf||0)+(+b.dataset.turn),true);return;}
+    if(b.dataset.pick){deckPick(b.dataset.of,b.dataset.pick);return;}
+    if(b.dataset.decided){deckSend();return;}
     if(b.dataset.crew||b.dataset.show){
       var mate=crew[+(b.dataset.crew||b.dataset.show)];
       // The tile opens the chat with that bot; "Show me" opens what it brought back.
