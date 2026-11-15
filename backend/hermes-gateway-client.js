@@ -16,6 +16,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { PROCESS_SECRETS_MARKER, sendProcessSecrets } = require('./process-secrets');
+const { COMPRESSION_THRESHOLD_TOKENS } = require('./hermes-bot-profile');
 
 const DEFAULT_PORT = 9121;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -29,6 +30,14 @@ const MODEL_OPTIONS_TIMEOUT_MS = 30000;
 const MODEL_OPTIONS_ATTEMPTS = 10;
 const RETRY_DELAY_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 300;
+// Hermes compacts a long chat in the middle of a turn, and the person waits
+// for the summary. A kept chat is compacted earlier instead, while it is
+// quiet: once it has used this share of the room Hermes allows before it
+// compacts on its own, and nothing has happened in it for a moment.
+const IDLE_COMPACT_SHARE = 0.7;
+const IDLE_COMPACT_QUIET_MS = 8000;
+// Hermes' own rule: half the model's window, three quarters for a small one.
+const SMALL_CONTEXT_WINDOW_TOKENS = 512000;
 // A turn that ends with nothing written. run() asks once more in the same
 // session before the chat reports it (chat-model-selection.js words it).
 const NO_REPLY_CODE = 'HERMES_NO_REPLY_TEXT';
@@ -286,6 +295,8 @@ class HermesGatewayClient {
     waitForGatewayExitImpl = waitForRecordedGatewayExit,
     stopStaleServersImpl = stopStaleHermesServers,
     secretEnv = null,
+    compactThresholdTokens = COMPRESSION_THRESHOLD_TOKENS,
+    idleCompactQuietMs = IDLE_COMPACT_QUIET_MS,
   } = {}) {
     if (typeof WebSocketImpl !== 'function') throw new Error('WebSocket is not available in this Node runtime');
     this.binary = String(binary || '').trim();
@@ -347,6 +358,13 @@ class HermesGatewayClient {
     // validates against the profile default model instead of the session's
     // pinned one and rejects a model that does support fast mode.
     this.appliedSelections = new Map();
+    // live sessionId -> { used, max }: how full the chat was after its last turn.
+    this.sessionContext = new Map();
+    // storedSessionId -> { sessionId, timer, running }: a compaction waiting
+    // for the chat to stay quiet, or running in the background.
+    this.idleCompactions = new Map();
+    this.compactThresholdTokens = compactThresholdTokens;
+    this.idleCompactQuietMs = idleCompactQuietMs;
     this.child = null;
     this.externalGateway = false;
     this.shutdownRequested = false;
@@ -491,6 +509,9 @@ class HermesGatewayClient {
     this.sessionReadyWaiters.clear();
     this.sessionInfo.clear();
     this.unsolicitedTurns.clear();
+    for (const entry of this.idleCompactions.values()) clearTimeout(entry.timer);
+    this.idleCompactions.clear();
+    this.sessionContext.clear();
     if (socket) {
       try { socket.close(); } catch (_) { /* already closed */ }
     }
@@ -559,6 +580,7 @@ class HermesGatewayClient {
         if (sessionId && params.type === 'error') {
           this.sessionReadyWaiters.get(sessionId)?.reject(new Error(params.payload?.message || 'Hermes agent initialization failed'));
         }
+        if (sessionId) this.noteContextUsage(sessionId, params.payload && params.payload.usage);
         if (sessionId) this.routeSessionEvent(sessionId, params.type, params.payload || {});
       }
     };
@@ -722,6 +744,72 @@ class HermesGatewayClient {
         });
       }
       this.turns.delete(turn.sessionId);
+    }
+  }
+
+  noteContextUsage(sessionId, usage) {
+    const used = Number(usage && usage.context_used);
+    const max = Number(usage && usage.context_max);
+    if (used > 0 && max > 0) this.sessionContext.set(sessionId, { used, max });
+  }
+
+  idleCompactionDue(sessionId) {
+    const context = this.sessionContext.get(sessionId);
+    if (!context) return false;
+    const hermesTrigger = Math.min(
+      this.compactThresholdTokens,
+      context.max * (context.max < SMALL_CONTEXT_WINDOW_TOKENS ? 0.75 : 0.5),
+    );
+    return context.used >= IDLE_COMPACT_SHARE * hermesTrigger;
+  }
+
+  // After a turn in a kept chat: compact it in the background once it has
+  // stayed quiet, so the next messages do not stop for it.
+  scheduleIdleCompaction({ sessionId, storedSessionId }) {
+    if (!storedSessionId || this.idleCompactions.has(storedSessionId) || !this.idleCompactionDue(sessionId)) return;
+    const entry = { sessionId, timer: null, running: null };
+    entry.timer = setTimeout(() => this.startIdleCompaction(storedSessionId, entry), this.idleCompactQuietMs);
+    if (typeof entry.timer.unref === 'function') entry.timer.unref();
+    this.idleCompactions.set(storedSessionId, entry);
+  }
+
+  startIdleCompaction(storedSessionId, entry) {
+    const { sessionId } = entry;
+    const forget = () => {
+      if (this.idleCompactions.get(storedSessionId) === entry) this.idleCompactions.delete(storedSessionId);
+    };
+    const busy = this.turns.has(sessionId) || this.unsolicitedTurns.has(sessionId)
+      || [...this.operations].some(operation => operation.sessionId === sessionId);
+    if (busy || this.shutdownRequested) { forget(); return; }
+    // What the chat holds now is only known after its next turn.
+    this.sessionContext.delete(sessionId);
+    // A failed or refused compaction costs nothing: Hermes still compacts on
+    // its own when the chat fills up.
+    entry.running = this.request('session.compress', { session_id: sessionId })
+      .catch(() => {})
+      .then(forget);
+  }
+
+  // A message that arrives while its chat is being compacted waits for the
+  // rest of it: Hermes drops a summary whose chat changed under it, so
+  // sending at once would waste the summary and compact again mid-turn.
+  // One that arrives before the compaction started calls it off.
+  async holdForIdleCompaction(match, signal) {
+    if (!match) return;
+    for (const [storedSessionId, entry] of [...this.idleCompactions]) {
+      if (storedSessionId !== match && entry.sessionId !== match) continue;
+      clearTimeout(entry.timer);
+      if (!entry.running) {
+        this.idleCompactions.delete(storedSessionId);
+      } else if (signal) {
+        let stop;
+        const stopped = new Promise((resolve) => { stop = resolve; });
+        signal.addEventListener('abort', stop, { once: true });
+        try { await Promise.race([entry.running, stopped]); }
+        finally { signal.removeEventListener('abort', stop); }
+      } else {
+        await entry.running;
+      }
     }
   }
 
@@ -1179,8 +1267,11 @@ class HermesGatewayClient {
   }) {
     const operation = this.startOperation(signal);
     try {
+      await this.holdForIdleCompaction(storedSessionId, signal);
+      this.assertOperationActive(operation);
       const session = await this.operationResult(operation, this.createOrResumeSession({ storedSessionId, seedMessages, title, options }));
       operation.sessionId = session.sessionId;
+      await this.holdForIdleCompaction(session.sessionId, signal);
       if (typeof onSession === 'function') onSession(session);
       this.assertOperationActive(operation);
       for (const imagePath of Array.isArray(imagePaths) ? imagePaths : []) {
@@ -1207,6 +1298,7 @@ class HermesGatewayClient {
           throw retryError;
         }
       }
+      if (options && options.compactWhenIdle === true) this.scheduleIdleCompaction(session);
       return {
         text: completed.text,
         storedSessionId: session.storedSessionId,
@@ -1284,8 +1376,11 @@ class HermesGatewayClient {
   }) {
     const operation = this.startOperation(signal);
     try {
+      await this.holdForIdleCompaction(storedSessionId, signal);
+      this.assertOperationActive(operation);
       const session = await this.operationResult(operation, this.createOrResumeSession({ storedSessionId, seedMessages, title, options }));
       operation.sessionId = session.sessionId;
+      await this.holdForIdleCompaction(session.sessionId, signal);
       if (typeof onSession === 'function') onSession(session);
       this.assertOperationActive(operation);
       let dispatched;

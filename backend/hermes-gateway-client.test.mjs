@@ -1586,3 +1586,100 @@ test("Hermes' own no-reply notice fails the turn without asking again", async ()
   assert.equal(prompts.length, 1);
   client.close();
 });
+
+// A kept chat on a scripted runtime: every turn reports how full the chat is.
+function idleCompactClient({ used, max = 250000, quietMs = 5, compress = async () => ({ status: 'compressed' }) }) {
+  const client = new HermesGatewayClient({ url: 'ws://127.0.0.1:9127/api/ws', WebSocketImpl: class {}, idleCompactQuietMs: quietMs });
+  const calls = [];
+  client.request = async (method, params) => {
+    calls.push(method);
+    if (method === 'session.create') return { session_id: 'live', stored_session_id: 'stored', info: { model: 'm', provider: 'p' } };
+    if (method === 'session.resume') return { session_id: 'live', session_key: params.session_id, info: { model: 'm', provider: 'p' } };
+    if (method === 'session.compress') return compress();
+    if (method === 'prompt.submit') {
+      client.noteContextUsage('live', { context_used: used, context_max: max });
+      client.handleTurnEvent(client.turns.get('live'), 'message.complete', { text: 'ok', status: 'complete' });
+      return { status: 'streaming' };
+    }
+    return {};
+  };
+  return { client, calls };
+}
+const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a kept chat that is getting full is compacted in the background once it is quiet', async () => {
+  // Hermes would compact this chat at 187,500 tokens; 70% of that is 131,250.
+  const { client, calls } = idleCompactClient({ used: 140000 });
+  await client.run({ message: 'hello', options: { compactWhenIdle: true } });
+  assert.equal(calls.includes('session.compress'), false, 'the reply does not wait for it');
+  await pause(30);
+  assert.equal(calls.filter(method => method === 'session.compress').length, 1);
+  assert.equal(client.idleCompactions.size, 0);
+  client.close();
+});
+
+test('a chat with room left, or one that starts fresh every turn, is left alone', async () => {
+  const roomy = idleCompactClient({ used: 120000 });
+  await roomy.client.run({ message: 'hello', options: { compactWhenIdle: true } });
+  const fresh = idleCompactClient({ used: 140000 });
+  await fresh.client.run({ message: 'hello', options: {} });
+  await pause(30);
+  assert.equal(roomy.calls.includes('session.compress'), false);
+  assert.equal(fresh.calls.includes('session.compress'), false);
+  roomy.client.close();
+  fresh.client.close();
+});
+
+test('a message sent before the quiet moment is over calls the compaction off', async () => {
+  const { client, calls } = idleCompactClient({ used: 140000, quietMs: 40 });
+  await client.run({ message: 'one', options: { compactWhenIdle: true } });
+  client.sessionContext.clear();
+  client.request = ((request) => async (method, params) => {
+    if (method === 'prompt.submit') {
+      calls.push(method);
+      client.handleTurnEvent(client.turns.get('live'), 'message.complete', { text: 'ok', status: 'complete' });
+      return { status: 'streaming' };
+    }
+    return request(method, params);
+  })(client.request);
+  await client.run({ storedSessionId: 'stored', message: 'two', options: { compactWhenIdle: true } });
+  await pause(80);
+  assert.equal(calls.includes('session.compress'), false);
+  client.close();
+});
+
+test('a message sent while the chat is being compacted goes in right after it', async () => {
+  let finish;
+  const { client, calls } = idleCompactClient({
+    used: 140000,
+    compress: () => new Promise((resolve) => { finish = () => resolve({ status: 'compressed' }); }),
+  });
+  await client.run({ message: 'one', options: { compactWhenIdle: true } });
+  await pause(30);
+  assert.equal(calls.at(-1), 'session.compress');
+  const second = client.run({ storedSessionId: 'stored', message: 'two', options: { compactWhenIdle: true } });
+  await pause(20);
+  assert.equal(calls.at(-1), 'session.compress', 'nothing is sent while the summary is written');
+  finish();
+  assert.equal((await second).text, 'ok');
+  assert.deepEqual(calls.slice(-2), ['session.resume', 'prompt.submit']);
+  client.close();
+});
+
+test('a compaction the runtime refuses is dropped quietly, and Stop ends a wait for one', async () => {
+  const refused = idleCompactClient({ used: 140000, compress: async () => { throw Object.assign(new Error('session busy'), { code: 4009 }); } });
+  await refused.client.run({ message: 'one', options: { compactWhenIdle: true } });
+  await pause(30);
+  assert.equal(refused.client.idleCompactions.size, 0);
+  refused.client.close();
+
+  const slow = idleCompactClient({ used: 140000, compress: () => new Promise(() => {}) });
+  await slow.client.run({ message: 'one', options: { compactWhenIdle: true } });
+  await pause(30);
+  const stop = new AbortController();
+  const waiting = slow.client.run({ storedSessionId: 'stored', message: 'two', options: { compactWhenIdle: true }, signal: stop.signal });
+  stop.abort();
+  await assert.rejects(waiting);
+  assert.equal(slow.calls.filter(method => method === 'prompt.submit').length, 1);
+  slow.client.close();
+});

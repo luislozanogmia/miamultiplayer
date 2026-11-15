@@ -8970,7 +8970,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       storedSessionId: resumedGatewaySessionId,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       title: conversation.name || 'Mia conversation',
-      options: inferenceOptions,
+      // Her own chat keeps one session, so it is worth compacting while quiet.
+      options: ownsPrivateAgentConversation ? { ...inferenceOptions, compactWhenIdle: true } : inferenceOptions,
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
@@ -9086,7 +9087,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
         : null,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       title: conversation.name || agent.name || 'Bot conversation',
-      options: inferenceOptions,
+      options: { ...inferenceOptions, compactWhenIdle: true },
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
