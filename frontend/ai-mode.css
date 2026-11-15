@@ -122,6 +122,13 @@ div.bot{cursor:default;opacity:1}
 .intent .send:hover{background:var(--accent-hover)}
 .intent .mic{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
 .intent .mic:hover{color:var(--ink)}
+/* The pen: marks drawn over the stage, numbered in the order drawn. */
+.ink{position:absolute;inset:var(--top) 0 var(--bottom) 0;z-index:2;cursor:crosshair;touch-action:none}
+.ink svg{display:block;width:100%;height:100%}
+.ink path{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.ink circle{fill:var(--accent)}
+.ink text{fill:var(--on-accent);font:600 12px var(--sans);text-anchor:middle;pointer-events:none}
+.intent #pen.on{animation:none}
 .intent .mic.on{background:var(--accent);color:var(--on-accent);animation:mic-on 1.6s ease-in-out infinite}
 @keyframes mic-on{50%{box-shadow:0 0 0 6px rgba(255,255,255,.12)}}
 @media(prefers-reduced-motion:reduce){.intent .mic.on{animation:none}}

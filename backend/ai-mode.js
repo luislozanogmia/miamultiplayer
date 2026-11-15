@@ -64,6 +64,10 @@ function turnNote(hub) {
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
     'question, which is read out loud and not shown, then each choice on its own line as "Option: <a few words>". Two or three options.\n' +
     '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
+    '- The person can draw on the stage to mark parts of what you showed. The marks come at the end of ' +
+    'their direction in square brackets, numbered in the order drawn, each with the words it was drawn on. ' +
+    'The direction is about those parts: change, explain or look closer at them, and leave the rest as it ' +
+    'was. A number they say ("make 2 shorter") is that mark.\n' +
     '- Narrate as you go. Before each step, and when something is ready, write one short line in the first ' +
     'person, under 16 words, with nothing else beside it. It is read out loud, so the person hears what you ' +
     'are doing and why: "I will open the browser for you.", "I am putting two bots on this.", "The page is ' +

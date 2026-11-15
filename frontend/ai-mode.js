@@ -51,6 +51,7 @@ var MARKUP=
       '<button class="btn" id="phonePair">Connect a phone</button>'+
     '</div>'+
     '<div class="cv pad" id="cv"></div>'+
+    '<div class="ink" id="ink" aria-hidden="true" hidden><svg><g id="inkG"></g></svg></div>'+
     '<div class="site" id="site" hidden>'+
       '<div class="site-bar" id="siteBar">'+
         '<button id="siteBack" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></svg></button>'+
@@ -65,6 +66,7 @@ var MARKUP=
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
+      '<button type="button" class="mic" id="pen" aria-pressed="false" aria-label="Mark on the screen" title="Draw on the screen to show Mia what you mean" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/><path d="M9.5 4l2.5 2.5"/></svg></button>'+
       '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
     '</form></div>'+
@@ -209,7 +211,8 @@ function canvasPlace(){
   if(!slot){if(el)el.remove();return;}
   if(!el){
     el=canvas.el=document.createElement('iframe');el.className='canvas-f';
-    el.setAttribute('sandbox','');el.setAttribute('title','What Mia drew');
+    // No scripts run in it; the stage may read its words, so a mark drawn over it says what it is on.
+    el.setAttribute('sandbox','allow-same-origin');el.setAttribute('title','What Mia drew');
   }
   var html=slot.dataset.html||'',wait=900-(Date.now()-canvas.at);
   clearTimeout(canvas.timer);canvas.timer=null;
@@ -379,6 +382,7 @@ function draw(){
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
   $('stop').hidden=!live;$('drive').hidden=s!==2;
+  $('pen').hidden=s!==2;if(s!==2&&ink.on)inkSet(false);
   if(pane())sitePlace();
   if(!earState)$('box').placeholder=boxHint();
 }
@@ -522,8 +526,85 @@ function fail(my,e){
   R.running=false;R.note=e&&e.message==='signin'?'Sign in to Mia first, then say it again.':'That did not go through. Say it again.';settle();draw();
 }
 // The person's words go to Mia as a direction. Said while she is working, they steer the same run.
+// The pen: the person draws on the stage, and each mark tells Mia the words it was drawn on.
+var ink={on:false,marks:[],line:null};
+function inkPath(p){return 'M'+p.map(function(q){return q[0].toFixed(1)+' '+q[1].toFixed(1);}).join('L');}
+function inkDraw(){
+  var top=$('cv').scrollTop,all=ink.line?ink.marks.concat([ink.line]):ink.marks;
+  $('inkG').setAttribute('transform','translate(0 '+(-top)+')');
+  $('inkG').innerHTML=all.map(function(m,i){
+    var a=m.p[0];
+    return '<path d="'+inkPath(m.p)+'"/><circle cx="'+a[0].toFixed(1)+'" cy="'+a[1].toFixed(1)+'" r="10"/><text x="'+a[0].toFixed(1)+'" y="'+(a[1]+4).toFixed(1)+'">'+(i+1)+'</text>';
+  }).join('');
+}
+function inkSet(on){
+  ink.on=!!on;ink.line=null;if(!on)ink.marks=[];
+  $('ink').hidden=!on;$('pen').classList.toggle('on',ink.on);$('pen').setAttribute('aria-pressed',ink.on?'true':'false');
+  inkDraw();if(!earState)$('box').placeholder=boxHint();
+}
+// The words whose middle lies inside the box, read in page order from one document.
+function inkWords(doc,rootEl,box,dx,dy,out){
+  var walk=doc.createTreeWalker(rootEl,NodeFilter.SHOW_TEXT),n,range=doc.createRange(),inside=function(r){
+    var x=r.left+r.width/2+dx,y=r.top+r.height/2+dy;return r.width>0&&x>=box.l&&x<=box.r&&y>=box.t&&y<=box.b;
+  };
+  while((n=walk.nextNode())){
+    var text=n.nodeValue;if(!text.trim())continue;
+    range.selectNodeContents(n);var whole=range.getBoundingClientRect();
+    if(whole.right+dx<box.l||whole.left+dx>box.r||whole.bottom+dy<box.t||whole.top+dy>box.b)continue;
+    var re=/\S+/g,w;
+    while((w=re.exec(text))){
+      range.setStart(n,w.index);range.setEnd(n,w.index+w[0].length);
+      if([].some.call(range.getClientRects(),inside))out.push(w[0]);
+    }
+  }
+}
+function inkRead(m){
+  var cv=$('cv'),o=$('ink').getBoundingClientRect(),top=cv.scrollTop,xs=m.p.map(function(q){return q[0];}),ys=m.p.map(function(q){return q[1]-top;});
+  var box={l:Math.min.apply(0,xs)+o.left-6,r:Math.max.apply(0,xs)+o.left+6,t:Math.min.apply(0,ys)+o.top-6,b:Math.max.apply(0,ys)+o.top+6};
+  // A line under or through words is as good as a ring around them.
+  if(box.b-box.t<28)box.t-=20;
+  var out=[];
+  try{inkWords(document,cv,box,0,0,out);}catch(e){}
+  var f=canvas.el;
+  if(f&&f.isConnected){try{var fr=f.getBoundingClientRect(),d=f.contentDocument;if(d&&d.body)inkWords(d,d.body,box,fr.left,fr.top,out);}catch(e){}}
+  if(out.length)return '"'+out.join(' ').slice(0,300)+'"';
+  var hit=[].filter.call(cv.querySelectorAll('article[data-item] .pic'),function(el){
+    var r=el.getBoundingClientRect();return r.right>box.l&&r.left<box.r&&r.bottom>box.t&&r.top<box.b;
+  })[0],title=hit&&hit.closest('article').querySelector('b');
+  return title?'the picture on "'+title.textContent.trim().slice(0,120)+'"':'a part with no words';
+}
+function inkNote(){
+  if(!ink.marks.length)return '';
+  return '\n\n[Marked on the screen by the person, in the order drawn:\n'+ink.marks.map(function(m,i){return (i+1)+'. '+m.on;}).join('\n')+']';
+}
+function inkWire(){
+  var el=$('ink'),at=function(e){var o=el.getBoundingClientRect();return [e.clientX-o.left,e.clientY-o.top+$('cv').scrollTop];};
+  $('pen').onclick=function(){inkSet(!ink.on);$('box').focus();};
+  el.addEventListener('pointerdown',function(e){
+    if(e.button||ink.marks.length>=9)return;
+    e.preventDefault();try{el.setPointerCapture(e.pointerId);}catch(x){}
+    ink.line={p:[at(e)]};inkDraw();
+  });
+  el.addEventListener('pointermove',function(e){
+    if(!ink.line)return;
+    var p=at(e),last=ink.line.p[ink.line.p.length-1];
+    if(Math.abs(p[0]-last[0])+Math.abs(p[1]-last[1])<3)return;
+    ink.line.p.push(p);inkDraw();
+  });
+  var end=function(){
+    var m=ink.line;if(!m)return;
+    ink.line=null;m.on=inkRead(m);ink.marks.push(m);inkDraw();
+    if(!earState)$('box').placeholder=boxHint();$('box').focus();
+  };
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);
+  el.addEventListener('wheel',function(e){$('cv').scrollTop+=e.deltaY;},{passive:true});
+  $('cv').addEventListener('scroll',function(){if(ink.on)inkDraw();});
+}
 function direct(t,shown){
   startAudio();
+  var marked=inkNote();
+  if(marked){shown=shown||t;t+=marked;}
+  if(ink.on)inkSet(false);
   var steering=s===2&&R&&R.running&&R.sent;
   var before=R&&R.sent?{said:str(R.said,400),ask:str(R.ask,200)}:null;
   if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
@@ -865,7 +946,7 @@ function hush(){
 // The words are written down on this computer by the same recorder the chat box uses.
 // Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
 var ear=null,earState='';
-function boxHint(){return talkOn?'Listening\u2026 just talk':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function boxHint(){return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):talkOn?'Listening\u2026 just talk':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
 function earParts(){
   var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
   return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
@@ -1013,9 +1094,9 @@ function build(){
   c=$('rain');x=c.getContext('2d');
   window.MiaMark.render($('hudMark'),20,'');
   $('leave').onclick=leave;
-  $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t)return;$('box').value='';direct(t.slice(0,2000));};
+  $('form').onsubmit=function(e){e.preventDefault();var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));};
   $('stop').onclick=function(){hush();halt('');};
-  $('mic').onclick=earToggle;$('talk').onclick=talkToggle;
+  $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
   $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
   siteWire();
@@ -1073,7 +1154,7 @@ function build(){
     e.stopPropagation();
     var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
     if(it){e.preventDefault();focus(it.dataset.item,true);}
-    else if(e.key==='Escape'&&!drive){if(s===2&&R&&R.focus)focus('',true);else leave();}
+    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if(s===2&&R&&R.focus)focus('',true);else leave();}
   });
 }
 function enter(){
@@ -1101,7 +1182,7 @@ function enter(){
 function leave(){
   if(!open)return;
   if(R&&R.running)halt('');
-  open=false;clearTimeout(drawTimer);drawTimer=null;hush();earStop();talkStop();seedId++;
+  open=false;clearTimeout(drawTimer);drawTimer=null;inkSet(false);hush();earStop();talkStop();seedId++;
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);

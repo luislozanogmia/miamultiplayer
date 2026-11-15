@@ -112,6 +112,13 @@ test('the turn note tells Mia about nine cards and her own canvas', () => {
   assert.match(note, /Never build a page as a file and open it in the browser to show something you made/);
 });
 
+test('the turn note tells Mia what the marks drawn on the stage mean', () => {
+  const note = turnNote();
+  assert.match(note, /draw on the stage to mark parts of what you showed/);
+  assert.match(note, /numbered in the order drawn/);
+  assert.match(note, /leave the rest as it was/);
+});
+
 test('a picture is passed on only from the allowed host, as a picture, under the size limit', async () => {
   const reply = (type, bytes) => async () => ({ ok: true, headers: { get: () => type }, arrayBuffer: async () => new ArrayBuffer(bytes) });
   const picture = await fetchImage(THUMB, { request: reply('image/jpeg; charset=binary', 10) });
