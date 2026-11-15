@@ -378,6 +378,11 @@ a.file:hover{border-color:var(--accent)}
 .turn small{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
 .turn p{margin:0 0 4px;font-size:12.5px;color:var(--soft);overflow-wrap:anywhere}
 .turn p:first-of-type{color:var(--ink)}
+/* The drawer at the right edge: the person's chats. Its tab sits low, under the bots at work. */
+.chats-tab{left:auto;right:0;top:auto;bottom:calc(var(--bottom) + 8px);transform:none;border:1px solid var(--rule-strong);border-right:0;border-radius:9px 0 0 9px}
+.chats{left:auto;right:0;border:1px solid var(--rule-strong);border-right:0;border-radius:14px 0 0 14px;z-index:5}
+.chats .turn{cursor:pointer}
+.chats .turn:hover{background:rgba(255,255,255,.05)}
 @media(prefers-reduced-motion:reduce){.ears i{animation:none}}
 :host(.calm) .ears i{animation-play-state:paused}
 /* On a wide screen the stage moves over so the drawer covers nothing. */

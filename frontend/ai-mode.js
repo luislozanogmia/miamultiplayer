@@ -54,6 +54,8 @@ var MARKUP=
     '<div class="cv pad" id="cv"></div>'+
     '<button class="log-tab" id="logTab" aria-expanded="false" aria-label="What you asked and what Mia reported" title="What you asked and what Mia reported" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>'+
     '<aside class="log" id="log" aria-label="What you asked and what Mia reported" hidden></aside>'+
+    '<button class="log-tab chats-tab" id="chatsTab" aria-expanded="false" aria-label="Your chats" title="Your chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>'+
+    '<aside class="log chats" id="chats" aria-label="Your chats" hidden></aside>'+
     '<div class="ears" id="ears" hidden><i aria-hidden="true"></i><span id="earsSay">Just talk</span>'+
       '<button id="earsMute" aria-pressed="false" aria-label="Mute the mic" title="Mute the mic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/><path class="off" d="M2.5 1.5l11 13"/></svg></button></div>'+
     '<div class="steps" id="steps" hidden><button id="stepBack" aria-label="The view before" title="The view before">\u2039</button><span id="stepAt"></span>'+
@@ -474,6 +476,21 @@ function logDraw(){
   // It opens on the newest turn; after that it stays where the person left it.
   list.scrollTop=fresh?list.scrollHeight:top;
 }
+// The drawer at the right edge: the person's chats in the app, as the app lists them. Picking one
+// reads it on the stage; nothing is sent to it.
+var chatsOn=false,chatRows=[];
+function chatsDraw(){
+  var tab=$('chatsTab'),box=$('chats');
+  tab.hidden=chatsOn;tab.setAttribute('aria-expanded',chatsOn?'true':'false');box.hidden=!chatsOn;
+  if(!chatsOn){box._h='';return;}
+  try{chatRows=appHost().chats()||[];}catch(e){chatRows=[];}
+  var h='<header><b>Your chats</b><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l">'+
+    (chatRows.length?chatRows.map(function(r,i){
+      return '<div class="turn'+(peek&&peek.chatId===r.id?' on':'')+'" data-chat="'+i+'" role="button" tabindex="0"><p>'+esc(r.label)+'</p><small>'+esc(r.sub||'')+'</small></div>';
+    }).join(''):'<div class="turn"><p>No chats yet.</p></div>')+'</div>';
+  if(box._h===h)return;
+  box._h=h;box.innerHTML=h;
+}
 // Searching from the bar: Mia's earlier views, the person's chats and their artifacts. Picking one
 // shows it on the stage and sends nothing; the last row hands the typed words to Mia.
 // The bar does one of two things: it takes a direction for Mia, or it searches. The small sign at its
@@ -510,8 +527,11 @@ function findPick(r){
     if(!r.url||!siteOpen(r.url)){peek=newRun(r.label);peek.running=false;peek.past=peek.plain=true;peek.line='Artifacts open in the Mia desktop app.';view=-1;draw();}
     return;
   }
-  // A chat is read here as it is: who said what, nothing else, and nothing is sent to it.
-  var p=peek=newRun(r.label);p.running=false;p.past=p.plain=true;p.line='Getting that conversation\u2026';view=-1;draw();
+  readChat(r);
+}
+// A chat is read here as it is: who said what, nothing else, and nothing is sent to it.
+function readChat(r){
+  var p=peek=newRun(r.label);p.chatId=r.id;p.running=false;p.past=p.plain=true;p.line='Getting that conversation\u2026';view=-1;draw();
   call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
     if(peek!==p)return;
     var lines=(Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
@@ -542,7 +562,7 @@ function draw(){
     cv.innerHTML=h;mount(cv);
     cv._h=h;cv._k=key;
   }
-  canvasPlace();stepsDraw();logDraw();
+  canvasPlace();stepsDraw();logDraw();chatsDraw();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -1388,6 +1408,12 @@ function build(){
   $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
   $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
   $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
+  $('chatsTab').onclick=function(){chatsOn=true;chatsDraw();};
+  $('chats').onclick=function(e){
+    if(e.target.closest('[data-x]')){chatsOn=false;chatsDraw();return;}
+    var row=e.target.closest('[data-chat]');
+    if(row&&chatRows[+row.dataset.chat])readChat(chatRows[+row.dataset.chat]);
+  };
   $('log').onclick=function(e){
     if(e.target.closest('[data-x]')){drawerOn=false;logDraw();return;}
     if(e.target.closest('[data-new]')){newChat();return;}
@@ -1460,7 +1486,7 @@ function build(){
   host.addEventListener('keydown',function(e){
     e.stopPropagation();
     var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
-    var turn=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('.turn[data-view]');
+    var turn=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('.turn[data-view],.turn[data-chat]');
     if(it){e.preventDefault();focus(it.dataset.item,true);}
     else if(turn){e.preventDefault();turn.click();}
     // Left and right step through the earlier views when nothing is being typed.

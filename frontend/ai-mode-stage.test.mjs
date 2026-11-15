@@ -75,3 +75,13 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
   assert.match(fresh, /openChat\(true\)/);
   assert.match(js, /more=fresh\?\{fresh:true\}:\{\}/);
 });
+
+test('a drawer at the right edge lists the chats the app has, and picking one reads it on the stage as search does', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /search: aiModeSearch, chats: aiModeChats\}/);
+  assert.match(app, /var rows = aiModeChats\(\)\.filter\(/, 'search and the drawer share one list of chats');
+  assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
+  assert.match(js, /if\(row&&chatRows\[\+row\.dataset\.chat\]\)readChat\(chatRows\[\+row\.dataset\.chat\]\);/);
+  assert.match(js, /if\(r\.kind==='artifact'\)\{[\s\S]*?\}\s*readChat\(r\);/);
+  assert.match(css, /\.chats-tab\{left:auto;right:0;/);
+});

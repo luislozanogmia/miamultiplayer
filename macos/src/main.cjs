@@ -459,7 +459,7 @@ function runtimeLogPath(name) {
 
 function isAllowedRendererStateKey(key) {
   const normalized = String(key || "");
-  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || /^(miaChatActive|miaAgentChats):[^\r\n]{1,500}$/.test(normalized);
+  return normalized === "miaBrowserOpen" || normalized === "miaIntroVersion" || normalized === "miaTabsMixed" || normalized === "miaClosedPageTabs" || /^(miaChatActive|miaAgentChats):[^\r\n]{1,500}$/.test(normalized);
 }
 
 function readRendererState() {

@@ -9025,7 +9025,27 @@
   // on the right, the same layout as the browser. Rows open a step page and
   // switch the chat to the bot that owns the automation.
   var AUTOMATIONS_GROUP_KEY = 'mia.automations.group';
-  var automationsPage = {open:false, botId:null, automationId:null, group:'status', tabs:[], boardClosed:false};
+  // The Automations, Artifacts and Apps tabs a person closed stay closed the
+  // next time Mia opens; opening the page from its button brings its tab back.
+  // Kept in the desktop app's state when there is one, as the strip's own
+  // order is: it outlasts the page's storage there.
+  var closedPageTabs = {};
+  function closedPageTabsStore(){ return window.miaDesktop && window.miaDesktop.state && typeof window.miaDesktop.state.get === 'function' ? window.miaDesktop.state : null; }
+  try {
+    var savedClosedTabs = closedPageTabsStore() ? closedPageTabsStore().get('miaClosedPageTabs') : null;
+    if(typeof savedClosedTabs !== 'string') savedClosedTabs = localStorage.getItem('miaClosedPageTabs');
+    closedPageTabs = JSON.parse(savedClosedTabs || '{}') || {};
+  } catch(_closedTabsStorageError) {}
+  function setPageTabClosed(name, closed){
+    if(name === 'automations') automationsPage.boardClosed = closed;
+    else if(name === 'artifacts') artifactsPage.tabClosed = closed;
+    else appsPage.tabClosed = closed;
+    if(!!closedPageTabs[name] === closed) return;
+    if(closed) closedPageTabs[name] = true; else delete closedPageTabs[name];
+    try { if(closedPageTabsStore()) closedPageTabsStore().set('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStateError) {}
+    try { localStorage.setItem('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStorageError) {}
+  }
+  var automationsPage = {open:false, botId:null, automationId:null, group:'status', tabs:[], boardClosed:!!closedPageTabs.automations};
   try { if(localStorage.getItem(AUTOMATIONS_GROUP_KEY) === 'bot') automationsPage.group = 'bot'; } catch(_automationsGroupError) {}
 
   function automationsBoardRows(){
@@ -9312,7 +9332,7 @@
     render: function(){ if(automationsPage.open) renderAutomationsTabs(automationsBoardRows()); },
   });
   function showAutomationsBoard(){
-    automationsPage.boardClosed = false;
+    setPageTabClosed('automations', false);
     automationsPage.botId = null;
     automationsPage.automationId = null;
     if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
@@ -9322,7 +9342,7 @@
   // with no Automations tab left, the page closes.
   function closeAutomationsTab(id){
     if(id === AUTOMATIONS_BOARD_TAB){
-      automationsPage.boardClosed = true;
+      setPageTabClosed('automations', true);
       // Closed from another view's strip, it just leaves the strip.
       if(!automationsPage.open || automationsPage.automationId){ renderAutomationsPage(); return; }
       var first = automationsPage.tabs[0];
@@ -9361,7 +9381,7 @@
     closeArtifactsPage();
     closeAppsPage();
     automationsPage.open = true;
-    automationsPage.boardClosed = false;
+    setPageTabClosed('automations', false);
     automationsPage.botId = null;
     automationsPage.automationId = null;
     document.body.classList.add('browser-collab-mode', 'automations-mode');
@@ -9393,14 +9413,14 @@
 
   // Artifacts page: pages, documents and live apps you or your bots made,
   // laid out like Automations. Each one opens in its own browser tab.
-  var artifactsPage = {open:false, items:[], filter:'all', query:'', loading:false, error:''};
+  var artifactsPage = {open:false, items:[], filter:'all', query:'', loading:false, error:'', tabClosed:!!closedPageTabs.artifacts};
 
   function openArtifactsPage(){
     closeLocalBrowser();
     closeAutomationsPage();
     closeAppsPage();
     artifactsPage.open = true;
-    artifactsPage.tabClosed = false;
+    setPageTabClosed('artifacts', false);
     document.body.classList.add('browser-collab-mode', 'artifacts-mode');
     setBrowserSidebarOpen(browserSidebarWanted());
     closeChatThread();
@@ -9426,7 +9446,7 @@
     // The tab is the page itself, so it adds no count to the button.
     count: function(){ return 0; },
     close: function(){
-      artifactsPage.tabClosed = true;
+      setPageTabClosed('artifacts', true);
       if(artifactsPage.open) closeArtifactsPage();
       else window.MiaTabStrip.mix.notify('artifacts', JSON.stringify(artifactsStripTabs()));
     },
@@ -9632,7 +9652,7 @@
   // native view (macos/src/app-sandbox.cjs) placed over the page's pane, with
   // its own tab beside the page's.
   var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
-  var appsPage = {open:false, tabClosed:false, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
+  var appsPage = {open:false, tabClosed:!!closedPageTabs.apps, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
     local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, previews:{}, teamId:'', me:'', isAdmin:false};
   var appsUploaders = {};
   var appsScanTimer = null;
@@ -9645,7 +9665,7 @@
     closeAutomationsPage();
     closeArtifactsPage();
     appsPage.open = true;
-    appsPage.tabClosed = false;
+    setPageTabClosed('apps', false);
     document.body.classList.add('browser-collab-mode', 'apps-mode');
     setBrowserSidebarOpen(browserSidebarWanted());
     closeChatThread();
@@ -9676,14 +9696,14 @@
     attention: function(){ return window.MiaAppsPage.reviewCount(appsPage); },
     close: function(id){
       if(id === 'page'){
-        appsPage.tabClosed = true;
+        setPageTabClosed('apps', true);
         if(appsPage.activeTab === 'page' && appsPage.tabs.length) appsPage.activeTab = appsPage.tabs[0].key;
         else if(appsPage.open && appsPage.activeTab === 'page') closeAppsPage();
       } else closeAppTab(id);
       renderAppsPage();
     },
     show: function(){ if(!appsPage.open) runToolsAction('apps'); },
-    select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') appsPage.tabClosed = false; renderAppsPage(); },
+    select: function(id){ appsPage.activeTab = id === 'page' || appsTabByKey(id) ? id : 'page'; if(id === 'page') setPageTabClosed('apps', false); renderAppsPage(); },
     render: notifyAppsTabs,
   });
   function stopLocalServer(id){
@@ -9714,7 +9734,7 @@
   function closeAppTab(key){
     appsPage.activeTab = window.MiaAppsPage.nextTabAfterClose(appsPage, key);
     appsPage.tabs = appsPage.tabs.filter(function(tab){ return tab.key !== key; });
-    if(!appsPage.tabs.length) appsPage.tabClosed = false;
+    if(!appsPage.tabs.length) setPageTabClosed('apps', false);
     var desktop = appsDesktop();
     if(desktop) desktop.close(key).catch(function(){});
   }
@@ -9757,7 +9777,7 @@
   }
   function openAppsReview(appId){
     if(!appsPage.open) runToolsAction('apps');
-    appsPage.tabClosed = false;
+    setPageTabClosed('apps', false);
     appsPage.activeTab = 'page';
     appsPage.query = '';
     var search = el('#appsSearch');
@@ -11525,6 +11545,12 @@
           createdAt: event.createdAt
         }));
       }
+      return;
+    }
+    // "Stopped when Mia closed" taken back: the person started that run again,
+    // under the same id, so its next status row shows it at work.
+    if(metadata.status === 'stopped' && event.deletedAt){
+      delete endedNativeDispatches[dispatchId];
       return;
     }
     // A stop notice, a failure, or the stopped run's deleted status row ends
@@ -19505,17 +19531,13 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch};
-  // What the AI mode search bar can pull besides Mia's own views: the person's
-  // chats kept on this computer, and their artifacts.
-  var aiModeArtifactsAsked = false;
-  function aiModeSearch(query){
-    var q = String(query || '').trim().toLowerCase();
-    if(!q) return [];
-    if(!aiModeArtifactsAsked){ aiModeArtifactsAsked = true; try { loadArtifacts(); } catch(_artifactsError) {} }
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModeChats};
+  // The person's chats kept on this computer, as AI mode lists and searches
+  // them: their bots first, then their other chats.
+  function aiModeChats(){
     var rows = [], seen = {};
     function chat(id, name, sub){
-      if(!id || seen[id] || String(name || '').toLowerCase().indexOf(q) < 0) return;
+      if(!id || seen[id] || !name) return;
       seen[id] = true;
       rows.push({kind:'chat', id:id, label:String(name), sub:sub});
     }
@@ -19527,6 +19549,16 @@
       var created = Date.parse(room.createdAt || '');
       chat(room.roomId, room.name, 'Chat' + (created ? ', ' + new Date(created).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : ''));
     });
+    return rows;
+  }
+  // What the AI mode search bar can pull besides Mia's own views: the person's
+  // chats kept on this computer, and their artifacts.
+  var aiModeArtifactsAsked = false;
+  function aiModeSearch(query){
+    var q = String(query || '').trim().toLowerCase();
+    if(!q) return [];
+    if(!aiModeArtifactsAsked){ aiModeArtifactsAsked = true; try { loadArtifacts(); } catch(_artifactsError) {} }
+    var rows = aiModeChats().filter(function(row){ return row.label.toLowerCase().indexOf(q) >= 0; });
     rows = rows.slice(0, 6);
     artifactsPage.items.filter(function(item){ return String(item.name || '').toLowerCase().indexOf(q) >= 0; }).slice(0, 4).forEach(function(item){
       rows.push({kind:'artifact', label:String(item.name), sub:'Artifact', url:item.kind === 'app' ? item.url : item.path});
