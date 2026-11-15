@@ -19531,7 +19531,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModeChats};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19550,6 +19550,38 @@
       chat(room.roomId, room.name, 'Chat' + (created ? ', ' + new Date(created).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : ''));
     });
     return rows;
+  }
+  // The chats with people, as the sidebar lists them: a company's channels,
+  // groups and direct messages, or Solo's direct messages. Chats with bots
+  // open from the bot itself.
+  function aiModePeopleChats(){
+    if(hubWorkspace()){
+      return (hubChat.channels || []).filter(function(channel){ return channel.kind !== 'bot'; }).map(function(channel){
+        return {kind:'chat', hub:true, id:channel.id, label:hubChannelLabel(channel),
+          sub:channel.kind === 'dm' ? 'Direct message' : channel.kind === 'group' ? 'Group' : 'Channel'};
+      });
+    }
+    var me = String(currentUser || '').toLowerCase();
+    return ((chatWs.rooms && chatWs.rooms.dms) || []).filter(function(dm){
+      return (dm.members || []).some(function(member){ return member.kind === 'human' && String(member.email || '').toLowerCase() !== me; });
+    }).map(function(dm){ return {kind:'chat', id:dm.id, label:dmLabel(dm), sub:'Direct message'}; });
+  }
+  // A company chat's newest page, read the way the sidebar reads it for its
+  // preview: who wrote each message, and what it says. Nothing is marked read.
+  function aiModeChatLines(row){
+    var roomId = row && row.id;
+    if(!roomId || !hubWorkspace() || !hubChannel(roomId)) return Promise.resolve([]);
+    var state = chatRoomState(roomId), me = String(currentUser || '').toLowerCase();
+    var loaded = state.historyInitialized || state.hubPreviewFetched ? Promise.resolve() : loadHubRoomPreview(roomId, state, activeWorkspaceKey);
+    return loaded.then(function(){
+      return (state.messages || []).map(function(m){
+        if(!m || m.system || !m.body) return null;
+        var bot = String(m.sender || '').indexOf('hub-bot:') === 0;
+        var text = bot ? displayBotBody(m.body) : m.body;
+        if(!text) return null;
+        return {who: bot ? (messageBotIdentity(m).name || 'Bot') : String(m.sender || '').toLowerCase() === me ? 'You' : displayNameForEmail(m.sender), text: String(text)};
+      }).filter(Boolean);
+    });
   }
   // What the AI mode search bar can pull besides Mia's own views: the person's
   // chats kept on this computer, and their artifacts.

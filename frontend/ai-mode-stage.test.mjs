@@ -76,12 +76,22 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
   assert.match(js, /more=fresh\?\{fresh:true\}:\{\}/);
 });
 
-test('a drawer at the right edge lists the chats the app has, and picking one reads it on the stage as search does', async () => {
+test('a drawer at the right edge lists the chats with people, and picking one reads it on the stage as search does', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /search: aiModeSearch, chats: aiModeChats\}/);
-  assert.match(app, /var rows = aiModeChats\(\)\.filter\(/, 'search and the drawer share one list of chats');
+  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines\}/);
+  assert.match(app, /function aiModePeopleChats\(\)\{[\s\S]*?channel\.kind !== 'bot'[\s\S]*?member\.kind === 'human'/, 'bots are left out, in a company and in Solo');
+  assert.match(app, /function aiModeChatLines\(row\)\{[\s\S]*?loadHubRoomPreview\(roomId, state, activeWorkspaceKey\)/, 'a company chat is read by the loader the sidebar uses');
   assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
   assert.match(js, /if\(row&&chatRows\[\+row\.dataset\.chat\]\)readChat\(chatRows\[\+row\.dataset\.chat\]\);/);
   assert.match(js, /if\(r\.kind==='artifact'\)\{[\s\S]*?\}\s*readChat\(r\);/);
+  assert.match(js, /if\(r\.hub\)return Promise\.resolve\(appHost\(\)\.chatLines\(r\)\)/);
   assert.match(css, /\.chats-tab\{left:auto;right:0;/);
 });
+
+test('a bot\'s tile opens the chat with it, and "Show me" still opens what it brought back', () => {
+  assert.match(js, /var asChat=!!b\.dataset\.crew;/);
+  assert.match(js, /chatText\(\{id:mate\.conversationId,label:mate\.name\}\)\.then\(/, 'the tile and the drawer read a chat one way');
+  assert.match(js, /shown\.chat\?'your chat with it':'brought this back'/);
+  assert.match(js, /if\(shown&&shown\.chat\)return from\+'<div class="panel result"><div class="md">'/, 'a chat is read as text, not drawn as cards');
+});
+

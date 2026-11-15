@@ -361,7 +361,9 @@ function resultHtml(){
   if(kept)text=R.keep;
   // What a bot brought back takes the stage while the person looks at it.
   var shown=shownBot(),from='';
-  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>brought this back</span><button class="btn" data-hide="1">Close</button></div>';}
+  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>'+(shown.chat?'your chat with it':'brought this back')+'</span><button class="btn" data-hide="1">Close</button></div>';}
+  // Its tile opens the whole chat with it, read as it stands; nothing in it is drawn as a card.
+  if(shown&&shown.chat)return from+'<div class="panel result"><div class="md">'+format(shown.talk==null?'Getting that conversation\u2026':shown.talk||'That conversation has nothing in it yet.')+'</div></div>';
   var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
   // With a canvas the page waits behind the Browser button unless the person brought it forward.
   shotWants=read.cards.map(function(c){return c.page&&!c.bot&&!botNamed(c.title)&&!shotOf(c.page)?shotKey(c.page):null;}).filter(Boolean);
@@ -385,7 +387,7 @@ function choiceHtml(){
 }
 // Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
 // bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
-function shownBot(){return seeing()?null:crew.filter(function(b){return b.open&&b.reply;})[0]||null;}
+function shownBot(){return seeing()?null:crew.filter(function(b){return b.open&&(b.chat||b.reply);})[0]||null;}
 function botLine(b){return b.running?b.line:b.failed?'Could not finish':'Done';}
 function botsHtml(){
   var mine=R?R.bots:[],named=crew.concat(mine),own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
@@ -530,15 +532,29 @@ function findPick(r){
   readChat(r);
 }
 // A chat is read here as it is: who said what, nothing else, and nothing is sent to it.
-function readChat(r){
-  var p=peek=newRun(r.label);p.chatId=r.id;p.running=false;p.past=p.plain=true;p.line='Getting that conversation\u2026';view=-1;draw();
-  call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
-    if(peek!==p)return;
-    var lines=(Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
+// A chat's messages as the app keeps them, newest last: a company chat through the app's own
+// reader, any other from the conversation itself. Nothing is sent or marked read.
+function chatText(r){
+  var name=function(who){return '**'+String(who||'Someone').replace(/[*_`]/g,'')+'**\n\n';};
+  if(r.hub)return Promise.resolve(appHost().chatLines(r)).then(function(lines){
+    return (lines||[]).slice(-60).map(function(l){return name(l.who)+String(l.text).slice(0,6000);});
+  });
+  return call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
+    return (Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
       var meta=(ev&&ev.metadata)||{},text=ev&&ev.content&&typeof ev.content.text==='string'?ev.content.text.trim():'';
       if(!text||ev.deletedAt||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return '';
-      return '**'+(ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label.replace(/[*_`]/g,''):'Someone')+'**\n\n'+text.slice(0,6000);
+      // A job Mia handed over reads as hers, without the working notes she adds for the bot.
+      var brief=text.search(/\s*\[From Mia, in [^\]\n]{1,20}\]/),handed=brief>=0;
+      if(handed)text=text.slice(0,brief);
+      if(!text)return '';
+      return name(handed?'Mia':ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label:'Someone')+text.slice(0,6000);
     }).filter(Boolean).slice(-60);
+  });
+}
+function readChat(r){
+  var p=peek=newRun(r.label);p.chatId=r.id;p.running=false;p.past=p.plain=true;p.line='Getting that conversation…';view=-1;draw();
+  chatText(r).then(function(lines){
+    if(peek!==p)return;
     p.body=lines.join('\n\n---\n\n');
     p.line=lines.length?'Here is that conversation. Nothing was sent.':'That conversation has nothing in it yet.';
     if(open){draw();$('cv').scrollTop=$('cv').scrollHeight;}
@@ -1456,11 +1472,20 @@ function build(){
     var b=e.target&&e.target.closest&&e.target.closest('button');if(!b)return;
     if(b.dataset.crew||b.dataset.show){
       var mate=crew[+(b.dataset.crew||b.dataset.show)];
-      if(mate&&mate.reply){
+      // The tile opens the chat with that bot; "Show me" opens what it brought back.
+      var asChat=!!b.dataset.crew;
+      if(mate&&(asChat||mate.reply)){
         // A bot from an earlier visit can be opened before anything was said this time.
         backToNow();
-        if(!R){R=newRun('');R.running=false;R.sent=true;R.line='Here is what '+mate.name+' brought back.';s=2;}
-        var was=mate.open;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.seen=true;R.top=true;draw();
+        if(!R){R=newRun('');R.running=false;R.sent=true;R.line=asChat?'Here is your chat with '+mate.name+'.':'Here is what '+mate.name+' brought back.';s=2;}
+        var was=mate.open&&!!mate.chat===asChat;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.chat=asChat;if(mate.reply)mate.seen=true;R.top=true;draw();
+        if(mate.open&&asChat){
+          mate.talk=null;
+          chatText({id:mate.conversationId,label:mate.name}).then(function(lines){
+            mate.talk=lines.join('\n\n---\n\n');
+            if(open&&mate.open&&mate.chat){draw();$('cv').scrollTop=$('cv').scrollHeight;}
+          },function(){mate.talk='That conversation could not be opened.';if(open)draw();});
+        }
       }
       return;
     }
