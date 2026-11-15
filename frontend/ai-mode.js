@@ -34,6 +34,7 @@ var MARKUP=
       '<button class="btn ghost" id="modelBtn" aria-expanded="false" hidden>Model</button>'+
       '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
+      '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="full" hidden>Full screen</button>'+
       '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
@@ -57,6 +58,7 @@ var MARKUP=
     '<button class="log-tab chats-tab" id="chatsTab" aria-expanded="false" aria-label="Your chats" title="Your chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>'+
     '<aside class="log chats" id="chats" aria-label="Your chats" hidden></aside>'+
     '<div class="ears" id="ears" hidden><i aria-hidden="true"></i><span id="earsSay">Just talk</span>'+
+      '<button id="earsVoice" aria-pressed="false" aria-label="Mute Mia\'s voice" title="Mute Mia\'s voice"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6v4h2.5L8 13V3L4.5 6z"/><path d="M10.5 5.5a3.5 3.5 0 0 1 0 5M12.5 3.5a6.3 6.3 0 0 1 0 9"/><path class="off" d="M2.5 1.5l11 13"/></svg></button>'+
       '<button id="earsMute" aria-pressed="false" aria-label="Mute the mic" title="Mute the mic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/><path class="off" d="M2.5 1.5l11 13"/></svg></button></div>'+
     '<div class="steps" id="steps" hidden><button id="stepBack" aria-label="The view before" title="The view before">\u2039</button><span id="stepAt"></span>'+
       '<button id="stepNext" aria-label="The view after" title="The view after">\u203a</button><button class="now" id="stepNow" hidden>Back to now</button></div>'+
@@ -341,8 +343,8 @@ function miaLine(){
   if(R.running&&narrating())return dropHandoffs(R.draft).trim().replace(/[*_`]+/g,'');
   // The last view stays up while she makes the next one, so her line says what she is on.
   if(R.running&&R.keep&&R.draft.indexOf('\n')>0)return /```canvas/i.test(R.draft)?'Building your new view\u2026':'Writing this up\u2026';
-  // With the sound off her question has to be read.
-  return !R.running&&R.ask&&muted?R.ask:R.line;
+  // With the sound or her voice off her question has to be read.
+  return !R.running&&R.ask&&(muted||quiet)?R.ask:R.line;
 }
 // Her view being made: one calm panel that says where she is, never the half-written page.
 // The motion is timed off the clock, so a redraw does not start it over.
@@ -1182,13 +1184,13 @@ function siteWire(){
 var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
 // Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
 function speak(t){
-  if(muted||!t||drive||earState==='on')return;
+  if(muted||quiet||!t||drive||earState==='on')return;
   lines.push(String(t).slice(0,600));if(lines.length>2)lines.shift();
   if(!busy)sayNext();
 }
 function sayNext(){
   var t=lines.shift(),my=speakId;
-  if(!t||muted||!open){busy=false;return;}
+  if(!t||muted||quiet||!open){busy=false;return;}
   busy=true;
   function done(){if(my===speakId)sayNext();}
   if(voices&&ac){
@@ -1196,7 +1198,7 @@ function sayNext(){
       .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
       .then(function(b){return ac.decodeAudioData(b);})
       .then(function(buf){
-        if(my!==speakId||muted||!open)return;
+        if(my!==speakId||muted||quiet||!open)return;
         var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.onended=done;src.start();speaking=src;
       }).catch(function(){if(my===speakId)speakOwn(t,done);});
     return;
@@ -1213,7 +1215,7 @@ function welcome(){
 // Returns a way to stop it, for a person who stays in Mia.
 function introSay(t){
   var off=false,ctx=null,AC=window.AudioContext||window.webkitAudioContext;
-  if(muted)return function(){};
+  if(muted||quiet)return function(){};
   introSpoke=true;
   function own(){if(!off)speakOwn(t,function(){});}
   call('/api/ai-mode/voices').then(function(r){
@@ -1236,6 +1238,18 @@ function introSay(t){
 function speakOwn(t,done){
   if(!window.speechSynthesis)return done();
   try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;u.onend=u.onerror=done;window.speechSynthesis.speak(u);}catch(e){done();}
+}
+// Mia's voice has a switch of its own: off, she still works and writes, and the other sounds stay.
+// It is kept for the next visit. The person's mic is muted by its own button.
+var quiet=false;try{quiet=localStorage.getItem('miaAiModeQuiet')==='1';}catch(e){}
+function quietShow(){
+  var b=$('quiet'),e=$('earsVoice'),say=quiet?'Turn Mia\'s voice back on':'Mute Mia\'s voice';
+  b.textContent=quiet?'Mia\'s voice off':'Mia\'s voice on';b.setAttribute('aria-pressed',quiet?'true':'false');
+  e.classList.toggle('on',quiet);e.setAttribute('aria-pressed',quiet?'true':'false');e.title=say;e.setAttribute('aria-label',say);
+}
+function quietSet(){
+  quiet=!quiet;try{localStorage.setItem('miaAiModeQuiet',quiet?'1':'0');}catch(e){}
+  if(quiet)hush();quietShow();if(R)redraw();
 }
 function hush(){
   speakId++;lines=[];busy=false;
@@ -1437,7 +1451,7 @@ function build(){
     var turn=e.target.closest('[data-view]');
     if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
   };
-  $('earsMute').onclick=talkMute;
+  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;

@@ -413,7 +413,11 @@ async function synthesize(text, voice, { env = process.env, request = fetch } = 
     body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    // The page falls back to the computer's voice; the log says why (the answer's number only).
+    console.warn(`[ai-mode] speech was refused (${response.status}); using the computer's voice`);
+    return null;
+  }
   const body = Buffer.from(await response.arrayBuffer());
   return body.length ? { type: 'audio/mpeg', body } : null;
 }

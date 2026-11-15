@@ -347,7 +347,7 @@ a.file:hover{border-color:var(--accent)}
 .ears .off{display:none}
 .ears button.on{background:rgba(255,255,255,.12);color:var(--ink)}
 .ears button.on .off{display:inline}
-.ears:has(button.on) i{background:var(--faint);animation:none}
+.ears:has(#earsMute.on) i{background:var(--faint);animation:none}
 :host(.ears-on) .rail{top:calc(var(--top) + 50px)}
 @media(max-width:1380px){:host(.ears-on) .cv{padding-top:44px}}
 /* Earlier views: back, forward up to now. */

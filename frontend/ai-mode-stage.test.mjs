@@ -95,3 +95,13 @@ test('a bot\'s tile opens the chat with it, and "Show me" still opens what it br
   assert.match(js, /if\(shown&&shown\.chat\)return from\+'<div class="panel result"><div class="md">'/, 'a chat is read as text, not drawn as cards');
 });
 
+
+test('Mia\'s voice has a mute of its own, apart from the sound and from the person\'s mic', () => {
+  assert.match(js, /id="quiet"/);
+  assert.match(js, /id="earsVoice"[^>]*aria-label="Mute Mia\\'s voice"/);
+  assert.match(js, /function speak\(t\)\{\s*if\(muted\|\|quiet\|\|/, 'she says nothing while her voice is off');
+  assert.match(js, /function quietSet\(\)\{[^}]*localStorage\.setItem\('miaAiModeQuiet'/, 'the choice is kept for the next visit');
+  assert.match(js, /R\.ask&&\(muted\|\|quiet\)\?R\.ask:R\.line/, 'a question she cannot say is written');
+  assert.doesNotMatch(js.slice(js.indexOf('function quietSet'), js.indexOf('function hush')), /talk\.stop|master/, 'it leaves the mic and the other sounds alone');
+  assert.match(css, /\.ears:has\(#earsMute\.on\) i\{/, 'only a muted mic stops the listening dot');
+});
