@@ -43,6 +43,20 @@ test('a card that names a page shows the kept picture of that page, or the name 
   assert.match(js, /class="site-n"/);
 });
 
+test('a card about a site takes its picture from an open tab of that site and opens the site when its picture is clicked', () => {
+  const at = js.indexOf('var shots={}');
+  const run = new Function(js.slice(at, js.indexOf('function picHtml(v){')) + 'return {wants:function(w){shotWants=w;},shotKey:shotKey,shotWanted:shotWanted,pageUrl:pageUrl};');
+  const { wants, shotKey, shotWanted, pageUrl } = run();
+  wants([shotKey('example.com'), shotKey('other.example/in/someone')]);
+  // A card that names only the site takes any page of it; one that names a page takes that page.
+  assert.equal(shotWanted('https://www.example.com/about'), true);
+  assert.equal(shotWanted('https://other.example/in/someone/'), true);
+  assert.equal(shotWanted('https://other.example/in/other'), false);
+  assert.equal(pageUrl('example.com/x'), 'https://example.com/x');
+  assert.match(js, /class="pic visit" href=/);
+  assert.match(js, /action:'spaceFrames',ids:hit\.map/);
+});
+
 test('"New chat" in the drawer starts another of the app\'s own chats and clears the stage', () => {
   assert.match(js, /<button class="new" data-new="1">New chat<\/button>/);
   assert.match(js, /if\(e\.target\.closest\('\[data-new\]'\)\)\{newChat\(\);return;\}/);

@@ -279,13 +279,20 @@ function shotKeep(u,image){
   });
 }
 function shotOf(u){var k=shotKey(u);return k?shots[k.page]||(k.whole&&shots[k.site])||'':'';}
+// The cards on the stage that still have no picture, and whether an open tab is the page of one of them.
+var shotWants=[];
+function shotWanted(u){
+  var k=shotKey(u);
+  return !!k&&shotWants.some(function(w){return w.page===k.page||(w.whole&&w.site===k.site);});
+}
+function pageUrl(p){return p?(/^https?:\/\//i.test(p)?p:'https://'+p):'';}
 function picHtml(v){
   if(v.bot)return '<img alt="" class="mote" '+moteArt(v.bot)+'>';
   if(v.src)return '<img alt=""'+(v.mark||'')+' src="'+esc(v.src)+'">';
   return v.site?'<span class="site-n">'+esc(v.site)+'</span>':'';
 }
 function itemView(it){
-  if(it.key!=='page'){var bot=it.card.bot||botNamed(it.card.title),shot=bot?'':shotOf(it.card.page);return {title:it.card.title,text:it.card.text,bot:bot,src:bot?'':shot||pic(it.card.image),mark:shot?' data-shot':'',site:it.card.page?siteName(/^https?:\/\//i.test(it.card.page)?it.card.page:'https://'+it.card.page):''};}
+  if(it.key!=='page'){var bot=it.card.bot||botNamed(it.card.title),shot=bot?'':shotOf(it.card.page);return {title:it.card.title,text:it.card.text,bot:bot,src:bot?'':shot||pic(it.card.image),mark:shot?' data-shot':'',site:siteName(pageUrl(it.card.page)),url:bot?'':pageUrl(it.card.page)};}
   var p=R.page||{};
   return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
 }
@@ -303,7 +310,9 @@ function frontHtml(it){
   if(it.key==='page'&&pane())return '<div class="front live" id="frontPage"></div>';
   if(it.key==='page')return '<figure class="front shot">'+x+(v.src?'<img alt="The page Mia is in"'+v.mark+' src="'+esc(v.src)+'">':'<p class="hint">Opening the page.</p>')+
     '<figcaption><b>'+esc(v.title)+'</b><span>'+esc(v.text)+'</span><small>A picture of the page I am in. It follows what I do there.</small></figcaption></figure>';
-  return '<article class="front card'+(v.bot?' of-bot':'')+'">'+x+'<div class="pic">'+picHtml(v)+'</div><div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
+  // A card about a site opens that site: in Mia's browser on the stage, or in a tab without the app.
+  var pic=v.url&&v.site?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':'<div class="pic">'+picHtml(v)+'</div>';
+  return '<article class="front card'+(v.bot?' of-bot':'')+'">'+x+pic+'<div class="card-t"><b>'+esc(v.title)+'</b>'+(v.text?'<p>'+esc(v.text)+'</p>':'')+'</div></article>';
 }
 // focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
 // Mia's work does not undo for the rest of the run.
@@ -353,6 +362,7 @@ function resultHtml(){
   if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>brought this back</span><button class="btn" data-hide="1">Close</button></div>';}
   var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
   // With a canvas the page waits behind the Browser button unless the person brought it forward.
+  shotWants=read.cards.map(function(c){return c.page&&!c.bot&&!botNamed(c.title)&&!shotOf(c.page)?shotKey(c.page):null;}).filter(Boolean);
   if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
@@ -1052,15 +1062,31 @@ function pagePoll(){
 }
 (function(){
   if(!web||!web.onState||!web.command)return;
-  var tab=null,acting=false,seen=0,want=false,busy=false,space='solo';
+  var tab=null,acting=false,seen=0,want=false,busy=false,space='solo',all=[],tried={},looking=false;
   web.onState(function(st){
     // The browser only hands out pictures for the workspace it is showing.
     if(st&&typeof st.workspace==='string'&&st.workspace)space=st.workspace;
     var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],hers=tabs.filter(function(t){return t.botActivity;})[0];
+    all=tabs;
     if(hers){tab=hers;acting=true;return;}
     if(acting){acting=false;seen=Date.now();}
     if(tab)tab=tabs.filter(function(t){return t.id===tab.id;})[0]||null;
   });
+  // A card's site that is open in the browser, whoever opened it, gives the card its picture.
+  setInterval(function(){
+    if(looking||!open||!shotWants.length)return;
+    var now=Date.now(),hit=all.filter(function(t){return !t.private&&!t.loading&&t.url&&shotWanted(t.url)&&!(now-tried[t.id]<15000);}).slice(0,4);
+    if(!hit.length)return;
+    looking=true;hit.forEach(function(t){tried[t.id]=now;});
+    web.command({action:'spaceFrames',ids:hit.map(function(t){return t.id;}),width:640,workspace:space}).then(function(r){
+      var got=false;
+      (r&&Array.isArray(r.frames)?r.frames:[]).forEach(function(f){
+        var t=hit.filter(function(x){return x.id===f.id;})[0];
+        if(t&&f.dataUrl){shotKeep(t.url,f.dataUrl);got=true;}
+      });
+      if(got)redraw();
+    },function(){}).then(function(){looking=false;});
+  },2000);
   setInterval(function(){
     // A little after her last step the page has settled and the pictures stop.
     if(busy||!tab||(!acting&&Date.now()-seen>20000))return;

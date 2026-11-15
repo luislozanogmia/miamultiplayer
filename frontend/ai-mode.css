@@ -199,6 +199,9 @@ div.bot{cursor:default;opacity:1}
 @keyframes front{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
 .front.card{cursor:default}
 .front.card .pic{aspect-ratio:16/9}
+.front.card .pic.visit{display:block;cursor:pointer;color:inherit;text-decoration:none}
+.front.card .pic.visit .go{position:absolute;left:12px;bottom:12px;padding:6px 11px;border:1px solid var(--rule-strong);border-radius:999px;background:rgba(20,18,15,.82);font:500 12px/1 var(--sans);color:var(--ink)}
+.front.card .pic.visit:hover .go{border-color:var(--accent-text)}
 .front.card .card-t{padding:16px 18px 18px}
 .front.card .card-t b{font-size:19px}
 .front.card .card-t p{font-size:15px}
