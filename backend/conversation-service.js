@@ -339,14 +339,14 @@ function createConversationService({ repository, authorization, realtime = null,
         && ((earlier.metadata || {}).teamWorkspace || '') === place)
       .sort((one, other) => String(other.createdAt).localeCompare(String(one.createdAt)))[0];
     // One kept from before this had a name of its own takes the name now.
-    if (kept && kept.name !== 'AI mode') {
-      repository.updateConversation({ companyId: normalizedCompanyId, id: kept.id, name: 'AI mode', updatedAt: kept.updatedAt || kept.createdAt });
-      kept.name = 'AI mode';
+    if (kept && kept.name !== 'Flow mode') {
+      repository.updateConversation({ companyId: normalizedCompanyId, id: kept.id, name: 'Flow mode', updatedAt: kept.updatedAt || kept.createdAt });
+      kept.name = 'Flow mode';
     }
     const conversation = kept || repository.createConversation({
       companyId: normalizedCompanyId,
       type: 'agent',
-      name: 'AI mode',
+      name: 'Flow mode',
       createdBy: owner.principalId,
       createdAt,
       metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE, ...(teamWorkspace ? { teamWorkspace } : {}) },

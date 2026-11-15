@@ -24,7 +24,7 @@ test('the turn note tells Mia to do the work for real and how to hand a choice b
 
 test('in her own chat Mia is told what AI mode is and how a person gets there', () => {
   const note = aboutNote();
-  assert.match(note, /"AI mode" in the left sidebar/);
+  assert.match(note, /"Flow mode" in the left sidebar/);
   assert.match(note, /You cannot open it for them/);
   assert.match(note, /Hands-free/);
   assert.doesNotMatch(note, /Card: </);

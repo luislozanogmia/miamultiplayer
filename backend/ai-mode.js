@@ -46,7 +46,7 @@ function modelSelection() {
 // bots she handed work to stand. All three are optional.
 function turnNote(hub) {
   return (
-    '[AI mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
+    '[Flow mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
     'stage where they hear you say each step as you take it, then see your reply.\n' +
     '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
     '- Begin your reply with one short sentence, under 16 words, that can be said out loud: what you did or ' +
@@ -145,7 +145,7 @@ function parseHandoffs(reply) {
 function handoffText(brief) {
   return (
     clip(brief, 4000) + '\n\n' +
-    '[From Mia, in AI mode] The person gave Mia this job and she passed it to you. Do it for real, in this chat. ' +
+    '[From Mia, in Flow mode] The person gave Mia this job and she passed it to you. Do it for real, in this chat. ' +
     'Begin your reply with a report of under 100 words: what you did, what you found, and what needs the person. ' +
     'Then the result. When it is a set of things to look at or pick from, write each one as three lines: ' +
     '"Card: <a title, six words at most>", "Image: <one to three plain words to picture it>" (or, for a ' +
@@ -226,15 +226,15 @@ function routerNote(hub) {
 // and send a person there. Inside an AI mode run she gets turnNote() instead.
 function aboutNote() {
   return (
-    '[About AI mode] Mia has a second way to work with you, called AI mode (a preview). The person opens ' +
-    'it with "AI mode" in the left sidebar, and leaves it with Leave or the Escape key. You cannot open it for them.\n' +
+    '[About Flow mode] Mia has a second way to work with you, called Flow mode (a preview): The ultimate interface, where the human intent becomes AI execution. The person opens ' +
+    'it with "Flow mode" in the left sidebar, and leaves it with Leave or the Escape key. You cannot open it for them.\n' +
     '- What it is: a full-screen stage in place of the chat. The person types or says a direction, and with ' +
     'Hands-free on they just talk, with no button to press. You do the work with your tools, your bots, ' +
     'background workers and the browser, and you say each step out loud as you take it.\n' +
     '- What they see: the result as cards, their bots and workers at work, and the browser in a window on ' +
     'the stage. They can stop you, take over the browser with "Let me drive", change your voice, or turn the sound off.\n' +
     '- It is the same you, with the same bots, files and memory. It keeps its own conversation, apart from this chat.\n' +
-    '- A short intro plays the first time. It can be watched again in Settings, under "AI mode intro".\n' +
+    '- A short intro plays the first time. It can be watched again in Settings, under "Flow mode intro".\n' +
     '- Bring it up when the person asks what it is, or wants to talk out loud, watch the work happen, or hand ' +
     'over a whole job. Do not push it otherwise, and do not write cards or "Option:" lines in this chat.'
   );

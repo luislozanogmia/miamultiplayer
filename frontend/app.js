@@ -13022,7 +13022,7 @@
         i++;
         while(i < lines.length && !/^```\s*$/.test(lines[i].trim())){ code.push(lines[i]); i++; }
         if(i < lines.length) i++;
-        blocks.push(drawn ? '<p><em>Mia drew a view here. Open AI mode and step back to see it.</em></p>'
+        blocks.push(drawn ? '<p><em>Mia drew a view here. Open Flow mode and step back to see it.</em></p>'
           : '<pre class="chat-md-code"><code>' + esc(code.join('\n')) + '</code></pre>');
         continue;
       }

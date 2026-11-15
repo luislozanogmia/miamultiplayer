@@ -21,16 +21,16 @@
   'use strict';
 
   var COPY = {
-    label: 'AI Mode preview',
-    title: 'Welcome to AI Mode.',
+    label: 'Flow mode preview',
+    title: 'Welcome to Flow mode.',
     tag: 'Preview',
     line: 'You set the direction. I\'ll handle the execution.',
-    sub: 'An experimental preview of the next generation of human-AI collaboration.',
+    sub: 'The ultimate interface, where the human intent becomes AI execution.',
     note: 'Your familiar Mia workspace is always one click away.',
-    spoken: 'Welcome to AI Mode. You set the direction. I\'ll handle the execution.',
+    spoken: 'Welcome to Flow mode. You set the direction. I\'ll handle the execution.',
     skip: 'Skip',
     later: 'Stay in Mia',
-    go: 'Enter AI Mode',
+    go: 'Enter Flow mode',
     typed: 'Plan next week\'s launch',
     placeholder: 'Say what you want',
     captions: {

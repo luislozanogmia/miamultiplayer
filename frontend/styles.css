@@ -1191,8 +1191,9 @@
   /* AI mode: the way in sits above the footer; in the narrow rail only its icon shows. */
   .ai-mode-entry{flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:pointer;}
   .ai-mode-entry:hover{background:var(--sand-fill-ghost-hover);}
+  .ai-mode-entry-what{display:inline-grid;place-items:center;width:14px;height:14px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:9.5px;line-height:1;opacity:.8;}
   .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
-  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-tag{display:none;}}
+  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-what,.ai-mode-entry-tag{display:none;}}
   /* At rail width only the mark fits. */
   @media (max-width:1100px){.update-cue{margin:4px auto;padding:7px;}.update-cue-text,.update-cue-detail{display:none;}}
   .update-cue-bar{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--sand-fill-ghost-hover);transition:width .4s ease;pointer-events:none;}

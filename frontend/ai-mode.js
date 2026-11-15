@@ -24,7 +24,7 @@ var MARKUP=
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
     '<div class="hud pad" id="hud">'+
-      '<span class="who"><span id="hudMark" style="width:20px;height:20px"></span>AI mode</span>'+
+      '<span class="who"><span id="hudMark" style="width:20px;height:20px"></span>Flow mode<button class="what" id="what" type="button" aria-label="What Flow mode is" aria-expanded="false">?</button><span class="what-tip" id="whatTip" role="tooltip" hidden>The ultimate interface, where the human intent becomes AI execution</span></span>'+
       '<span class="sp"></span>'+
       '<span class="tools" id="tools" hidden>'+
       '<button class="btn" id="stop" hidden>Stop</button>'+
@@ -42,10 +42,10 @@ var MARKUP=
       '<button class="btn ghost more" id="more" aria-expanded="false" aria-label="Show the controls">\u2039</button>'+
     '</div>'+
     '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
-    '<label class="blur-bar" id="modelBar" hidden><small>Model</small><select id="model" aria-label="The model Mia works with in AI mode"></select></label>'+
+    '<label class="blur-bar" id="modelBar" hidden><small>Model</small><select id="model" aria-label="The model Mia works with in Flow mode"></select></label>'+
     '<div id="hold" hidden></div>'+
     '<div class="phone-bar" id="phoneBar" hidden>'+
-      '<b>AI mode on your phone</b>'+
+      '<b>Flow mode on your phone</b>'+
       '<p id="phoneNote"></p>'+
       '<output class="phone-code" id="phoneCode" hidden></output>'+
       '<ul id="phoneList"></ul>'+
@@ -551,7 +551,7 @@ function draw(){
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   var seen=seeing();
   if(seen)h=stageHtml(seen);
-  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
+  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to Flow mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
   else h=stageHtml(null);
   // The same stage is not drawn again: every redraw would reload the frame and start the fades over.
   // A stage that only grows (the same run, more of it) is rebuilt without its entrance motion.
@@ -993,7 +993,7 @@ function phoneDraw(){
   if(phone.code&&!left){phone.code='';clearInterval(phone.tick);phone.tick=null;}
   $('phoneCode').hidden=!phone.code;$('phoneCode').textContent=phone.code;
   $('phoneNote').textContent=phone.note||(phone.code?'Type this code in Mia on your phone. It works once, for '+(left>60?Math.ceil(left/60)+' more minutes.':left+' more seconds.')
-    :phone.list.length?'These phones can use AI mode on this computer while Mia is open here.'
+    :phone.list.length?'These phones can use Flow mode on this computer while Mia is open here.'
     :'Open Mia on your phone, then get a code here to connect it.');
   $('phonePair').disabled=phone.busy;$('phonePair').textContent=phone.code?'New code':'Connect a phone';
   $('phoneList').innerHTML=phone.list.map(function(d){
@@ -1191,7 +1191,7 @@ function sayNext(){
 var introSpoke=false;
 function welcome(){
   if(introSpoke){introSpoke=false;return;}
-  speak('Welcome to AI Mode. You set the direction. I\'ll handle the execution.');
+  speak('Welcome to Flow mode. You set the direction. I\'ll handle the execution.');
 }
 // The intro plays before AI mode is open, so its welcome is said here, in the same voice.
 // Returns a way to stop it, for a person who stays in Mia.
@@ -1409,6 +1409,7 @@ function build(){
   $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
   $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
   $('chatsTab').onclick=function(){chatsOn=true;chatsDraw();};
+  $('what').onclick=function(){var tip=$('whatTip');tip.hidden=!tip.hidden;this.setAttribute('aria-expanded',String(!tip.hidden));};
   $('chats').onclick=function(e){
     if(e.target.closest('[data-x]')){chatsOn=false;chatsDraw();return;}
     var row=e.target.closest('[data-chat]');

@@ -595,7 +595,7 @@ test('the AI mode chat is the person\'s own, one per place, kept and listed with
   const second = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
 
   assert.equal(first.type, 'agent');
-  assert.equal(first.name, 'AI mode');
+  assert.equal(first.name, 'Flow mode');
   assert.equal(first.metadata.teamWorkspace, undefined, 'opened in Solo it belongs to no company');
   assert.equal(first.metadata.source, 'ai-mode');
   assert.equal(first.metadata.agentId, 'gateway');
@@ -615,7 +615,7 @@ test('the AI mode chat is the person\'s own, one per place, kept and listed with
   assert.equal(repository.getConversation({ companyId: 'company-a', id: first.id, includeDeleted: true }).deletedAt, null);
   const next = service.openAiModeConversation({ companyId: 'company-a', principal: owner(), fresh: true, createdAt: '2999-01-01T00:00:00.000Z' });
   assert.notEqual(next.id, first.id, 'a new chat is another chat');
-  assert.equal(next.name, 'AI mode');
+  assert.equal(next.name, 'Flow mode');
   assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner() }).id, next.id, 'coming back opens the newest');
   assert.equal(repository.getConversation({ companyId: 'company-a', id: first.id }).deletedAt, null, 'the earlier one is kept');
   assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner(), teamWorkspace: team }).id, inCompany.id, 'a new chat in Solo leaves the company\'s alone');
