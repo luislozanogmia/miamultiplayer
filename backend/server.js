@@ -7371,6 +7371,25 @@ function createNativeDispatchReplyEvent(dispatch, trigger, input) {
   });
 }
 
+// The bot's chat Mia hands work to. Asked from a company, it is the bot's
+// chat in that company (the one the person opens under My Bots there), so the
+// run belongs to that company and uses its browser tabs; asked from Solo it
+// is the bot's Solo chat.
+async function nativeHandoffBotConversation(bot, conversation, senderId) {
+  const main = await ensureNativeBotConversation(bot);
+  const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
+  const sender = String(senderId || '').trim().toLowerCase();
+  // Only your own bot has a chat of yours in a company.
+  if (!main || typeof team !== 'string' || !/^hub_[a-f0-9]{32}$/.test(team) || ownerOf(bot) !== sender) return main;
+  return nativeConversationService.createConversation({
+    companyId: nativeCompanyId('solo', sender),
+    principal: nativeConversationPrincipal(sender, 'solo'),
+    type: 'bot',
+    name: bot.name,
+    metadata: { botId: bot.id, departments: departmentsOf(bot), teamWorkspace: team, source: 'team-bot-chat' },
+  });
+}
+
 // The legacy room transport used to turn Mia's @-mentions into worker calls after her message
 // posted. Native conversations mirror the user's delegated request into each
 // bot's own chat; the private Mia conversation remains a strict 1:1.
@@ -7395,7 +7414,7 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
   if (!jobs.length) return [];
   return Promise.all(jobs.map(async ({ bot, brief, text: jobText, model }) => {
     if (dispatch && cancelNativeDispatchForInactiveUser(dispatch, trigger)) return null;
-    const botConversation = await ensureNativeBotConversation(bot);
+    const botConversation = await nativeHandoffBotConversation(bot, conversation, trigger.senderId);
     if (!botConversation) return null;
     const at = Date.now();
     const result = createNativeDispatchEvent(dispatch, trigger, {
