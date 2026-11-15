@@ -74,7 +74,7 @@ var MARKUP=
 var host=null,root=null,open=false,drive=false;
 // One run: what the person said and everything Mia has done about it so far.
 var fullOwn=false;
-var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},mindMap={},seedId=0,drawTimer=null;
+var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},crew=[],mindMap={},seedId=0,drawTimer=null;
 function $(id){return root.getElementById(id);}
 function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function str(v,n){return (typeof v==='string'?v.trim():'').slice(0,n);}
@@ -142,8 +142,23 @@ function mount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.M
 function unmount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.destroy(m);});}
 
 // A reply opens with the sentence Mia says out loud; choices she leaves to the person close it.
+// A job Mia hands to a bot is written for the app ("Handoff:", "Model:", "Brief:"); it is not shown.
+function dropHandoffs(text){
+  var out=[],on=false,brief=false;
+  String(text||'').replace(/\r/g,'').split('\n').forEach(function(l){
+    if(/^\s*(?:[-*]\s*)?\**Handoff:/i.test(l)){on=true;brief=false;return;}
+    if(on){
+      var part=/^\s*(?:[-*]\s*)?\**(Model|Brief):/i.exec(l);
+      if(part){if(/brief/i.test(part[1]))brief=true;return;}
+      if(brief&&l.trim()&&!/^\s*(?:[-*]\s*)?\**(?:Card|Option|Next):|^\s*```/i.test(l))return;
+      on=false;
+    }
+    out.push(l);
+  });
+  return out.join('\n');
+}
 function readReply(text){
-  var lines=String(text||'').replace(/\r/g,'').split('\n'),options=[];
+  var lines=dropHandoffs(text).split('\n'),options=[];
   while(lines.length){
     var last=lines[lines.length-1].trim(),m=/^(?:[-*]\s*)?\**Option:?\**:?\s*(.+)$/i.exec(last);
     if(m){options.unshift(str(m[1].replace(/\*+/g,''),80));lines.pop();}else if(!last)lines.pop();else break;
@@ -183,7 +198,7 @@ function readCanvas(text){
   if(!m[3])html=html.slice(0,html.lastIndexOf('>')+1);
   return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
 }
-function hasCanvas(){return !!R&&/(^|\n)```canvas/i.test(R.running?R.draft:R.body);}
+function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.draft:R.body);}
 // The frame is kept across redraws, so what she drew does not blink each time the stage changes.
 function canvasHold(){
   var el=canvas.el,hold=$('hold');
@@ -272,12 +287,12 @@ function newRun(text){
   return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
     asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
 }
-function narrating(){var d=R.draft.trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
+function narrating(){var d=dropHandoffs(R.draft).trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
 function miaLine(){
   if(R.note)return R.note;
   var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
   if(ask)return 'I need your OK before I go on.';
-  if(R.running&&narrating())return R.draft.trim().replace(/[*_`]+/g,'');
+  if(R.running&&narrating())return dropHandoffs(R.draft).trim().replace(/[*_`]+/g,'');
   // With the sound off her question has to be read.
   return !R.running&&R.ask&&muted?R.ask:R.line;
 }
@@ -286,13 +301,16 @@ function resultHtml(){
   var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
   // One short line on its own is her narration, shown beside her mark, not a result.
   if(R.running&&narrating())text='';
+  // What a bot brought back takes the stage while the person looks at it.
+  var shown=shownBot(),from='';
+  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>brought this back</span><button class="btn" data-hide="1">Close</button></div>';}
   var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
   // With a canvas the page waits behind the Browser button unless the person brought it forward.
   if(pageOn()&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
-  return (front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
+  return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
     :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':'')+(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':''))+
-    (read.rest?'<div class="panel result'+(R.running?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
+    (read.rest?'<div class="panel result'+(R.running&&!shown?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
 function askHtml(a){
   if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
@@ -305,20 +323,36 @@ function choiceHtml(){
   return '<div class="panel ask open">'+(R.options.length?'<span class="lbl">Needs your judgment</span><div class="opts">'+R.options.map(function(o,i){return '<button class="btn" data-opt="'+i+'">'+esc(o)+'</button>';}).join('')+'</div>':'')+
     (R.next&&!R.options.length?'<span class="lbl">Next</span><div class="opts"><button class="btn" data-next="1">'+esc(R.next)+'</button></div>':'')+'</div>';
 }
-// Bots at work: the workers of this run, then the person's own bots that are working right now.
-// A bot that is not working is not shown.
+// Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
+// bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
+function shownBot(){return crew.filter(function(b){return b.open&&b.reply;})[0]||null;}
+function botLine(b){return b.running?b.line:b.failed?'Could not finish':'Done';}
 function botsHtml(){
-  var own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
-    return b.working&&!R.bots.some(function(w){return w.name===b.name;});
+  var named=crew.concat(R.bots),own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
+    return b.working&&!named.some(function(w){return w.name===b.name;});
   }).slice(0,8);
-  if(!R.bots.length&&!own.length)return '';
-  return '<span class="lbl">'+(R.bots.length+own.length===1?'Bot at work':'Bots at work')+'</span><div class="crew">'+R.bots.map(function(b,i){
-    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-bot="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(b.running?b.line:b.failed?'Could not finish':'Done')+'</span></button>';
-  }).join('')+own.map(function(b){
+  if(!named.length&&!own.length)return '';
+  function tile(kind){return function(b,i){
+    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-'+kind+'="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(botLine(b))+'</span></button>';
+  };}
+  // The bots stand at the right edge of the screen, out of the way of what is being shown.
+  return '<div class="rail" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+R.bots.map(tile('bot')).join('')+own.map(function(b){
     return '<div class="bot busy"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step">Working</span></div>';
-  }).join('')+'</div>'+R.bots.filter(function(b){return b.open;}).map(function(b){
+  }).join('')+'</div>';
+}
+// What a background worker wrote, opened from its tile.
+function miniHtml(){
+  return R.bots.filter(function(b){return b.open;}).map(function(b){
     return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" '+moteArt(b.name)+'><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
       (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
+  }).join('');
+}
+// A bot that finished waits for the person: look at what it made, or leave it with Mia.
+function doneHtml(){
+  return crew.map(function(b,i){
+    if(b.running||!b.reply||b.seen)return '';
+    return '<div class="panel ask open"><span class="lbl">Finished</span><b>'+esc(b.name)+' has finished. Want to see it?</b>'+(b.report?'<p>'+esc(b.report)+'</p>':'')+
+      '<div class="acts"><button class="btn primary" data-show="'+i+'">Show me</button><button class="btn" data-manage="'+i+'">You manage it</button></div></div>';
   }).join('');
 }
 function filesHtml(){
@@ -335,10 +369,10 @@ function draw(){
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>';
   else{
-    var side=R.asks.map(askHtml).join('')+choiceHtml()+botsHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
+    var side=R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml(),main=resultHtml(),quiet=!main&&!side;
     h='<div class="wrap still'+(quiet?' center':'')+'"><div class="said"><small>You said</small><p>'+esc(R.said)+'</p></div>'+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
-      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>';
+      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+botsHtml();
   }
   cv.innerHTML=h;mount(cv);canvasPlace();
   // The finished work is read from its top; while it grows the view follows the newest line.
@@ -355,12 +389,13 @@ function say(t){if(!t||t===R.spoken)return;R.spoken=t;speak(t);}
 // What the run sends while it is going: steps, the lines Mia says between them, the reply being written.
 function onActivity(a){
   if(!R||!a||typeof a!=='object')return;
+  // The bots Mia put on the work are named after her reply is saved; they still count.
+  if(a.aiMode==='handoff'){(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);redraw();return;}
   // A last signal can land after the reply it belongs to; that run is over.
   if(a.dispatchId&&R.over[a.dispatchId])return;
   if(a.dispatchId&&!R.dispatch)R.dispatch=a.dispatchId;
   if(a.aiMode==='said'){R.line=str(a.text,200);R.told=true;R.toldAt=Date.now();say(R.line);}
   else if(a.aiMode==='writing')R.draft=String(a.text||'').slice(0,20000);
-  else if(a.aiMode==='handoff')(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);
   else if(a.aiMode==='worker'){followWorker(a.worker);redraw();return;}
   else if(a.phase==='start'){
     var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
@@ -430,19 +465,27 @@ function listen(id,onEv,onAct){
   };
   return ws;
 }
-// Each bot Mia put on the work does it in its own chat; the stage follows it there.
+// Each bot Mia put on the work does it in its own chat; the stage follows it there, and keeps
+// following while the person gives Mia the next thing.
 function followBot(b){
-  if(!b||!b.conversationId||!R||R.bots.some(function(x){return x.conversationId===b.conversationId;}))return;
-  var bot={name:str(b.name,40)||'Bot',conversationId:b.conversationId,running:true,line:'Starting',reply:'',open:false},my=R;
-  R.bots.push(bot);
+  if(!b||!b.conversationId||!R)return;
+  var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
+  if(!bot){if(crew.length>=8)crew.shift();bot={name:str(b.name,40)||'Bot',conversationId:b.conversationId};crew.push(bot);}
+  // A new job for a bot already on the stage starts it over.
+  bot.running=true;bot.line='Starting';bot.reply='';bot.report='';bot.open=false;bot.seen=false;bot.at=Date.now()-2000;
   if(botSocks[b.conversationId])return;
   botSocks[b.conversationId]=listen(b.conversationId,function(ev){
     var meta=(ev&&ev.metadata)||{};
-    if(my!==R||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<my.at)return;
+    if(!open||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo||Date.parse(ev.createdAt)<bot.at)return;
     var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
-    if(text){bot.reply=text.slice(0,8000);bot.running=false;redraw();}
+    if(!text)return;
+    bot.reply=text.slice(0,20000);bot.running=false;
+    // Its report is the first paragraph it wrote, cut to what fits a card.
+    bot.report=str(text.replace(/[*_`#>]+/g,'').split(/\n\s*\n|\n(?=\s*Card:)/i)[0].replace(/\s+/g,' '),420);
+    if(!bot.seen)speak(bot.name+' has finished. Want to see it?');
+    redraw();
   },function(a){
-    if(my!==R||!a)return;
+    if(!open||!a)return;
     if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
   });
 }
@@ -455,7 +498,7 @@ function followWorker(w){
   if(w.state==='step'){bot.running=true;bot.line=str(w.line,40)||'Working';}
   else if(w.state==='done'){bot.running=false;bot.failed=w.failed===true;}
 }
-function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};}
+function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];}
 // Mia's chat for this visit: made once, then every direction goes into it.
 function openChat(){
   if(conv)return Promise.resolve(conv);
@@ -484,7 +527,7 @@ function direct(t,shown){
   var steering=s===2&&R&&R.running&&R.sent;
   var before=R&&R.sent?{said:str(R.said,400),ask:str(R.ask,200)}:null;
   if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
-  else{closeBots();R=newRun(shown||t);R.at=Date.now()-2000;seed(shown||t);}
+  else{crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});R=newRun(shown||t);R.at=Date.now()-2000;seed(shown||t);}
   s=2;draw();
   var my=R;
   var send=function(text){
@@ -1007,6 +1050,15 @@ function build(){
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
     else if(b.dataset.next)direct(R.next);
     else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
+    else if(b.dataset.crew||b.dataset.show){
+      var mate=crew[+(b.dataset.crew||b.dataset.show)];
+      if(mate&&mate.reply){var was=mate.open;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.seen=true;R.top=true;draw();}
+    }
+    else if(b.dataset.hide){crew.forEach(function(x){x.open=false;});draw();}
+    else if(b.dataset.manage){
+      var left=crew[+b.dataset.manage];
+      if(left){left.seen=true;direct('Look at what '+left.name+' brought back and take it from here. Tell me only what needs me.','You manage '+left.name+'.');}
+    }
   });
   $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.

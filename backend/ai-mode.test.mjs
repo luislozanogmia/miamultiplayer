@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -211,4 +211,70 @@ test('an AI mode run asks for the mid Claude model, and the server falls back wh
   const { readFileSync } = await import('node:fs');
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   assert.match(source, /!rawChatModelSelection && isGatewayAgent && aiMode\.isAiModeConversation\(conversation\)\n\s+\? await chatModelSelectionForUser\(aiMode\.modelSelection\(\), trigger\.senderId\)\.catch\(\(\) => null\)/);
+});
+
+test('with bots, the turn note makes Mia the router and lists the bots, the models and the reports', () => {
+  const note = turnNote({
+    bots: [{ name: 'Scout', about: 'Finds people to talk to' }, { name: '' }],
+    models: ['claude-opus-5-5', 'luna-2'],
+    reports: [
+      { name: 'Scout', state: 'finished', brief: 'Find ten prospects', report: 'Found ten. Two need a look.' },
+      { name: 'Writer', state: 'working', brief: 'Draft the note', report: 'not shown yet' },
+    ],
+  });
+  assert.match(note, /You are the router/);
+  assert.match(note, /Scout \(Finds people to talk to\)/);
+  assert.match(note, /Handoff: </);
+  assert.match(note, /claude-opus-5-5, luna-2/);
+  assert.match(note, /What the person says about which model to use always wins/);
+  assert.match(note, /- Scout, finished\. Job: Find ten prospects Report: Found ten\. Two need a look\./);
+  assert.match(note, /- Writer, still working\. Job: Draft the note$/);
+});
+
+test('without bots the turn note is as before, with no router part', () => {
+  assert.equal(turnNote({ bots: [], models: ['luna-2'] }), turnNote());
+  assert.doesNotMatch(turnNote(), /You are the router/);
+});
+
+test('hand-offs are read from the reply: the bot, the model when given, the whole brief', () => {
+  const reply = [
+    'I put Scout and the writer on it.',
+    'Handoff: Scout',
+    'Model: Opus',
+    'Brief: Find ten prospects in logistics.',
+    'Show each as a card.',
+    '',
+    '- **Handoff:** @Writer',
+    'Brief: Draft a first note.',
+    'Card: Not part of the brief',
+    'Handoff: Nobody',
+  ].join('\n');
+  assert.deepEqual(parseHandoffs(reply), [
+    { bot: 'Scout', model: 'Opus', brief: 'Find ten prospects in logistics. Show each as a card.' },
+    { bot: 'Writer', model: '', brief: 'Draft a first note.' },
+  ]);
+  assert.deepEqual(parseHandoffs('No hand-off here.\nBrief: stray'), []);
+  assert.equal(parseHandoffs(Array.from({ length: 9 }, (_, i) => `Handoff: B${i}\nBrief: x`).join('\n')).length, 4);
+});
+
+test('the bot gets the brief, then how to report back and to ask before reaching a real person', () => {
+  const text = handoffText('Find ten prospects.');
+  assert.ok(text.startsWith('Find ten prospects.'));
+  assert.match(text, /under 100 words/);
+  assert.match(text, /Card: </);
+  assert.match(text, /stop and ask first/);
+});
+
+test('a model Mia names is matched to one the person has connected, or to none', () => {
+  const providers = {
+    claude: { id: 'claude', label: 'Claude', models: ['claude-opus-5-5[1m]', 'claude-opus-5-5', 'claude-sonnet-5-5'], capabilities: {} },
+    other: { id: 'other', label: 'Other', models: ['luna-2'], capabilities: { 'luna-2': { reasoning: false } } },
+  };
+  assert.deepEqual(matchModel('Opus', providers), { provider: 'claude', model: 'claude-opus-5-5' });
+  assert.deepEqual(matchModel('claude-opus-5-5[1m]', providers), { provider: 'claude', model: 'claude-opus-5-5[1m]' });
+  assert.deepEqual(matchModel('Claude Sonnet', providers), { provider: 'claude', model: 'claude-sonnet-5-5' });
+  assert.deepEqual(matchModel('luna', providers), { provider: 'other', model: 'luna-2', reasoningEffort: 'none' });
+  assert.equal(matchModel('terra', providers), null);
+  assert.equal(matchModel('', providers), null);
+  assert.equal(matchModel('opus', null), null);
 });

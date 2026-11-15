@@ -41,8 +41,10 @@ function modelSelection() {
   return { provider: 'claude-subscription-directsdk-experimental', model: 'claude-sonnet-5-5[1m]' };
 }
 
-// turnNote() -> what Mia is told on every turn of an AI mode run.
-function turnNote() {
+// turnNote({ bots, models, reports }) -> what Mia is told on every turn of an AI mode run.
+// bots are the person's own bots, models what they have connected, reports where the
+// bots she handed work to stand. All three are optional.
+function turnNote(hub) {
   return (
     '[AI mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
     'stage where they hear you say each step as you take it, then see your reply.\n' +
@@ -78,7 +80,7 @@ function turnNote() {
     'canvas again with the change. One canvas in a reply, after your first sentence, and no cards beside ' +
     'it. Never build a page as a file and open it in the browser to show something you made: the canvas ' +
     'is where you show it. The browser is for real sites.\n' +
-    '- Workers are yours to start here. When a job splits into parts that can go on at the same time, hand ' +
+    '- No bot fits the job: do it yourself. When it splits into parts that can go on at the same time, hand ' +
     'each part to a background worker with delegate_task, and say that you did. The person sees each one on ' +
     'the stage as a bot at work. Start each goal with a job name of one to three words and a colon, like ' +
     '"Price check: ...", then everything the worker needs, because it knows nothing of this conversation. ' +
@@ -88,7 +90,124 @@ function turnNote() {
     '- What a bot looks like: every bot is shown as its Mote, the small character Mia draws for it. The ' +
     'drawings are part of the app itself, picked by the bot\'s name, and tinted with the color in the ' +
     'bot\'s own record (avatarColor). A bot has no picture file, and none is missing. When the person ' +
-    'speaks of a bot\'s image, icon or picture they mean its Mote; its color is the part that can be changed.'
+    'speaks of a bot\'s image, icon or picture they mean its Mote; its color is the part that can be changed.' +
+    routerNote(hub)
+  );
+}
+
+// --- Mia as the router: the work goes to the person's own bots, each in its own chat ---
+
+const MAX_HANDOFFS = 4;
+const HANDOFF_LINE = /^\s*(?:[-*]\s*)?\**Handoff:?\**:?\s*(.+)$/i;
+const HANDOFF_PART = /^\s*(?:[-*]\s*)?\**(Model|Brief):?\**:?\s*(.*)$/i;
+// A line that belongs to something else in the reply ends a hand-off.
+const HANDOFF_END = /^\s*(?:[-*]\s*)?\**(?:Card|Option|Next|Handoff):|^\s*```/i;
+const clip = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
+
+// parseHandoffs(reply) -> [{ bot, model, brief }], the hand-offs Mia wrote in her reply.
+function parseHandoffs(reply) {
+  const found = [];
+  let open = null;
+  let inBrief = false;
+  for (const line of String(reply || '').replace(/\r/g, '').split('\n')) {
+    const start = HANDOFF_LINE.exec(line);
+    if (start) {
+      open = { bot: clip(start[1].replace(/[*_`"]+/g, '').replace(/^@/, ''), 80), model: '', brief: '' };
+      inBrief = false;
+      found.push(open);
+      continue;
+    }
+    if (!open) continue;
+    const part = HANDOFF_PART.exec(line);
+    if (part && part[1].toLowerCase() === 'model' && !inBrief) open.model = clip(part[2].replace(/[*_`"]+/g, ''), 80);
+    else if (part && part[1].toLowerCase() === 'brief') { open.brief = part[2].trim(); inBrief = true; }
+    else if (inBrief && line.trim() && !HANDOFF_END.test(line)) open.brief += ' ' + line.trim();
+    else { open = null; inBrief = false; }
+  }
+  return found
+    .map((item) => ({ ...item, brief: clip(item.brief, 4000) }))
+    .filter((item) => item.bot && item.brief)
+    .slice(0, MAX_HANDOFFS);
+}
+
+// handoffText(brief) -> the message the bot gets in its own chat: Mia's brief, then how to
+// bring the work back so the person and Mia can take it in at a glance.
+function handoffText(brief) {
+  return (
+    clip(brief, 4000) + '\n\n' +
+    '[From Mia, in AI mode] The person gave Mia this job and she passed it to you. Do it for real, in this chat. ' +
+    'Begin your reply with a report of under 100 words: what you did, what you found, and what needs the person. ' +
+    'Then the result. When it is a set of things to look at or pick from, write each one as three lines: ' +
+    '"Card: <a title, six words at most>", "Image: <one to three plain words to picture it>", ' +
+    '"Text: <one or two short sentences>". Nine cards at most. Before anything that reaches a real person ' +
+    '(a message, a connection request, a post, a payment), stop and ask first.'
+  );
+}
+
+const modelKey = (value) => String(value || '').toLowerCase().replace(/\[[^\]]*\]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+// matchModel(name, providers) -> { provider, model } for the connected model Mia named, or
+// null. providers is the person's visible inventory: { id: { id, label, models, capabilities } }.
+function matchModel(name, providers) {
+  const wanted = modelKey(name);
+  if (!wanted) return null;
+  const words = wanted.split(' ');
+  let best = null;
+  for (const provider of Object.values(providers || {})) {
+    for (const model of (provider && Array.isArray(provider.models) ? provider.models : [])) {
+      const key = modelKey(model);
+      const hay = ` ${key} ${modelKey(provider.label)} `;
+      const exact = String(model).toLowerCase() === String(name).trim().toLowerCase();
+      if (!exact && !words.every((word) => hay.includes(word))) continue;
+      // The whole name wins; among partial matches, the plainest model name.
+      const score = exact ? -1 : String(model).length;
+      if (!best || score < best.score) best = { score, provider, model };
+    }
+  }
+  if (!best) return null;
+  const capability = (best.provider.capabilities || {})[String(best.model).toLowerCase()];
+  return {
+    provider: best.provider.id,
+    model: best.model,
+    ...(capability && capability.reasoning === false ? { reasoningEffort: 'none' } : {}),
+  };
+}
+
+// routerNote({ bots, models, reports }) -> the part of the turn note that makes Mia the
+// router. Empty when the person has no bots: then she works as before.
+function routerNote(hub) {
+  const bots = (hub && Array.isArray(hub.bots) ? hub.bots : [])
+    .map((bot) => ({ name: clip(bot && bot.name, 60), about: clip(bot && bot.about, 140) }))
+    .filter((bot) => bot.name).slice(0, 24);
+  if (!bots.length) return '';
+  const models = (hub && Array.isArray(hub.models) ? hub.models : []).map((model) => clip(model, 80)).filter(Boolean).slice(0, 30);
+  const reports = (hub && Array.isArray(hub.reports) ? hub.reports : []).slice(-8);
+  return (
+    '\n- You are the router. The person talks to you, and each job goes to the bot of theirs that fits it, ' +
+    'in that bot\'s own chat, so the work does not pile up in yours. Their bots: ' +
+    bots.map((bot) => (bot.about ? `${bot.name} (${bot.about})` : bot.name)).join('; ') + '.\n' +
+    '- To hand a job over, write these lines on their own: "Handoff: <the bot\'s exact name>", then ' +
+    '"Brief: <one paragraph with everything the bot needs, because it knows nothing of this conversation: ' +
+    'the goal, what is already known, what to bring back and how to show it>". Up to four hand-offs in a ' +
+    'reply. Say in your first sentence which bot you put on it, and end your reply there: do not wait for ' +
+    'the bot and do not do its job yourself. The person watches the bot work on the stage and gives you ' +
+    'the next thing meanwhile. Prefer a bot that fits over doing the job yourself.\n' +
+    (models.length
+      ? '- Models. A bot runs on its own model unless you add a line "Model: <name>" between Handoff and ' +
+        'Brief. The person has these connected: ' + models.join(', ') + '. What the person says about ' +
+        'which model to use always wins, for this job and the ones after it. Otherwise pick by the kind ' +
+        'of work when it matters (a strong model for code, animation or hard thinking, a fast one for ' +
+        'search and routine work), and leave the line out when the bot\'s own model will do.\n'
+      : '') +
+    '- When a bot finishes, the person is asked whether to look at what it made. Its short report reaches ' +
+    'you here with their next direction. Hand the same bot a new brief to ask it for more.' +
+    (reports.length
+      ? '\n[Bots you put to work]\n' + reports.map((report) => {
+        const state = report.state === 'finished' ? 'finished' : report.state === 'stopped' ? 'did not finish' : 'still working';
+        return `- ${clip(report.name, 60)}, ${state}. Job: ${clip(report.brief, 160)}` +
+          (report.state === 'finished' && report.report ? ` Report: ${clip(report.report, 1500)}` : '');
+      }).join('\n')
+      : '')
   );
 }
 
@@ -352,5 +471,5 @@ function createStagePages({ now = Date.now } = {}) {
 
 module.exports = {
   speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
-  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };

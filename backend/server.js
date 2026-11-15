@@ -7278,6 +7278,56 @@ function nativeMiaHandoffBots(conversation, reply) {
   return resolveMentionedBots(reply, roster);
 }
 
+// AI mode: Mia is the router. The bots she can hand a job to are the person's own.
+function aiModeRouterBots(conversation, email) {
+  if (!conversation || conversation.type === 'bot') return [];
+  if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) return [];
+  return db.loadAll(conn, 'bots')
+    .filter((bot) => recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId))
+    .filter((bot) => bot.name && sameOwner(bot, email));
+}
+
+// The jobs Mia handed over from each AI mode chat, newest last, so she is told where
+// every bot stands on her next turn. Kept while the app runs; one entry per bot.
+const aiModeHandoffLedger = new Map();
+const AI_MODE_LEDGER_MAX = 8;
+
+function rememberAiModeHandoff(conversationId, entry) {
+  const kept = (aiModeHandoffLedger.get(conversationId) || []).filter((item) => item.botId !== entry.botId);
+  kept.push(entry);
+  aiModeHandoffLedger.set(conversationId, kept.slice(-AI_MODE_LEDGER_MAX));
+}
+
+// -> [{ name, brief, state: 'working' | 'finished' | 'stopped', report }]
+function aiModeHandoffReports(conversation) {
+  return (aiModeHandoffLedger.get(conversation.id) || []).map((entry) => {
+    const report = { name: entry.botName, brief: entry.brief, state: 'working', report: '' };
+    try {
+      const { events } = nativeConversationRepository.listEvents({
+        companyId: entry.companyId, conversationId: entry.conversationId, latest: true, limit: 8, includeDeleted: false,
+      });
+      const reply = events.filter((event) => (event.senderType === 'bot' || event.senderType === 'agent')
+        && !(event.metadata && (event.metadata.progress === true || event.metadata.diagnostic === true || event.metadata.askBeforeDo))
+        && Date.parse(event.createdAt) >= entry.at && nativeEventText(event)).pop();
+      if (reply) return { ...report, state: 'finished', report: nativeEventText(reply) };
+      const dispatch = entry.dispatchId
+        ? nativeConversationRepository.getDispatch({ companyId: entry.companyId, id: entry.dispatchId }) : null;
+      if (dispatch && (dispatch.status === 'failed' || dispatch.status === 'completed')) report.state = 'stopped';
+    } catch (_) { /* a bot whose chat is gone is left as it was */ }
+    return report;
+  });
+}
+
+function aiModeHub(conversation, trigger) {
+  const providers = visibleChatModelProvidersForUser(nativeChatModelProviders, trigger.senderId);
+  return {
+    bots: aiModeRouterBots(conversation, trigger.senderId)
+      .map((bot) => ({ name: bot.name, about: bot.description || bot.instructions })),
+    models: Object.values(providers).flatMap((provider) => provider.models),
+    reports: aiModeHandoffReports(conversation),
+  };
+}
+
 function createNativeDispatchReplyEvent(dispatch, trigger, input) {
   const conversation = nativeConversationRepository.getConversation({
     companyId: dispatch.companyId,
@@ -7306,15 +7356,30 @@ function createNativeDispatchReplyEvent(dispatch, trigger, input) {
 // The legacy room transport used to turn Mia's @-mentions into worker calls after her message
 // posted. Native conversations mirror the user's delegated request into each
 // bot's own chat; the private Mia conversation remains a strict 1:1.
-async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, dispatch = null) {
+async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, dispatch = null, aiModeRun = false) {
   if (dispatch && cancelNativeDispatchForInactiveUser(dispatch, trigger)) return [];
-  const bots = nativeMiaHandoffBots(conversation, reply);
-  if (!bots.length) return [];
+  // In AI mode Mia writes each bot its own brief and may name the model for the job.
+  const jobs = [];
+  if (aiModeRun) {
+    const own = aiModeRouterBots(conversation, trigger.senderId);
+    const providers = visibleChatModelProvidersForUser(nativeChatModelProviders, trigger.senderId);
+    for (const handoff of aiMode.parseHandoffs(reply)) {
+      const wanted = handoff.bot.toLowerCase();
+      const bot = own.find((candidate) => String(candidate.name).trim().toLowerCase() === wanted);
+      if (!bot || jobs.some((job) => job.bot.id === bot.id)) continue;
+      jobs.push({ bot, brief: handoff.brief, text: aiMode.handoffText(handoff.brief), model: aiMode.matchModel(handoff.model, providers) });
+    }
+  }
   const text = nativeEventText(trigger);
-  return Promise.all(bots.map(async (bot) => {
+  for (const bot of nativeMiaHandoffBots(conversation, reply)) {
+    if (!jobs.some((job) => job.bot.id === bot.id)) jobs.push({ bot, brief: text, text, model: null });
+  }
+  if (!jobs.length) return [];
+  return Promise.all(jobs.map(async ({ bot, brief, text: jobText, model }) => {
     if (dispatch && cancelNativeDispatchForInactiveUser(dispatch, trigger)) return null;
     const botConversation = await ensureNativeBotConversation(bot);
     if (!botConversation) return null;
+    const at = Date.now();
     const result = createNativeDispatchEvent(dispatch, trigger, {
       companyId: botConversation.companyId,
       conversationId: botConversation.id,
@@ -7324,12 +7389,13 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
         principalType: 'user',
       },
       type: 'message',
-      content: { text },
+      content: { text: jobText },
       clientIdempotencyKey: `native-mia-handoff-${miaEvent.id}-${bot.id}`,
       metadata: {
         delegatedBy: 'gateway',
         sourceConversationId: conversation.id,
         sourceEventId: trigger.id,
+        ...(model ? { chatModelSelection: model } : {}),
       },
       routing: {
         oneToOneAgent: {
@@ -7346,7 +7412,13 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
         },
       },
     });
-    return result.dispatch || null;
+    if (aiModeRun && result.dispatch) {
+      rememberAiModeHandoff(conversation.id, {
+        botId: bot.id, botName: bot.name || bot.id, brief, at,
+        companyId: botConversation.companyId, conversationId: botConversation.id, dispatchId: result.dispatch.id,
+      });
+    }
+    return result.dispatch ? { ...result.dispatch, botName: bot.name || bot.id } : null;
   }));
 }
 
@@ -8859,7 +8931,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
-    aiModeRun ? aiMode.turnNote()
+    aiModeRun ? aiMode.turnNote(aiModeHub(conversation, trigger))
       : ownsPrivateAgentConversation && !slashCommand && !privateAgent ? aiMode.aboutNote() : '',
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
@@ -9206,10 +9278,10 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   });
   recordTidyPlanEvent(result, tidyPlan);
   if (dispatch.targetType === 'gateway') {
-    const handoffs = await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
+    const handoffs = await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch, aiModeRun);
     // The stage follows each bot Mia handed the work to, in that bot's own chat.
     const bots = aiModeRun ? handoffs.filter(Boolean).map((handoff) => ({
-      id: handoff.targetId, name: (handoff.metadata && handoff.metadata.botName) || handoff.targetId,
+      id: handoff.targetId, name: handoff.botName,
       conversationId: handoff.conversationId, dispatchId: handoff.id,
     })) : [];
     if (bots.length) publishAiModeSignal({ aiMode: 'handoff', bots });
