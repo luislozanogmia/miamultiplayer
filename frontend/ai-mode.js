@@ -496,14 +496,22 @@ function findPick(r){
 function draw(){
   clearTimeout(drawTimer);drawTimer=null;
   var cv=$('cv'),h='',top=cv.scrollTop,atEnd=cv.scrollHeight-cv.scrollTop-cv.clientHeight<60;
-  unmount(cv);canvasHold();
   // What she drew takes the place of the page she read it from.
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   var seen=seeing();
   if(seen)h=stageHtml(seen);
   else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to AI Mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
   else h=stageHtml(null);
-  cv.innerHTML=h;mount(cv);canvasPlace();stepsDraw();logDraw();
+  // The same stage is not drawn again: every redraw would reload the frame and start the fades over.
+  // A stage that only grows (the same run, more of it) is rebuilt without its entrance motion.
+  var key=seen||R||s;
+  if(cv._h!==h){
+    cv.classList.toggle('again',!!cv._h&&cv._k===key);
+    unmount(cv);canvasHold();
+    cv.innerHTML=h;mount(cv);
+    cv._h=h;cv._k=key;
+  }
+  canvasPlace();stepsDraw();logDraw();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -1417,7 +1425,7 @@ function leave(){
   host.classList.remove('driving');$('back').hidden=true;drive=false;
   site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
-  setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';mindSet({});}},1600);
+  setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';$('cv')._h='';mindSet({});}},1600);
 }
 document.addEventListener('click',function(e){
   var b=e.target&&e.target.closest&&e.target.closest('[data-ai-mode-enter]');
