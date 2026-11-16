@@ -19560,7 +19560,7 @@
     var pick = readCachedChatModelSelection('');
     return pick ? {provider: pick.provider, model: pick.model, reasoningEffort: pick.reasoningEffort, speed: pick.speed, fast: pick.speed === 'fast'} : null;
   }
-  // Every bot and chat the sidebar can open, for "open the LinkedIn bot" said in Flow Tandem.
+  // Every bot and chat the sidebar can open, for Mia to open by name in Flow Tandem.
   function aiModeRooms(){
     var remembered = rememberedAgentChats() || {};
     var bots = chatSearchDirectorySnapshot().agents.filter(function(agent){ return agent && agent.id && agent.id !== 'gateway' && agent.name; }).map(function(agent){

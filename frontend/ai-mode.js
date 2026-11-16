@@ -1089,6 +1089,18 @@ function botAsk(bot,q){
   }
   redraw();
 }
+// What a bot's chat says that matters to Mia, read the same way for a bot she briefed and for one the
+// person drives: its question for an OK, or a reply it wrote since she began to listen.
+function botEvent(ev,since){
+  var meta=(ev&&ev.metadata)||{};
+  if(!ev)return null;
+  if(meta.askBeforeDo&&meta.askBeforeDo.id)return {ask:meta.askBeforeDo};
+  if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<since)return null;
+  var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+  return text?{text:text,next:str(meta.nextStep,160).replace(/[.!?\s]+$/,'')}:null;
+}
+// Every bot and chat the app can open, as the app lists them.
+function appRooms(){try{var h=appHost();return (h.rooms&&h.rooms())||[];}catch(e){return [];}}
 function followBot(b){
   if(!b||!b.conversationId)return;
   var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
@@ -1097,11 +1109,9 @@ function followBot(b){
   bot.running=true;bot.line='Starting';bot.reply='';bot.report='';bot.open=false;bot.seen=false;bot.at=Date.now()-2000;
   if(botSocks[b.conversationId])return;
   botSocks[b.conversationId]=listen(b.conversationId,function(ev){
-    var meta=(ev&&ev.metadata)||{};
+    var got=open?botEvent(ev,bot.at):null,text=got&&got.text;
     // A bot that needs an OK asks in its own chat; the person is here, so the card comes to the stage.
-    if(open&&ev&&meta.askBeforeDo&&meta.askBeforeDo.id){botAsk(bot,meta.askBeforeDo);return;}
-    if(!open||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<bot.at)return;
-    var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+    if(got&&got.ask){botAsk(bot,got.ask);return;}
     if(!text)return;
     bot.reply=text.slice(0,20000);bot.running=false;
     // Its report is the first paragraph it wrote, cut to what fits a card.
@@ -1399,26 +1409,22 @@ function tandemStage(){
 }
 // The card's mic button: one click mutes the mic or turns it back on.
 function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMute();tandemTell();}
-// "Open the LinkedIn bot", said in Flow Tandem, moves the app itself the way a click in the sidebar would.
 // In Flow Tandem the person drives bots too, in the app. Mia listens in every bot's chat, so a bot the
 // person briefed is announced like one she briefed, and its question for an OK is asked out loud. A bot
 // Mia put on the work is followed by followBot, and this stays silent for it.
 var watchSocks={},watchTimer=null,suggest=null;
 function watchBots(){
   if(!tandem)return;
-  var h=appHost(),rows=h&&h.rooms?h.rooms():[];
-  rows.forEach(function(row){
+  appRooms().forEach(function(row){
     var id=row&&row.kind==='bot'?row.conversationId:'';
     if(!id||id===conv||watchSocks[id]||Object.keys(watchSocks).length>=24)return;
     var bot={name:str(row.label,40)||'Bot'},since=Date.now()-2000;
     watchSocks[id]=listen(id,function(ev){
-      var meta=(ev&&ev.metadata)||{};
-      if(!tandem||!ev||botSocks[id])return;
-      if(meta.askBeforeDo&&meta.askBeforeDo.id){botAsk(bot,meta.askBeforeDo);return;}
-      if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<since)return;
-      if(!ev.content||typeof ev.content.text!=='string'||!ev.content.text)return;
+      var got=tandem&&!botSocks[id]?botEvent(ev,since):null;
+      if(!got)return;
+      if(got.ask){botAsk(bot,got.ask);return;}
       // The next step the bot suggests, the one the app offers in its message box, is said too.
-      var step=str(meta.nextStep,160).replace(/[.!?\s]+$/,'');
+      var step=got.next;
       suggest=step?{bot:bot.name,step:step,at:Date.now()}:null;
       speak(bot.name+' has finished.'+(step?' It suggests next: '+step+'. Should it go ahead?':''));
     },function(){});
@@ -1431,10 +1437,9 @@ function watchStop(){clearInterval(watchTimer);watchTimer=null;Object.keys(watch
 // opened is told to her with the next thing the person says.
 var openMissed=[];
 function appOpen(target){
-  var h=appHost(),want=String(target||'').trim(),low=want.toLowerCase(),rows=[];
+  var h=appHost(),want=String(target||'').trim(),low=want.toLowerCase();
   if(!want)return false;
-  try{rows=h.rooms?h.rooms()||[]:[];}catch(e){}
-  var hit=rows.filter(function(r){return String(r.label).toLowerCase()===low;})[0];
+  var hit=appRooms().filter(function(r){return String(r.label).toLowerCase()===low;})[0];
   try{
     if(hit&&h.open)return h.open(hit)!==false;
     if(/^https?:\/\/\S+$/i.test(want)||/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(want))return !!(h.openPage&&h.openPage(want));
@@ -1452,8 +1457,7 @@ function openNote(){
 }
 // The names the app can open, sent with each Tandem turn so Mia asks for one that exists.
 function roomNames(){
-  var rows=[];try{var h=appHost();rows=h.rooms?h.rooms()||[]:[];}catch(e){}
-  return rows.map(function(r){return str(r&&r.label,60);}).filter(Boolean).slice(0,80);
+  return appRooms().map(function(r){return str(r&&r.label,60);}).filter(Boolean).slice(0,80);
 }
 var YES=/^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|approved?|s[i\u00ed]|dale|adelante|claro|hazlo)(?:\W+(?:please|mia|go ahead|do it|send it|por favor))*\W*$/i,
   NO=/^\W*(?:no|nope|don'?t|do not|not now|cancel|decline|mejor no|no lo hagas)(?:\W+(?:thanks|thank you|mia|please|gracias))*\W*$/i;

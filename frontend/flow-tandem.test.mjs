@@ -64,7 +64,7 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
   const make = (rooms, page) => {
     const log = [];
     const host = { rooms: () => rooms, open: (row) => { log.push(row.id); }, openPage: page ? (url) => { log.push(url); return true; } : undefined };
-    const api = new Function('appHost', 'str', 'tandem', src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), true);
+    const api = new Function('appHost', 'str', 'tandem', 'function appRooms(){return appHost().rooms();}' + src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), true);
     return { log, api };
   };
   const rooms = [{ kind: 'bot', id: 'b1', label: 'LinkedIn' }, { kind: 'chat', id: 'c1', label: 'Design review' }];
@@ -94,7 +94,8 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
 
 test('a bot that finishes is announced with the next step it suggests, and a spoken yes hands it to Mia', () => {
   const watch = js.slice(js.indexOf('function watchBots(){'), js.indexOf('function watchStart(){'));
-  assert.match(watch, /var step=str\(meta\.nextStep,160\)/);
+  assert.match(watch, /var step=got\.next;/);
+  assert.match(js, /next:str\(meta\.nextStep,160\)/);
   assert.match(watch, /speak\(bot\.name\+' has finished\.'\+\(step\?' It suggests next: '\+step\+'\. Should it go ahead\?':''\)\)/);
   const src = part('function spokenAnswer(t){', '// The whole answer is said');
   const run = (suggest, said, ask) => {
@@ -157,10 +158,17 @@ test('in Tandem Mia listens in every bot chat and announces a bot the person dro
   assert.match(watch, /if\(!tandem\)return;/);
   assert.match(watch, /row\.kind==='bot'\?row\.conversationId:''/);
   // A bot Mia briefed is followed by followBot, so it is not announced twice.
-  assert.match(watch, /if\(!tandem\|\|!ev\|\|botSocks\[id\]\)return;/);
-  assert.match(watch, /botAsk\(bot,meta\.askBeforeDo\)/);
+  assert.match(watch, /var got=tandem&&!botSocks\[id\]\?botEvent\(ev,since\):null;/);
+  assert.match(watch, /botAsk\(bot,got\.ask\)/);
   assert.match(watch, /speak\(bot\.name\+' has finished\.'/);
   assert.match(src, /watchStart\(\);tandemTell\(\);/);
   assert.equal(src.split('watchStop();').length - 1, 2);
   assert.match(app, /return \{kind:'bot', id:String\(agent\.id\), label:String\(agent\.name\), conversationId:String\(roomId\)\};/);
+});
+
+test('a bot Mia briefed and a bot the person drives are read by one function, and the app list is read in one place', () => {
+  assert.equal(js.match(/\?botEvent\(ev,/g).length, 2, 'both listeners read a bot chat through botEvent');
+  const both = js.slice(js.indexOf('function followBot(b){'), js.indexOf('// Mia looks at a finished bot')) + js.slice(js.indexOf('function watchBots(){'), js.indexOf('function watchStart(){'));
+  assert.doesNotMatch(both, /senderType|meta\.progress|askBeforeDo/, 'neither listener filters a bot chat by itself');
+  assert.equal(js.match(/h\.rooms\(\)/g).length, 1, 'the app list is read in appRooms only');
 });
