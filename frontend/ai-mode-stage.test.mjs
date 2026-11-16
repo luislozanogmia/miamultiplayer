@@ -389,3 +389,11 @@ test('Flow offers four models by their short names, and the Model button is alwa
   assert.match(js, /id="modelBtn" aria-expanded="false">Model<\/button>/);
   assert.doesNotMatch(js, /\$\('modelBtn'\)\.hidden=/);
 });
+
+test('hands-free, the mic in the bar stays and one click mutes or unmutes it', () => {
+  assert.match(js, /\$\('mic'\)\.onclick=function\(\)\{if\(talkOn\)talkMute\(\);else earToggle\(\);\};/);
+  assert.match(js, /mic\.hidden=!earParts\(\);mic\.classList\.toggle\('off',talkOn&&talkMuted\);/);
+  assert.doesNotMatch(js, /\$\('mic'\)\.hidden=talkOn/);
+  assert.match(js, /mic\.disabled=!talkOn&&state==='wait';/);
+  assert.match(css, /\.mic\.off::after\{/);
+});

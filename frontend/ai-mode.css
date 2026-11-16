@@ -133,6 +133,9 @@ div.bot{cursor:default;opacity:1}
 .intent .send:hover{background:var(--accent-hover)}
 .intent .mic{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
 .intent .mic:hover,.intent .mode:hover{color:var(--ink)}
+.mic{position:relative}
+.mic.off{color:var(--faint)}
+.mic.off::after{content:"";position:absolute;left:50%;top:50%;width:22px;height:1.6px;border-radius:1px;background:currentColor;transform:translate(-50%,-50%) rotate(-45deg)}
 /* the sign at the left of the bar: a keyboard while it takes a direction, a lens while it searches */
 .intent .mode{appearance:none;flex:none;width:28px;height:32px;margin-left:-8px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
 .intent .mode .m-find,.intent .mode.find .m-type{display:none}

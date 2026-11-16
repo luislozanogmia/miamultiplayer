@@ -1621,7 +1621,7 @@ function earParts(){
 }
 function earShow(state,note){
   earState=state;
-  var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
+  var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=!talkOn&&state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
   // Hands-free says where it is at the top right; the bar below is then for searching.
   if(talkOn){$('earsSay').textContent=note||(state==='on'?'I am listening\u2026':state==='wait'?'Writing it down\u2026':talkMuted?'Mic is muted':'Just talk');$('box').placeholder=boxHint();}
   else $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
@@ -1663,7 +1663,9 @@ function earToggle(){
 var talk=null,talkOn=false;
 function talkShow(){
   var b=$('talk');b.textContent=talkOn?'Hands-free on':'Hands-free off';b.setAttribute('aria-pressed',talkOn?'true':'false');
-  $('mic').hidden=talkOn||!earParts();
+  // Hands-free, the mic in the bar mutes and unmutes with one click.
+  var mic=$('mic'),say=!talkOn?'Speak to Mia':talkMuted?'Turn the mic back on':'Mute the mic';
+  mic.hidden=!earParts();mic.classList.toggle('off',talkOn&&talkMuted);mic.title=say;mic.setAttribute('aria-label',say);
   $('ears').hidden=!talkOn;host.classList.toggle('ears-on',talkOn);
   $('earsMute').classList.toggle('on',talkMuted);$('earsMute').setAttribute('aria-pressed',talkMuted?'true':'false');
   $('earsMute').title=talkMuted?'Turn the mic back on':'Mute the mic';$('earsMute').setAttribute('aria-label',$('earsMute').title);
@@ -1820,7 +1822,7 @@ function build(){
   $('voiceAsk').addEventListener('click',function(e){var b=e.target.closest('[data-va]');if(b&&!b.disabled)voiceAskDo(b.dataset.va);});
   $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
   $('stop').onclick=function(){hush();halt('');};
-  $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
+  $('mic').onclick=function(){if(talkOn)talkMute();else earToggle();};$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
   $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
   siteWire();
