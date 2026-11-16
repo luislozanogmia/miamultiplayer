@@ -9091,10 +9091,6 @@
       shelf.rowsHtml(automationsPage.runHistory, esc, shelfWhen) + '</div>';
   }
 
-  function automationStepStateLabel(state){
-    return {working:'Working on it', done:'Done', skipped:'Skipped', failed:'Failed', needs_you:'Needs you', escalated:'Needs you', unreported:'Not reported', pending:'Not started'}[state] || '';
-  }
-
   function automationRunTime(value){
     var numeric = Number(value);
     var date = Number.isFinite(numeric) && String(value).trim() !== '' ? new Date(numeric * (numeric < 10000000000 ? 1000 : 1)) : new Date(String(value));
@@ -9182,13 +9178,10 @@
       // With a run on record, each step shows what the bot reported for it.
       var states = {};
       if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
-      body = '<ol class="automations-steps">' + row.steps.map(function(step, index){
-        var item = states[index + 1];
-        var state = item ? item.state : '';
-        var mark = state ? '<span class="automations-step-mark" data-state="' + esc(state) + '" title="' + esc(automationStepStateLabel(state)) + '"></span>' : '';
-        var note = item && item.note ? '<div class="automations-step-note">' + esc(item.note) + '</div>' : '';
-        return '<li class="automations-step" data-state="' + esc(state) + '"><span class="automations-step-n">' + mark + (index + 1) + '</span><span>' + esc(step) + note + '</span></li>';
-      }).join('') + '</ol>';
+      body = window.MiaAutomationsBoard.stepsHtml(row.steps.map(function(step, index){
+        var item = states[index + 1] || {};
+        return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
+      }), esc);
       if(checklist && checklist.startedAt){
         var when = automationRunTime(checklist.startedAt);
         var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
@@ -12615,7 +12608,12 @@
         busy: !!cardState.busy,
         error: cardState.error || '',
         draft: cardState.draft || null,
-        timezone: automationCardTimezone()
+        timezone: automationCardTimezone(),
+        botId: automationRunCardBotId(),
+        runChecklist: automationRunCardChecklist(m.nativeEvent.id),
+        runOpen: !!(automationRunCards[m.nativeEvent.id] || {}).open,
+        now: Date.now(),
+        timeText: automationRunClock
       });
     }
     if(window.MiaInstructionProposalCard && m.nativeEvent){
@@ -12647,6 +12645,46 @@
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+
+  // The steps of the run each "run now" card in a chat started, by event id,
+  // with whether a finished one is unfolded. A card on screen is redrawn in
+  // place on each live tick until its run is over, so the composer keeps focus.
+  var automationRunCards = {};
+  function automationRunCardBotId(){
+    var conversation = activeConversationRecord();
+    return conversation && conversation.metadata && conversation.metadata.botId || '';
+  }
+  // A card drawn again with the thread shows what the last tick knew.
+  function automationRunCardChecklist(eventId){
+    var state = automationRunCards[eventId];
+    if(!state) return null;
+    state.html = '';
+    return state.checklist || null;
+  }
+  function automationRunClock(ms){
+    return new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  }
+  function refreshAutomationRunCards(){
+    if(!window.MiaAutomationProposalCard) return;
+    els('#chatThread [data-automation-run-card]:not([data-run-final])').forEach(function(node){
+      var card = {
+        eventId: node.getAttribute('data-automation-run-card'), botId: node.getAttribute('data-run-bot'),
+        automationId: node.getAttribute('data-run-automation'), name: node.getAttribute('data-run-name'),
+        since: Number(node.getAttribute('data-run-since'))
+      };
+      if(!card.eventId || !card.botId || !card.automationId || !card.since) return;
+      api('/api/automations/run-steps?workspace=' + encodeURIComponent(localChatWorkspaceKey()) + '&bot=' + encodeURIComponent(card.botId) +
+        '&automation=' + encodeURIComponent(card.automationId) + '&since=' + card.since).then(function(res){
+        if(res.status !== 200 || !res.data || !node.isConnected) return;
+        var state = automationRunCards[card.eventId] = automationRunCards[card.eventId] || {};
+        state.checklist = res.data.checklist || null;
+        var html = window.MiaAutomationProposalCard.runCardHtml(card, state.checklist, esc, {now: Date.now(), timeText: automationRunClock, open: !!state.open});
+        if(html === state.html) return;
+        state.html = html;
+        node.outerHTML = html;
+      });
+    });
+  }
   var instructionCardStates = {};
   var miaAppCardStates = {};
   var tidyPlanCardStates = {};
@@ -12847,6 +12885,11 @@
     }
     thread.addEventListener('input', keepDraft);
     thread.addEventListener('change', keepDraft);
+    // A finished run card the person unfolded stays unfolded across re-renders.
+    thread.addEventListener('toggle', function(e){
+      var eventId = e.target.getAttribute && e.target.getAttribute('data-automation-run-card');
+      if(eventId) (automationRunCards[eventId] = automationRunCards[eventId] || {}).open = e.target.open;
+    }, true);
   })();
 
   // esc()+linkify for message bodies: URLs become real links, everything else
@@ -19170,6 +19213,7 @@
     // state version. Poll their narrow status endpoint on every live tick,
     // in a company too: your bots' automations run there as in Solo.
     loadActiveAutomationRuns();
+    refreshAutomationRunCards();
     // A company's channels and people refresh from the Hub instead.
     if(hubWorkspace()) return;
     api('/api/state/version').then(function(res){

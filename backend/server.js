@@ -6252,6 +6252,19 @@ app.get('/api/automations/active', requireAuth, (req, res) => {
   res.status(200).json({ runs: visible, checklists });
 });
 
+// The steps of the run a bot's "run now" card started, for that card in its chat.
+app.get('/api/automations/run-steps', requireAuth, (req, res) => {
+  const since = Number(req.query.since);
+  const bot = db.loadAll(conn, 'bots').find((item) => String(item.id) === String(req.query.bot || ''));
+  if (!bot || !botReachable(bot, req) || !Number.isFinite(since)) return res.status(404).json({ error: 'not_found' });
+  try {
+    res.status(200).json({ checklist: cronSync.automationRunChecklistSince(bot, String(req.query.automation || ''), since) });
+  } catch (error) {
+    console.error('automation run steps failed', error.message);
+    res.status(503).json({ error: 'automation_status_unavailable' });
+  }
+});
+
 // Bot Store: read-only catalog of predefined bots the user can install with
 // one click. Served straight from the repo's bots-catalog/ folder — no DB
 // table, nothing writable through these routes. Installing a bot goes through
@@ -8216,7 +8229,8 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
       metadata: { automationProposal: { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id, status: 'pending' } },
     };
   }
-  const run = { automationId: proposal.automationId, name: proposal.name };
+  // The card in chat shows the steps of the run it started: the first one from here on.
+  const run = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, requestedAt: Date.now() };
   if (!sameOwner(agent, trigger.senderId) && !isAdmin(trigger.senderId)) {
     return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can run ${proposal.name}.`, metadata: { automationRun: { ...run, status: 'denied' } } };
   }

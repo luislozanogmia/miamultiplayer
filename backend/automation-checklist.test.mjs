@@ -10,6 +10,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-checklist-'));
 process.env.HERMES_HOME ||= path.join(temp, 'hermes');
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR ||= path.join(temp, 'artifacts');
 process.env.MIAOS_BOT_PACKAGE_DIR ||= path.join(temp, 'bots');
+process.env.HERMES_CRON_EXECUTIONS_DB ||= path.join(temp, 'executions.db');
 const cronSync = require('./cron-sync.js');
 const { buildScheduledBotPrompt } = require('./inference.js');
 
@@ -113,3 +114,30 @@ test('scheduled prompts for automations with steps point the bot at report_step,
 });
 
 test.after(() => { fs.rmSync(temp, { recursive: true, force: true }); });
+
+test('a run stops counting reports where the next run began', () => {
+  const list = cronSync.automationChecklist(STEPS, [report(10, 1, 'done'), report(700, 1, 'failed', 'the next run'), report(705, 2, 'done')], RUNNING, (STARTED + 700) * 1000);
+  assert.deepEqual(states(list), ['done', 'pending', 'pending', 'pending']);
+});
+
+test('a run card gets the first run claimed after it asked, not a later one', (t) => {
+  const file = process.env.HERMES_CRON_EXECUTIONS_DB;
+  if (!file.startsWith(temp)) return t.skip('executions database is set outside this test');
+  const Database = require('better-sqlite3');
+  const executions = new Database(file);
+  executions.exec('CREATE TABLE executions (id TEXT PRIMARY KEY, job_id TEXT, status TEXT, claimed_at TEXT, started_at TEXT, finished_at TEXT)');
+  const add = executions.prepare('INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?)');
+  add.run('before', 'job-1', 'completed', String(STARTED - 3600), String(STARTED - 3600), String(STARTED - 3500));
+  add.run('mine', 'job-1', 'failed', String(STARTED + 30), String(STARTED + 31), String(STARTED + 71));
+  add.run('after', 'job-1', 'running', String(STARTED + 900), String(STARTED + 900), null);
+  add.run('other', 'job-2', 'running', String(STARTED + 10), String(STARTED + 10), null);
+  executions.close();
+  const bot = { id: 'bot-1', automations: [{ id: 'auto-1', name: 'Roundup', steps: STEPS }], hermesCronJobIds: { 'auto-1': 'job-1' } };
+  const list = cronSync.automationRunChecklistSince(bot, 'auto-1', STARTED * 1000);
+  assert.equal(list.runId, 'mine');
+  assert.equal(list.runStatus, 'failed');
+  assert.equal(list.finishedMs - list.startedMs, 40000);
+  assert.equal(list.total, 4);
+  assert.equal(cronSync.automationRunChecklistSince(bot, 'auto-1', (STARTED + 5000) * 1000), null, 'no run yet');
+  assert.equal(cronSync.automationRunChecklistSince(bot, 'missing', STARTED * 1000), null);
+});

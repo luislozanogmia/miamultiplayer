@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+
+const board = createRequire(import.meta.url)('./automations-board.js');
 
 const source = fs.readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 function slice(name) {
@@ -18,7 +21,7 @@ const row = {
 };
 
 test('a stuck automation keeps its title wide and shows the problem, escaped, with a Fix with Mia button', () => {
-  const ctx = { esc: (s) => String(s).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';'), automationStepStateLabel: () => '', automationRunTime: () => '' };
+  const ctx = { esc: (s) => String(s).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';'), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
   vm.createContext(ctx);
   vm.runInContext(slice('automationsDetailHtml'), ctx);
   const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});

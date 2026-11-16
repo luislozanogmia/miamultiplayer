@@ -117,5 +117,21 @@
     return parts.length ? parts.join(' · ') : 'No automations yet';
   }
 
-  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary};
+  var STEP_STATE_LABELS = {working: 'Working on it', done: 'Done', skipped: 'Skipped', failed: 'Failed', needs_you: 'Needs you', escalated: 'Needs you', unreported: 'Not reported', pending: 'Not started'};
+  function stepStateLabel(state){
+    return STEP_STATE_LABELS[state] || '';
+  }
+
+  // One run's steps as a list of [{n, text, state, note}]. The Automations
+  // page and the run card in a bot's chat both draw their steps here.
+  function stepsHtml(items, esc){
+    return '<ol class="automations-steps">' + items.map(function(item){
+      var state = item.state || '';
+      var mark = state ? '<span class="automations-step-mark" data-state="' + esc(state) + '" title="' + esc(stepStateLabel(state)) + '"></span>' : '';
+      var note = item.note ? '<div class="automations-step-note">' + esc(item.note) + '</div>' : '';
+      return '<li class="automations-step" data-state="' + esc(state) + '"><span class="automations-step-n">' + mark + item.n + '</span><span>' + esc(item.text) + note + '</span></li>';
+    }).join('') + '</ol>';
+  }
+
+  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary, stepStateLabel: stepStateLabel, stepsHtml: stepsHtml};
 });

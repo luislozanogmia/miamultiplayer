@@ -80,8 +80,8 @@ test('Hub channels cannot start a local chat socket; a company polls only its ow
   // Your bots' chats and automations stay live in a company, as in Solo.
   assert.equal(appFunction('localChatsLive',{hubWorkspace:()=>true,chatWs:{native:false}})(),true);
   const calls=[];
-  appFunction('pollLiveState',{hubWorkspace:()=>true,loadActiveAutomationRuns:()=>calls.push('runs'),api:()=>{calls.push('state');return Promise.resolve({});}})();
-  assert.deepEqual(calls,['runs'],'the company\'s channels and people come from the Hub, not local state');
+  appFunction('pollLiveState',{hubWorkspace:()=>true,loadActiveAutomationRuns:()=>calls.push('runs'),refreshAutomationRunCards:()=>calls.push('cards'),api:()=>{calls.push('state');return Promise.resolve({});}})();
+  assert.deepEqual(calls,['runs','cards'],'the company\'s channels and people come from the Hub, not local state');
 });
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
