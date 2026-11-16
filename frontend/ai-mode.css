@@ -170,7 +170,7 @@ div.bot{cursor:default;opacity:1}
 
 /* What Mia made, in the app's own reply formatting. */
 /* The result as cards: a picture, a title, a line or two. */
-.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
 @media(max-width:620px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* Decisions as a deck: one in front, the next at the edges. */
 .deck{container-type:inline-size;min-width:0}
@@ -238,9 +238,9 @@ div.bot{cursor:default;opacity:1}
 @keyframes front{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
 .front.card{cursor:default}
 .front.card .pic{aspect-ratio:16/9}
-.front.card .pic.visit{display:block;cursor:pointer;color:inherit;text-decoration:none}
-.front.card .pic.visit .go{position:absolute;left:12px;bottom:12px;padding:6px 11px;border:1px solid var(--rule-strong);border-radius:999px;background:rgba(20,18,15,.82);font:500 12px/1 var(--sans);color:var(--ink)}
-.front.card .pic.visit:hover .go{border-color:var(--accent-text)}
+.front.card .pic.visit,.leaf.card .pic.visit{display:block;cursor:pointer;color:inherit;text-decoration:none}
+.front.card .pic.visit .go,.leaf.card .pic.visit .go{position:absolute;left:12px;bottom:12px;padding:6px 11px;border:1px solid var(--rule-strong);border-radius:999px;background:rgba(20,18,15,.82);font:500 12px/1 var(--sans);color:var(--ink)}
+.front.card .pic.visit:hover .go,.leaf.card .pic.visit:hover .go{border-color:var(--accent-text)}
 .front.card.on-site .pic{aspect-ratio:auto;height:min(58vh,540px)}
 .front.card .card-t{padding:16px 18px 18px}
 .front.card .card-t b{font-size:19px}
@@ -249,6 +249,36 @@ div.bot{cursor:default;opacity:1}
 .pic{position:relative}
 .site-n{position:absolute;inset:0;display:grid;place-items:center;padding:8px;text-align:center;font:500 13px/1.3 var(--mono);color:var(--soft);overflow-wrap:anywhere}
 .thumb .site-n{font-size:9px;padding:4px}
+/* A drawn picture: the card's figure, a ring for a share of a whole and an icon, tinted by its tone. It is as tall as what it holds. */
+.card .pic.draw,.leaf.card .pic.draw,.front.card .pic.draw{--tone:var(--accent-text);--tint:var(--accent-tint);aspect-ratio:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;background:var(--tint)}
+.pic.draw.tone-good,.draw-s.tone-good{--tone:#6FCF97;--tint:rgba(111,207,151,.13)}
+.pic.draw.tone-warn,.draw-s.tone-warn{--tone:#F0BC4A;--tint:rgba(227,166,27,.16)}
+.pic.draw.tone-bad,.draw-s.tone-bad{--tone:#F2776B;--tint:rgba(242,119,107,.14)}
+.pic.draw .fig{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0}
+.pic.draw .ico,.draw-s .ico{fill:none;stroke:var(--tone);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pic.draw .ico{width:36px;height:36px;padding:8px;border-radius:10px;background:rgba(255,255,255,.07);box-sizing:border-box}
+.pic.draw .fig b{font:600 32px/1 var(--sans);letter-spacing:-.02em;color:var(--ink);overflow-wrap:anywhere}
+.pic.draw .fig span{font:500 11px/1.3 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tone)}
+.pic.draw .dial{position:relative;flex:none;width:64px;height:64px;display:grid;place-items:center}
+.pic.draw .dial svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.pic.draw .dial circle{fill:none;stroke:rgba(255,255,255,.12);stroke-width:3.5}
+.pic.draw .dial circle.on{stroke:var(--tone);stroke-linecap:round}
+.pic.draw .dial i{font:600 13px/1 var(--sans);font-style:normal;color:var(--ink)}
+.front.card .pic.draw,.leaf.card .pic.draw{padding:22px 20px}
+.front.card .pic.draw .fig b,.leaf.card .pic.draw .fig b{font-size:48px}
+.front.card .pic.draw .dial,.leaf.card .pic.draw .dial{width:92px;height:92px}
+.front.card .pic.draw .dial i,.leaf.card .pic.draw .dial i{font-size:18px}
+.draw-s{--tone:var(--accent-text);position:absolute;inset:0;display:grid;place-items:center;padding:4px}
+.draw-s .ico{width:44%;height:auto}
+.draw-s b{font:600 13px/1 var(--sans);color:var(--tone);overflow-wrap:anywhere;text-align:center}
+.links{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.links .lnk{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;font:500 12px/1.3 var(--sans);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+.links .lnk::after{content:'\2197';color:var(--muted);font-size:11px}
+.links .lnk:hover{border-color:var(--accent-text);color:var(--accent-text)}
+.leaf:not(.on) .links,.leaf:not(.on) a.pic{pointer-events:none}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.chips span{padding:3px 8px;border:1px solid var(--rule-strong);border-radius:999px;font:500 11px/1.3 var(--sans);color:var(--soft);overflow-wrap:anywhere}
+.btn.act{align-self:flex-start;height:30px;margin-top:4px;color:var(--ink)}
 /* a card about a bot shows that bot, not a photo */
 .pic img.mote{object-fit:contain;padding:8% 0;box-sizing:border-box}
 /* A card about a bot is a small one: the bot stands beside its name, not over it. */

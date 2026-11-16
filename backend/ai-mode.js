@@ -41,6 +41,11 @@ function modelSelection() {
   return { provider: 'claude-subscription-directsdk-experimental', model: 'claude-sonnet-5-5[1m]' };
 }
 
+// The pictures a card can carry without a photo. The stage draws each by name, so the two lists match.
+const CARD_ICONS = ['check', 'alert', 'clock', 'calendar', 'mail', 'chat', 'person', 'people', 'money', 'chart', 'up', 'down',
+  'search', 'file', 'folder', 'link', 'lock', 'key', 'shield', 'star', 'bolt', 'globe', 'phone', 'code', 'bug', 'target',
+  'flag', 'cart', 'building', 'heart', 'tool', 'bell', 'home', 'truck', 'box'];
+
 // turnNote({ bots, models, reports }) -> what Mia is told on every turn of an AI mode run.
 // bots are the person's own bots, models what they have connected, reports where the
 // bots she handed work to stand. All three are optional.
@@ -51,16 +56,23 @@ function turnNote(hub) {
     '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
     '- Begin your reply with one short sentence, under 16 words, that can be said out loud: what you did or ' +
     'what you need.\n' +
-    '- Then the result as cards, not prose: the stage is for looking, not reading. Three to nine cards, shown three in a row, each ' +
-    'as three lines: "Card: <a title, six words at most>", "Image: <one to three plain words to picture it, ' +
-    'like rainforest canopy>", "Text: <one or two short sentences, 30 words at most>". Image words are ' +
-    'subjects only, never anything private from the direction. They name the real thing the card is about, ' +
-    'something a photo exists of: for a brief on a chip maker, "graphics card chip", not "news brief". ' +
-    'Never the kind of thing you made or opened (brief, report, page, tab, file, browser), and leave the ' +
-    'Image line out when no photo would show the subject. A card about one of the bots takes "Bot: <that ' +
-    'bot\'s exact name>" in place of the Image line, one bot per card, and the stage shows the bot itself. ' +
+    '- Then the result as cards, not prose: the stage is for looking, not reading. Three to nine cards, shown three in a row. ' +
+    'Each starts with "Card: <a title, six words at most>" and ends with "Text: <one or two short sentences, 30 words ' +
+    'at most>". Between them comes the card\'s picture, which you draw from the card\'s own facts with these lines: ' +
+    '"Number: <the figure that matters, like 42, $1.2M or 3 of 5> | <two to four words on what it counts>"; ' +
+    '"Meter: <0 to 100>" when the figure is a share of a whole; "Icon: <one of ' + CARD_ICONS.join(', ') + '>"; ' +
+    'and "Tone: good, warn or bad" when the card is clearly one of those. Write the lines the card has facts ' +
+    'for, an Icon line at least, and never make up a figure. "Chips: <up to five short labels, separated by ' +
+    'commas>" lists what the card covers, like sectors, names or dates. "Link: <two or three words> | <the full web address>" puts a link on the card that opens that page on the stage, and a card can carry up to three, like the company\'s site, a person\'s profile, or the report itself; give only addresses you have seen, never a guessed one. ' +
+    '"Action: <two or three words>" adds a ' +
+    'button for the one thing the person would most likely want done with that card; when they press it, it ' +
+    'comes to you as their next direction. A photo is only for a card about a real place, person, product or ' +
+    'animal: then "Image: <one to three plain words to picture it, like rainforest canopy>" in place of the ' +
+    'drawn lines. Image words are subjects only, never anything private from the direction, and never a photo ' +
+    'for an idea, a task, a status, a count or a kind of document. A card about one of the bots takes "Bot: <that ' +
+    'bot\'s exact name>" in place of the picture lines, one bot per card, and the stage shows the bot itself. ' +
     'A card about a website, a company with a site, or a profile page takes "Page: <its full web address>" in ' +
-    'place of the Image line, and the stage shows that page as you saw it in the browser. ' +
+    'place of the picture lines, and the stage shows that page as you saw it in the browser. ' +
     'When there is more worth keeping than fits, ' +
     'save it as a file and say so. An answer of a line or two needs no cards.\n' +
     '- When a choice is the person\'s to make (taste, priority, risk), stop there: end with one short ' +
@@ -69,7 +81,8 @@ function turnNote(hub) {
     'they can settle, show them as a deck they go through one at a time, not as cards and not as options. ' +
     'Each is three lines: "Decision: <what to settle, ten words at most>", "Text: <what it is and what you ' +
     'would do, 40 words at most>", and a Bot or Page line as on a card when the decision is about that ' +
-    'bot\'s work or that page. Add an Image line only for a picture of the very thing being decided. Filter ' +
+    'bot\'s work or that page. A decision that turns on a figure takes the Number, Meter, Icon and Tone ' +
+    'lines as on a card; add an Image line only for a photo of the very thing being decided. Filter ' +
     'first: only what truly needs them, the most important first, nine at most, each one clear enough to ' +
     'answer in a few seconds. They answer each with Approve, Not approve, Keep working or Show me more, and ' +
     'the answers come back to you together. Then act on every answer and say what you did.\n' +
@@ -155,10 +168,15 @@ function handoffText(brief) {
     clip(brief, 4000) + '\n\n' +
     '[From Mia, in Flow mode] The person gave Mia this job and she passed it to you. Do it for real, in this chat. ' +
     'Begin your reply with a report of under 100 words: what you did, what you found, and what needs the person. ' +
-    'Then the result. When it is a set of things to look at or pick from, write each one as three lines: ' +
-    '"Card: <a title, six words at most>", "Image: <one to three plain words to picture it>" (or, for a ' +
-    'website or a profile page, "Page: <its full web address>" in its place), ' +
-    '"Text: <one or two short sentences>". Nine cards at most. Before anything that reaches a real person ' +
+    'Then the result. When it is a set of things to look at or pick from, write each one as a card: ' +
+    '"Card: <a title, six words at most>", then the card\'s picture drawn from its own facts, then ' +
+    '"Text: <one or two short sentences>". The picture is any of these lines the card has facts for, an Icon ' +
+    'line at least: "Number: <the figure that matters> | <two to four words on what it counts>", "Meter: <0 to ' +
+    '100>" for a share of a whole, "Icon: <one of ' + CARD_ICONS.join(', ') + '>", "Tone: good, warn or bad". ' +
+    '"Chips: <up to five short labels, separated by commas>" lists what the card covers. "Link: <two or three words> | <the full web address>" puts a link on the card, up to three, for pages you actually found. Never make up a figure or an address. ' +
+    'Only a card about a real place, person, product or animal takes "Image: <one to three plain words to ' +
+    'picture it>" instead, and one about a website or a profile page takes "Page: <its full web address>". ' +
+    'Nine cards at most. Before anything that reaches a real person ' +
     '(a message, a connection request, a post, a payment), stop and ask first.'
   );
 }
@@ -517,6 +535,7 @@ function createStagePages({ now = Date.now } = {}) {
 }
 
 module.exports = {
+  CARD_ICONS,
   speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
   AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };

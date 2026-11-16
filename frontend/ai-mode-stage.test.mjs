@@ -31,7 +31,7 @@ test('the drawer and the stage take their clicks back from the strip that moves 
 
 test('a card that names a page shows the kept picture of that page, or the name of the site', () => {
   const at = js.indexOf('var shots={}');
-  const run = new Function(js.slice(at, js.indexOf('function picHtml(v){')) + 'return {shotKeep:shotKeep,shotOf:shotOf};');
+  const run = new Function(js.slice(at, js.indexOf('function drawHtml(d,small){')) + 'return {shotKeep:shotKeep,shotOf:shotOf};');
   const { shotKeep, shotOf } = run();
   shotKeep('https://www.example.com/in/someone/', 'one');
   assert.equal(shotOf('example.com/in/someone'), 'one');
@@ -39,13 +39,13 @@ test('a card that names a page shows the kept picture of that page, or the name 
   // Another page of the same site is not this page.
   assert.equal(shotOf('https://example.com/in/other'), '');
   assert.equal(shotOf('https://other.example'), '');
-  assert.match(js, /\(Card\|Decision\|Image\|Bot\|Page\|Text\)/);
+  assert.match(js, /\(Card\|Decision\|Image\|Bot\|Page\|Text\|Icon\|Number\|Meter\|Tone\|Chips\|Action\|Link\)/);
   assert.match(js, /class="site-n"/);
 });
 
 test('a card about a site takes its picture from an open tab of that site and opens the site when its picture is clicked', () => {
   const at = js.indexOf('var shots={}');
-  const run = new Function(js.slice(at, js.indexOf('function picHtml(v){')) + 'return {wants:function(w){shotWants=w;},shotKey:shotKey,shotWanted:shotWanted,pageUrl:pageUrl};');
+  const run = new Function(js.slice(at, js.indexOf('function drawHtml(d,small){')) + 'return {wants:function(w){shotWants=w;},shotKey:shotKey,shotWanted:shotWanted,pageUrl:pageUrl};');
   const { wants, shotKey, shotWanted, pageUrl } = run();
   wants([shotKey('example.com'), shotKey('other.example/in/someone')]);
   // A card that names only the site takes any page of it; one that names a page takes that page.
@@ -143,4 +143,48 @@ test('Mia reviews a finished bot by herself, waits while the person is busy, and
 
 test('a returning person hears the greeting alone, not what Flow is', () => {
   assert.match(js, /function welcome\(\)\{\s*if\(introSpoke\)\{introSpoke=false;return;\}\s*speak\('Welcome to Flow\.'\);\s*\}/);
+});
+
+test('a card draws its picture from its own facts, and a photo is only looked up when no picture was drawn', async () => {
+  const at = js.indexOf('var MAX_CARDS=9,pics={};');
+  const run = new Function('function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+    js.slice(at, js.indexOf('// Mia\'s canvas:')) + 'return {readCards:readCards,ICONS:ICONS};');
+  const { readCards, ICONS } = run();
+  const read = readCards(['Card: Leads found this hour', 'Number: 42 | new leads', 'Meter: 140', 'Icon: People', 'Tone: good today',
+    'Chips: Fintech, Health, , Retail, Energy, Travel, Media', 'Action: Draft the emails', 'Text: Most came from one search.',
+    'Card: The harbour', 'Icon: spaceship', 'Image: harbour', 'Text: A real place.', 'Number: 7 | outside any card'].join('\n'));
+  assert.deepEqual({ ...read.cards[0], title: undefined, text: undefined }, { title: undefined, image: '', bot: '', page: '', text: undefined,
+    icon: 'people', num: '42', cap: 'new leads', meter: 100, tone: 'good', chips: ['Fintech', 'Health', 'Retail', 'Energy', 'Travel'], act: 'Draft the emails', links: [], decide: false });
+  // An icon the stage cannot draw is left out, so the card falls back to its photo.
+  assert.equal(read.cards[1].icon, '');
+  assert.equal(read.cards[1].image, 'harbour');
+  // The names Mia is given are the ones the stage draws.
+  const { CARD_ICONS } = (await import('node:module')).createRequire(import.meta.url)('../backend/ai-mode.js');
+  assert.deepEqual(Object.keys(ICONS).sort(), [...CARD_ICONS].sort());
+  // A card with nothing to show carries no empty panel, and its button is a direction about that card.
+  assert.match(js, /if\(!\(v\.bot\|\|v\.src\|\|v\.draw\|\|v\.site\|\|v\.wait\)\)return '';/);
+  assert.match(js, /if\(act\)\{if\(R&&!seeing\(\)&&!R\.running\)direct\(act\.dataset\.act\);return;\}/);
+  assert.match(css, /\.cards\{[^}]*align-items:start\}/);
+});
+
+test('a card carries named links that open on the stage, and the deck lights the card in the middle of the screen', () => {
+  const at = js.indexOf('var MAX_CARDS=9,pics={};');
+  const run = new Function('function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+    js.slice(at, js.indexOf('function drawHtml(d,small){')) + 'return {readCards:readCards,cardLinks:cardLinks};');
+  const { readCards, cardLinks } = run();
+  const card = readCards(['Decision: Pursue the first one', 'Page: example.com', 'Link: The founder | https://example.org/in/founder',
+    'Link: example.net/report.pdf', 'Link: Not an address | call them', 'Link: Site again | https://example.com', 'Text: Worth a call.'].join('\n')).cards[0];
+  assert.deepEqual(card.links, [{ label: 'The founder', url: 'https://example.org/in/founder' }, { label: 'example.net', url: 'https://example.net/report.pdf' },
+    { label: 'Site again', url: 'https://example.com' }]);
+  // The card's own site comes first and is not listed twice.
+  assert.deepEqual(cardLinks(card, '').map(l => l.label), ['example.com', 'The founder', 'example.net']);
+  // A link is a real anchor, so the stage's one click handler opens it in the browser on the stage.
+  assert.match(js, /<a class="lnk" href="'\+esc\(l\.url\)\+'" target="_blank" rel="noopener"/);
+  assert.match(js, /if\(a&&\/\^https\?:\/i\.test\(a\.getAttribute\('href'\)\|\|''\)&&siteOpen\(a\.href\)\)/);
+  // The deck measures on the screen, never by a leaf's offset from some outer box.
+  const deck = js.slice(js.indexOf('function deckTo('), js.indexOf('function deckItems('));
+  assert.doesNotMatch(deck, /offsetLeft/);
+  assert.match(deck, /getBoundingClientRect\(\)/);
+  // Something said from an earlier view leaves the person on that view.
+  assert.match(js, /view=away\?past\.indexOf\(away\):-1;/);
 });

@@ -316,3 +316,20 @@ test('the turn note tells Mia to show decisions as a deck and act on the answers
   assert.match(note, /Approve, Not approve, Keep working or Show me more/);
   assert.match(note, /Then act on every answer and say what you did\./);
 });
+
+test('Mia and the bots are told to draw a card\'s picture from its facts and keep photos for real things', async () => {
+  for (const note of [turnNote(), handoffText('Find ten prospects.')]) {
+    assert.match(note, /Number: <the figure that matters/);
+    assert.match(note, /Meter: <0 to\s+100>/);
+    assert.match(note, /Icon: <one of check, alert, clock/);
+    assert.match(note, /Tone: good, warn or bad/);
+    assert.match(note, /never make up a figure/i);
+    assert.match(note, /real place, person, product or\s+animal/);
+  }
+  assert.match(turnNote(), /Action: <two or three words>/);
+  // Links on a card are named and only ever pages that were really found.
+  const src = (await import('node:fs')).readFileSync(new URL('./ai-mode.js', import.meta.url), 'utf8');
+  assert.equal((src.match(/Link: <two or three words> \| <the full web address>/g) || []).length, 2);
+  assert.match(src, /never a guessed one/);
+  assert.match(src, /Never make up a figure or an address/);
+});
