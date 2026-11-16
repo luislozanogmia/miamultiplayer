@@ -7,7 +7,7 @@ const intro = globalThis.MiaAiModeIntro;
 
 test('the copy says what AI mode is, that it is a preview, and offers two choices', () => {
   const html = intro.markup();
-  assert.match(html, />Welcome to Flow mode\.</);
+  assert.match(html, />Welcome to Flow\.</);
   assert.match(html, />Preview</);
   assert.match(html, /You set the direction\. I&#39;ll handle the execution\./);
   assert.match(html, /Your familiar Mia workspace is always one click away\./);

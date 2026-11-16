@@ -101,6 +101,17 @@ function cleanMcpApp(input, existingIds = []) {
   };
 }
 
+// Apps Mia offers to everyone. Each shows in Connected apps before it is
+// added, waiting for its key; saving the key adds it like any other app.
+// ElevenLabs is also where Mia's voice in Flow mode gets its key.
+const BUILT_IN_APPS = [{
+  name: 'ElevenLabs', description: 'Mia\u2019s voice in Flow mode, and speech tools for Mia.',
+  runner: 'uvx', package: 'elevenlabs-mcp', auth: 'key', keyEnv: 'ELEVENLABS_API_KEY',
+  docsUrl: 'https://elevenlabs.io/app/settings/api-keys',
+}];
+const builtInMcpApps = () => BUILT_IN_APPS.map((app) => cleanMcpApp(app));
+const builtInMcpApp = (id) => builtInMcpApps().find((app) => app.id === id) || null;
+
 function createMcpAppsStore(file = defaultMcpAppsFile) {
   const target = () => (typeof file === 'function' ? file() : file);
   function list() {
@@ -188,9 +199,19 @@ function hasProfileKey(envPath, name) {
   catch (_) { return false; }
 }
 
+// For a feature of Mia's own that uses an app's key (her voice). The value is
+// handed to the caller only: never logged, never sent to the page.
+function readProfileKey(envPath, name) {
+  try {
+    const line = fs.readFileSync(envPath, 'utf8').split('\n').find((item) => item.startsWith(name + '='));
+    return line ? line.slice(name.length + 1).trim() : '';
+  } catch (_) { return ''; }
+}
+
 const defaultStore = createMcpAppsStore();
 
 module.exports = {
   McpAppError, cleanMcpApp, createMcpAppsStore, defaultMcpAppsFile, defaultStore,
-  hermesMcpServerLines, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, MAX_LOGO_BYTES,
+  hermesMcpServerLines, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, readProfileKey,
+  builtInMcpApps, builtInMcpApp, MAX_LOGO_BYTES,
 };

@@ -22,12 +22,12 @@
 
   var COPY = {
     label: 'Flow mode preview',
-    title: 'Welcome to Flow mode.',
+    title: 'Welcome to Flow.',
     tag: 'Preview',
     line: 'You set the direction. I\'ll handle the execution.',
     sub: 'The ultimate interface, where the human intent becomes AI execution.',
     note: 'Your familiar Mia workspace is always one click away.',
-    spoken: 'Welcome to Flow mode. You set the direction. I\'ll handle the execution.',
+    spoken: 'Welcome to Flow. You set the direction. I\'ll handle the execution.',
     skip: 'Skip',
     later: 'Stay in Mia',
     go: 'Enter Flow mode',

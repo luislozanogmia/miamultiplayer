@@ -398,33 +398,50 @@ async function fetchImage(value, { request = fetch } = {}) {
   return body.length && body.length <= MAX_IMAGE_BYTES ? { type, body } : null;
 }
 
-// Mia's voice. With a speech key set on this computer her lines are read by
-// ElevenLabs in a voice the person picked; without one the page falls back to
-// the computer's own voice. Only the line Mia says out loud is sent.
+// Mia's voice. With a key saved for ElevenLabs in Connected apps her lines are
+// read by ElevenLabs in one of that account's voices; without one the page
+// falls back to the computer's own voice. Only the line Mia says out loud is
+// sent. The key is handed in by the caller and is never logged.
 const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const SPEECH_MODEL = 'eleven_turbo_v2_5';
 const MAX_SPEECH_CHARS = 600;
 const MAX_VOICES = 4;
 const SPEECH_TIMEOUT_MS = 20000;
+const VOICES_API = 'https://api.elevenlabs.io/v1/voices';
+const VOICES_KEPT_MS = 10 * 60 * 1000;
+let voicesKept = null;
 
-// speechVoices(env) -> the voice ids to choose from, or [] when speech is not
-// set up (no key, or no voice).
-function speechVoices(env = process.env) {
-  if (!String(env.MIAOS_ELEVENLABS_API_KEY || '').trim()) return [];
-  return String(env.MIAOS_ELEVENLABS_VOICES || '').split(',').map((id) => id.trim())
-    .filter((id) => /^[A-Za-z0-9]{8,40}$/.test(id)).slice(0, MAX_VOICES);
+// speechVoices({key}) -> the voice ids to choose from, or [] when speech is
+// not set up (no key, or no voice). They are the first voices of the key's
+// own account, asked for once and kept for a while; MIAOS_ELEVENLABS_VOICES
+// names other ones.
+async function speechVoices({ key = '', env = process.env, request = fetch, now = Date.now } = {}) {
+  const secret = String(key || '').trim();
+  if (!secret) return [];
+  const clean = (ids) => ids.map((id) => String(id || '').trim()).filter((id) => /^[A-Za-z0-9]{8,40}$/.test(id)).slice(0, MAX_VOICES);
+  const named = clean(String(env.MIAOS_ELEVENLABS_VOICES || '').split(','));
+  if (named.length) return named;
+  if (voicesKept && voicesKept.key === secret && now() - voicesKept.at < VOICES_KEPT_MS) return voicesKept.ids;
+  const response = await request(VOICES_API, { headers: { 'xi-api-key': secret }, signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS) });
+  if (!response.ok) {
+    console.warn(`[ai-mode] the list of voices was refused (${response.status}); using the computer's voice`);
+    return [];
+  }
+  const ids = clean(((await response.json()).voices || []).map((voice) => voice && voice.voice_id));
+  voicesKept = { key: secret, at: now(), ids };
+  return ids;
 }
 
 // synthesize(text, voice) -> {type, body} of the spoken line, or null.
 // `voice` is the position in speechVoices().
-async function synthesize(text, voice, { env = process.env, request = fetch } = {}) {
-  const voices = speechVoices(env);
+async function synthesize(text, voice, { key = '', env = process.env, request = fetch } = {}) {
+  const voices = await speechVoices({ key, env, request });
   const line = oneLine(text, MAX_SPEECH_CHARS);
   const voiceId = voices[Number.isInteger(voice) && voice >= 0 && voice < voices.length ? voice : 0];
   if (!line || !voiceId) return null;
   const response = await request(`${SPEECH_API}${voiceId}?output_format=mp3_44100_128`, {
     method: 'POST',
-    headers: { 'xi-api-key': String(env.MIAOS_ELEVENLABS_API_KEY).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+    headers: { 'xi-api-key': String(key).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
     body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });

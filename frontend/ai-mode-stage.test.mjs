@@ -140,3 +140,7 @@ test('Mia reviews a finished bot by herself, waits while the person is busy, and
   assert.match(js, /id="own" aria-pressed="true"/);
   assert.match(js, /R\.own\?'Mia, on her own'/);
 });
+
+test('a returning person hears the greeting alone, not what Flow is', () => {
+  assert.match(js, /function welcome\(\)\{\s*if\(introSpoke\)\{introSpoke=false;return;\}\s*speak\('Welcome to Flow\.'\);\s*\}/);
+});

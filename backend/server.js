@@ -6031,8 +6031,12 @@ function mcpAppRoute(action) {
   };
 }
 function listedMcpApps() {
-  return mcpApps.defaultStore.list().map((app) => shownMcpApp(app,
-    app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))));
+  const added = mcpApps.defaultStore.list();
+  // An app Mia offers to everyone shows before it is added, waiting for its key.
+  const offered = mcpApps.builtInMcpApps().filter((app) => !added.some((item) => item.id === app.id));
+  return added.map((app) => shownMcpApp(app,
+    app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))))
+    .concat(offered.map((app) => ({ ...mcpApps.publicMcpApp(app, false), offered: true })));
 }
 app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
 app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
@@ -6051,11 +6055,15 @@ app.post('/api/mcp-apps/:id/sign-in', requireInteractiveAuth, mcpAppRoute(async 
   return { app: shownMcpApp(found, true), ...signIn };
 }));
 app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req) => {
-  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+  const id = String(req.params.id || '');
+  // The first key for an app Mia offers to everyone also adds the app.
+  const offered = mcpApps.defaultStore.get(id) ? null : mcpApps.builtInMcpApp(id);
+  const found = mcpApps.defaultStore.get(id) || offered;
   if (!found || found.auth !== 'key') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t take a key.', 404);
   const key = typeof (req.body || {}).key === 'string' ? req.body.key.trim() : '';
   await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), key);
+    if (offered) { mcpApps.defaultStore.add(offered); provisionHermesRuntimeProfiles(); shareMcpAppSignIns(); }
   }));
   // Mia, if she was told she is waiting on this key, now hears it is in.
   // The note names the app only; the key never leaves the profiles.
@@ -9715,13 +9723,18 @@ app.post('/api/ai-mode/seed', requireAuth, async (req, res) => {
 
 // Mia's voice in AI mode. GET says how many voices there are to pick from (0:
 // the page uses the computer's own voice); POST {text, voice} returns the line
-// spoken.
-app.get('/api/ai-mode/voices', requireAuth, (req, res) => {
-  res.status(200).json({ voices: aiMode.speechVoices().length });
+// spoken. The key is the one saved for ElevenLabs in Connected apps.
+const speechKey = () => mcpApps.readProfileKey(mcpAppKeyFiles()[0], mcpApps.keyEnvName('elevenlabs'));
+app.get('/api/ai-mode/voices', requireAuth, async (req, res) => {
+  try {
+    res.status(200).json({ voices: (await aiMode.speechVoices({ key: speechKey() })).length });
+  } catch (err) {
+    res.status(200).json({ voices: 0 });
+  }
 });
 app.post('/api/ai-mode/speech', requireAuth, async (req, res) => {
   try {
-    const spoken = await aiMode.synthesize((req.body || {}).text, Number((req.body || {}).voice));
+    const spoken = await aiMode.synthesize((req.body || {}).text, Number((req.body || {}).voice), { key: speechKey() });
     if (!spoken) return res.status(404).json({ error: 'speech unavailable' });
     res.set('Content-Type', spoken.type).set('Cache-Control', 'no-store').status(200).send(spoken.body);
   } catch (err) {

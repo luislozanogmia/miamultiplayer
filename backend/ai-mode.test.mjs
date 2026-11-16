@@ -133,25 +133,42 @@ test('a picture is passed on only from the allowed host, as a picture, under the
 });
 
 test('speech is off without a key, and a line is read in the voice picked', async () => {
-  assert.deepEqual(speechVoices({ MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234' }), []);
-  const env = { MIAOS_ELEVENLABS_API_KEY: 'test-key', MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234, ijklmnop5678, ../bad' };
-  assert.deepEqual(speechVoices(env), ['abcdefgh1234', 'ijklmnop5678']);
+  assert.deepEqual(await speechVoices({ env: { MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234' } }), []);
+  const key = 'test-key';
+  const env = { MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234, ijklmnop5678, ../bad' };
+  assert.deepEqual(await speechVoices({ key, env }), ['abcdefgh1234', 'ijklmnop5678']);
   const calls = [];
   const request = async (url, options) => {
     calls.push({ url, options });
     return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
   };
-  const spoken = await synthesize('  Done.\nSeven slides. ', 1, { env, request });
+  const spoken = await synthesize('  Done.\nSeven slides. ', 1, { key, env, request });
   assert.equal(spoken.type, 'audio/mpeg');
   assert.equal(spoken.body.length, 3);
   assert.match(calls[0].url, /\/text-to-speech\/ijklmnop5678\?/);
   assert.equal(JSON.parse(calls[0].options.body).text, 'Done. Seven slides.');
   assert.equal(calls[0].options.headers['xi-api-key'], 'test-key');
-  await synthesize('Hi', 9, { env, request });
+  await synthesize('Hi', 9, { key, env, request });
   assert.match(calls[1].url, /\/abcdefgh1234\?/);
-  assert.equal(await synthesize('', 0, { env, request }), null);
-  assert.equal(await synthesize('Hi', 0, { env: {}, request }), null);
-  assert.equal(await synthesize('Hi', 0, { env, request: async () => ({ ok: false }) }), null);
+  assert.equal(await synthesize('', 0, { key, env, request }), null);
+  assert.equal(await synthesize('Hi', 0, { env, request }), null);
+  assert.equal(await synthesize('Hi', 0, { key, env, request: async () => ({ ok: false }) }), null);
+});
+
+test('with no voices named, Mia speaks in the first voices of the key\u2019s own account, asked for once', async () => {
+  const asked = [];
+  const request = async (url, options) => {
+    asked.push({ url, key: options.headers['xi-api-key'] });
+    return { ok: true, json: async () => ({ voices: [{ voice_id: 'voiceone1' }, { voice_id: '../bad' }, { voice_id: 'voicetwo2' }, { voice_id: 'voicethree3' }, { voice_id: 'voicefour4' }, { voice_id: 'voicefive5' }] }) };
+  };
+  const key = 'account-key';
+  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['voiceone1', 'voicetwo2', 'voicethree3', 'voicefour4']);
+  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['voiceone1', 'voicetwo2', 'voicethree3', 'voicefour4']);
+  assert.deepEqual(asked, [{ url: 'https://api.elevenlabs.io/v1/voices', key }]);
+  // A refused key gives no voices, and the refusal is not kept.
+  assert.deepEqual(await speechVoices({ key: 'other-key', env: {}, request: async () => ({ ok: false, status: 401 }) }), []);
+  // The key comes from Connected apps, never from this computer's environment.
+  assert.deepEqual(await speechVoices({ env: { MIAOS_ELEVENLABS_API_KEY: 'loose-key' }, request }), []);
 });
 
 test('narration keeps the one line Mia said before a step', () => {

@@ -653,7 +653,7 @@ function draw(){
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   var seen=seeing();
   if(seen)h=stageHtml(seen);
-  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to Flow mode.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
+  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to Flow.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
   else h=stageHtml(null);
   // The same stage is not drawn again: every redraw would reload the frame and start the fades over.
   // A stage that only grows (the same run, more of it) is rebuilt without its entrance motion.
@@ -1322,11 +1322,12 @@ function sayNext(){
   }
   speakOwn(t,done);
 }
-// The welcome is said once: by the intro's ending the first time, on entering after that.
+// The welcome is said once: by the intro's ending the first time, with what Flow is; on entering
+// after that it is the greeting alone.
 var introSpoke=false;
 function welcome(){
   if(introSpoke){introSpoke=false;return;}
-  speak('Welcome to Flow mode. You set the direction. I\'ll handle the execution.');
+  speak('Welcome to Flow.');
 }
 // The intro plays before AI mode is open, so its welcome is said here, in the same voice.
 // Returns a way to stop it, for a person who stays in Mia.
