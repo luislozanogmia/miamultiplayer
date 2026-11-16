@@ -385,6 +385,15 @@ test('in Flow Tandem Mia opens things in the app with "Open:" lines, and is told
   assert.doesNotMatch(tandemNote({ tandem: true }), /What can be opened by name/);
 });
 
+test('Mia is told how a new bot is made in both ways of working, and where its draft shows', () => {
+  for (const note of [turnNote({}), tandemNote({ tandem: true })]) {
+    assert.match(note, /is made the usual way, with the bot setup block\. Nothing is created until the person accepts the draft\./);
+    assert.match(note, /Do not make one just to get this job done\./);
+  }
+  assert.match(turnNote({}), /The draft comes to the stage for them to review and accept\./);
+  assert.match(tandemNote({ tandem: true }), /The draft opens in your chat in the app: say it is there for them to review\./);
+});
+
 test('in Flow Mia puts a chat or a page on the stage with the same "Open:" line, and decides its size', () => {
   const note = turnNote({ rooms: ['LinkedIn'] });
   assert.match(note, /^\[Flow mode\]/);

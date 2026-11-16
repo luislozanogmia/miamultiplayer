@@ -13684,6 +13684,11 @@
   function captureAgentSetupDraft(flow){
     flow = flow || agentSetup;
     if(!flow.draft) return;
+    // A draft Flow draws has its fields there, not on a card of the app.
+    if(flow.drawnByFlow){
+      if(flow.draft.instructions == null) flow.draft.instructions = agentSetupDraftInstructions(flow.draft);
+      return;
+    }
     var name = el('#agentSetupName'), instructions = el('#agentSetupInstructions');
     var automationWanted = el('#agentSetupAutomationWanted');
     flow.draft.name = name ? name.value.trim() : flow.draft.name;
@@ -17438,8 +17443,11 @@
     flow.controller = null;
   }
 
+  // Flow draws the draft of its own chat itself and is told here when it changed.
+  var miaBotDraftWatch = {};
   function renderMiaBotDraftRoom(roomId){
     if(chatWs.activeRoomId === roomId) renderChatThread();
+    if(miaBotDraftWatch[roomId]) miaBotDraftWatch[roomId]();
   }
 
   // Opens the card for the newest pending request Mia made in this chat,
@@ -17458,21 +17466,29 @@
   function syncMiaBotSetupRequest(roomId, state){
     if(state.botDraft) return;
     var message = pendingMiaBotSetupMessage(state);
-    if(!message || startedMiaBotSetupRequests[message.nativeEvent.id]) return;
-    var request = message.nativeEvent.metadata.botSetupRequest;
+    if(message) openMiaBotDraft(roomId, message.nativeEvent);
+  }
+
+  // Starts the draft for a reply of Mia's that asks for a bot, in the chat
+  // whose card shows it. Mia's own chat and Flow both start it here.
+  function openMiaBotDraft(roomId, event){
+    var state = chatRoomState(roomId);
+    var request = event && event.metadata && event.metadata.botSetupRequest;
+    if(state.botDraft || !request || request.status !== 'pending' || !event.id || startedMiaBotSetupRequests[event.id]) return null;
     var requester = String(request.requestedBy || '').toLowerCase();
-    if(requester && currentUser && requester !== String(currentUser).toLowerCase()) return;
-    startedMiaBotSetupRequests[message.nativeEvent.id] = true;
-    state.botDraft = {
+    if(requester && currentUser && requester !== String(currentUser).toLowerCase()) return null;
+    startedMiaBotSetupRequests[event.id] = true;
+    var flow = state.botDraft = {
       intent: String(request.request || '').slice(0, MAX_BOT_BRIEF_CHARS),
-      sourceEventId: message.nativeEvent.id,
+      sourceEventId: event.id,
       turns: [], draft: null, phase: 'interpreting', error: '',
       created: null, conversation: null, requestId: 0, controller: null, timer: null
     };
     // Start after this render finishes; the request re-renders the room.
     setTimeout(function(){
-      if(chatRoomState(roomId).botDraft === state.botDraft) requestMiaBotDraft(roomId, state.botDraft);
+      if(chatRoomState(roomId).botDraft === flow) requestMiaBotDraft(roomId, flow);
     }, 0);
+    return flow;
   }
 
   function answerMiaBotSetupRequest(roomId, flow, decision, botId){
@@ -19532,7 +19548,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, model: aiModeModel};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, model: aiModeModel};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19583,6 +19599,61 @@
     } else if(row.hub) openHubChannel(hubChannel(row.id));
     else loadChatRoom(row.id, 'dm', row.label);
     return true;
+  }
+  // The chat of any bot of the person, for Flow's stage: the one it has, or a
+  // new one made the way the setup makes a new bot's chat and listed with the others.
+  function aiModeBotChat(row){
+    var agent = chatSearchDirectorySnapshot().agents.filter(function(candidate){ return String(candidate.id || '') === String(row && row.id || ''); })[0];
+    if(!agent || agent.id === 'gateway') return Promise.reject(new Error('no such bot'));
+    return createNativeAgentConversation(chatSearchAgentRecord(agent)).then(function(conversation){
+      if(!(chatWs.nativeConversations || []).some(function(item){ return item.id === conversation.id; })){
+        chatWs.nativeConversations.push(conversation);
+        applyNativeConversationList(chatWs.nativeConversations);
+        renderChatSidebar();
+      }
+      return conversation.id;
+    });
+  }
+  // A reply of Mia's in Flow that asks for a new bot. The draft, its fields and
+  // the creation are the ones of the card in Mia's chat; Flow only draws them on
+  // its stage. -> {view, edit, accept, dismiss}, or null when there is nothing to start.
+  function aiModeBotSetup(roomId, event, onChange){
+    var flow = roomId ? openMiaBotDraft(roomId, event) : null;
+    if(!flow) return null;
+    flow.drawnByFlow = true;
+    miaBotDraftWatch[roomId] = onChange;
+    function live(){ return chatRoomState(roomId).botDraft === flow; }
+    return {
+      view: function(){
+        var draft = flow.draft || {};
+        return {phase: live() ? flow.phase : 'closed', name: String(draft.name || ''), instructions: draft.instructions != null ? String(draft.instructions) : agentSetupDraftInstructions(draft),
+          automation: agentSetupAutomationRequest(flow.draft),
+          error: String(flow.phase === 'failed' && flow.turns.length ? flow.turns[flow.turns.length - 1].text : flow.error || ''),
+          created: flow.created && flow.conversation ? {name: String(flow.created.name || 'Bot'), conversationId: flow.conversation.id, handedOff: !!flow.automationHandedOff} : null};
+      },
+      edit: function(name, instructions){
+        if(!live() || flow.phase !== 'review' || !flow.draft) return;
+        flow.draft.name = String(name || '').trim();
+        flow.draft.instructions = String(instructions || '').trim();
+      },
+      accept: function(){ if(live()) activateMiaBotDraft(roomId); },
+      dismiss: function(){ if(live()) cancelMiaBotDraft(roomId); }
+    };
+  }
+  // The same reply in Flow Tandem, where the app is on screen: Mia's chat is
+  // opened and the card is shown there, as when she is asked in that chat.
+  function aiModeBotSetupInApp(event){
+    if(!chatWs.gatewayAgent) return Promise.resolve(false);
+    closeBrowserSidebarDrawer();
+    closeLocalBrowser();
+    closeAutomationsPage();
+    return Promise.resolve(navigateToAgentChat(chatWs.gatewayAgent, true)).then(function(){
+      var roomId = chatWs.activeRoomId;
+      if(!roomId || chatWs.activeKind !== 'agent' || !isMiaOrchestrator(chatWs.activeLabel)) return false;
+      if(!openMiaBotDraft(roomId, event)) return false;
+      renderMiaBotDraftRoom(roomId);
+      return true;
+    }, function(){ return false; });
   }
   // A web page Mia opens for the person, in a new tab of the app's browser.
   function aiModeOpenPage(url){

@@ -127,8 +127,7 @@ function turnNote(hub) {
     'the stage as a bot at work. Start each goal with a job name of one to three words and a colon, like ' +
     '"Price check: ...", then everything the worker needs, because it knows nothing of this conversation. ' +
     'A worker lasts for this job only. Put what it found into your own cards.\n' +
-    '- A bot the person keeps (they ask for one by name, or for something to run again and again) is still ' +
-    'made the usual way. Do not make one just to get this job done.\n' +
+    newBotLine(false) + '\n' +
     '- What a bot looks like: every bot is shown as its Mote, the small character Mia draws for it. The ' +
     'drawings are part of the app itself, picked by the bot\'s name, and tinted with the color in the ' +
     'bot\'s own record (avatarColor). A bot has no picture file, and none is missing. When the person ' +
@@ -238,6 +237,18 @@ function matchModel(name, providers) {
 // openLine({ rooms, tandem }) -> how Mia puts a bot's chat, another chat or a web page in front of
 // the person. She decides it and writes it; the app never guesses it from the person's words. In
 // Flow Tandem the app opens it, in Flow it comes to the stage.
+// A new bot is made the way Mia's chat in the app makes one: her setup block, then the person's OK
+// on the draft. Only where the draft is shown differs between the two ways of working.
+function newBotLine(tandem) {
+  return (
+    '- A bot the person keeps (they ask for one by name, or for something to run again and again) is made ' +
+    'the usual way, with the bot setup block. Nothing is created until the person accepts the draft. ' +
+    (tandem ? 'The draft opens in your chat in the app: say it is there for them to review. '
+      : 'The draft comes to the stage for them to review and accept. ') +
+    'Do not make one just to get this job done.'
+  );
+}
+
 function openLine(hub) {
   const rooms = (hub && Array.isArray(hub.rooms) ? hub.rooms : []).map((name) => clip(name, 60)).filter(Boolean).slice(0, 80);
   const tandem = !!(hub && hub.tandem);
@@ -270,6 +281,7 @@ function tandemNote(hub) {
     '- Make something to look at only when the person asks for it. Then save it as an HTML file and say ' +
     'in one sentence what it is called and where it is.\n' +
     openLine(hub) + '\n' +
+    newBotLine(true) + '\n' +
     '- Speak up. When a bot is back, when something is ready, or when something needs the person, say so ' +
     'and ask what to do next: "LinkedIn is done. Do you want us to send it?" When they answer in a word ' +
     'or two ("yes, send it"), act on it without asking again.\n' +

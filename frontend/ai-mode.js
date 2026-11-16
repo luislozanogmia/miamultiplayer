@@ -19,7 +19,7 @@ function moteArt(name){
   return a?'src="'+esc(a.src)+'" style="filter:'+esc(a.filter)+'"':'src="'+mote(name)+'"';
 }
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-18">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-19">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -622,6 +622,53 @@ function askHtml(a){
   return '<div class="panel ask open"><span class="lbl">'+(a.by?esc(a.by)+' needs you':'Needs you')+'</span><b>Do you approve?</b>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+(a.summary?'<pre>'+esc(a.summary)+'</pre>':'')+
     '<div class="acts"><button class="btn primary" data-ask="'+esc(a.id)+'" data-ok="1">Yes</button><button class="btn" data-ask="'+esc(a.id)+'" data-ok="0">No</button></div></div>';
 }
+// A new bot Mia drafted. The draft and the creation are the app's (the card in Mia's chat there);
+// here it is only drawn, and what the person types goes back to the app's draft.
+var botCard=null;
+function botCardHtml(){
+  var v=botCard&&botCard.view();
+  if(!v||v.phase==='closed')return '';
+  if(v.phase==='interpreting')return '<div class="panel ask newbot"><span class="lbl">New bot</span><p>Drafting your bot…</p></div>';
+  if(v.phase==='failed')return '<div class="panel ask newbot"><span class="lbl">New bot</span><p>'+esc(v.error||'The bot could not be drafted. Nothing was created.')+'</p></div>';
+  if(v.phase==='created'&&v.created)return '<div class="panel ask newbot"><span class="lbl">New bot</span><b>'+esc(v.created.name)+' is ready</b>'+
+    '<p>It has its own chat'+(v.created.handedOff?', and it was asked to propose the automation you wanted. Confirm the steps there.':'.')+'</p>'+
+    '<div class="acts"><button class="btn primary" data-newbot="open">Open '+esc(v.created.name)+'’s chat</button></div></div>';
+  var busy=v.phase==='activating';
+  return '<div class="panel ask open newbot"><span class="lbl">New bot</span><b>Review the draft</b>'+
+    '<label>Name<input id="newBotName" maxlength="40" value="'+esc(v.name)+'"'+(busy?' disabled':'')+'></label>'+
+    '<label>Instructions<textarea id="newBotBrief" rows="7"'+(busy?' disabled':'')+'>'+esc(v.instructions)+'</textarea></label>'+
+    (v.automation?'<p>Once it exists it is asked to set up: '+esc(v.automation)+'</p>':'')+
+    (v.error?'<p class="err">'+esc(v.error)+'</p>':'')+
+    '<div class="acts"><button class="btn primary" data-newbot="accept"'+(busy?' disabled':'')+'>'+(busy?'Creating…':'Create bot')+'</button>'+
+    (busy?'':'<button class="btn" data-newbot="dismiss">Not now</button>')+'</div></div>';
+}
+function botCardAct(what){
+  var v=botCard&&botCard.view();if(!v)return;
+  if(what==='open'&&v.created)readChat({id:v.created.conversationId,label:v.created.name});
+  else if(what==='accept'){botCardEdit();botCard.accept();}
+  else if(what==='dismiss'){botCard.dismiss();botCard=null;}
+  draw();
+}
+function botCardEdit(){
+  var n=$('newBotName'),b=$('newBotBrief');
+  if(botCard&&n&&b)botCard.edit(n.value,b.value);
+}
+// The next thing said closes a draft nobody accepted, as it does in Mia's chat in the app.
+function botCardNext(){
+  var v=botCard&&botCard.view();if(!v||v.phase==='activating')return;
+  if(v.phase==='review'||v.phase==='interpreting')botCard.dismiss();
+  botCard=null;
+}
+// Mia's reply asked for a new bot. In Flow Tandem the app is on screen, so the app shows its
+// own card in her chat; in Flow the card comes to the stage.
+function botSetupAsked(ev){
+  var h=appHost(),own=function(){
+    if(!h.botSetup||!conv)return;
+    var card=h.botSetup(conv,ev,redraw);if(card){botCard=card;redraw();}
+  };
+  if(tandem&&h.botSetupInApp)Promise.resolve(h.botSetupInApp(ev)).then(function(shown){if(!shown)own();},own);
+  else own();
+}
 function choiceHtml(){
   if(R.running||(!R.options.length&&!R.next))return '';
   // Her own choices come first; a suggested next step shows only when she left none.
@@ -761,7 +808,7 @@ function stageHtml(seen){
   var rail=botsHtml(),now=R;stageNow=now;
   if(seen)R=seen;
   try{
-    var side=seen?filesHtml():crewAsks.concat(R.asks).map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
+    var side=seen?filesHtml():crewAsks.concat(R.asks).map(askHtml).join('')+botCardHtml()+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
     var main=R.chat?chatHtml(R):R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
     // What was said last is in the strip above; the stage is only the work.
     return '<div class="wrap still'+(quiet?' center':'')+'">'+
@@ -1039,6 +1086,7 @@ function onEvent(ev){
   if(!text)return;
   var read=readReply(text);
   if(meta.dispatchId)R.over[meta.dispatchId]=true;
+  if(meta.botSetupRequest&&meta.botSetupRequest.status==='pending')botSetupAsked(ev);
   R.say=read.say;R.ask=read.ask;R.body=read.body;R.options=read.options;R.draft='';
   R.next=str(meta.nextStep,120);
   R.line=read.say||(read.options.length||read.ask?'This part needs your judgment.':'Done.');
@@ -1154,7 +1202,7 @@ function newChat(){
   s=1;R=null;seq=0;past=[];view=-1;peek=null;drawerOn=false;found=[];mindSet({});
   draw();openChat(true).catch(function(){});$('box').focus();
 }
-function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];crewAsks=[];}
+function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];crewAsks=[];botCard=null;}
 // Mia's chat for this visit: made once, then every direction goes into it.
 function openChat(fresh){
   if(conv)return Promise.resolve(conv);
@@ -1303,7 +1351,7 @@ function inkWire(){
 }
 function direct(t,shown){
   startAudio();
-  suggest=null;
+  suggest=null;botCardNext();
   var marked=inkNote()||openNote();
   if(marked){shown=shown||t;t+=marked;}
   if(ink.on)inkSet(false);
@@ -1449,8 +1497,12 @@ function stageOpen(t){
   if(t.row.kind!=='bot'){readChat(t.row);return true;}
   var mate=crew.filter(function(b){return b.name.toLowerCase()===t.want.toLowerCase();})[0];
   if(mate){mateShow(mate,true,!t.small);return true;}
-  if(!t.row.conversationId)return false;
-  readChat({id:t.row.conversationId,label:t.row.label});return true;
+  if(t.row.conversationId){readChat({id:t.row.conversationId,label:t.row.label});return true;}
+  // A bot with no chat yet: the app makes its chat, the one it would make from the bots list.
+  var chat=appHost().botChat;if(!chat)return false;
+  Promise.resolve().then(function(){return chat(t.row);}).then(function(id){if(!id)throw 0;if(open&&!tandem)readChat({id:id,label:t.row.label});},
+    function(){if(openMissed.length<6)openMissed.push(str(t.want,120));});
+  return true;
 }
 function appOpens(list){
   (Array.isArray(list)?list:[]).slice(0,tandem?3:1).forEach(function(x){
@@ -2198,6 +2250,9 @@ function build(){
     if(peek){peek=null;view=-1;}else{crew.forEach(function(x){x.open=false;});big=false;}
     draw();
   });
+  // The fields of a new bot's draft are typed in on the stage; the keys stay in them.
+  $('cv').addEventListener('input',function(e){if(e.target&&e.target.closest&&e.target.closest('.newbot'))botCardEdit();});
+  $('cv').addEventListener('keydown',function(e){if(e.target&&e.target.closest&&e.target.closest('.newbot input,.newbot textarea'))e.stopPropagation();});
   $('cv').addEventListener('click',function(e){
     // A decision at the edge of the deck is turned to, not answered or followed.
     var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
@@ -2232,6 +2287,7 @@ function build(){
     }
     if(!R||seeing())return;
     if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
+    else if(b.dataset.newbot)botCardAct(b.dataset.newbot);
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
     else if(b.dataset.next)direct(R.next);
     else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}

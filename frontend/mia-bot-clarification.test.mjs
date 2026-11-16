@@ -30,6 +30,7 @@ function setupContext(state, overrides = {}) {
   });
   load(context, 'pendingMiaBotSetupMessage');
   load(context, 'syncMiaBotSetupRequest');
+  load(context, 'openMiaBotDraft');
   vm.runInContext('var startedMiaBotSetupRequests = {}; var MAX_BOT_BRIEF_CHARS = 100000;', context);
   return { context, started };
 }

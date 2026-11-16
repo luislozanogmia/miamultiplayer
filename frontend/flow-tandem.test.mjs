@@ -59,13 +59,13 @@ test('a spoken yes or no answers the request that waits, and anything longer goe
   assert.match(js, /if\(spokenAnswer\(t\)\)return;\s*var noise=chatter\(t\);/);
 });
 
-test('Mia moves the app herself: her "Open:" lines are done by the app, and a miss is told to her', () => {
+test('Mia moves the app herself: her "Open:" lines are done by the app, and a miss is told to her', async () => {
   const src = part('var openMissed=[];', '// The names the app can open');
-  const make = (rooms, page) => {
+  const make = (rooms, page, botChat) => {
     const log = [];
-    const host = { rooms: () => rooms, open: (row) => { log.push(row.id); }, openPage: page ? (url) => { log.push(url); return true; } : undefined };
+    const host = { rooms: () => rooms, open: (row) => { log.push(row.id); }, openPage: page ? (url) => { log.push(url); return true; } : undefined, botChat };
     const stage = { crew: [{ name: 'LinkedIn' }], mateShow: (m, chat, wide) => { log.push('mate:' + m.name + ':' + wide); }, readChat: (r) => { log.push('chat:' + r.id); }, siteOpen: (url) => { log.push('site:' + url); return true; } };
-    const api = (tandem) => new Function('appHost', 'str', 'tandem', 'crew', 'mateShow', 'readChat', 'siteOpen', 'function appRooms(){return appHost().rooms();}' + src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), tandem, stage.crew, stage.mateShow, stage.readChat, stage.siteOpen);
+    const api = (tandem) => new Function('appHost', 'str', 'tandem', 'open', 'crew', 'mateShow', 'readChat', 'siteOpen', 'function appRooms(){return appHost().rooms();}' + src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), tandem, true, stage.crew, stage.mateShow, stage.readChat, stage.siteOpen);
     return { log, api: api(true), flow: api(false) };
   };
   const rooms = [{ kind: 'bot', id: 'b1', label: 'LinkedIn' }, { kind: 'chat', id: 'c1', label: 'Design review' }];
@@ -90,10 +90,22 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
     assert.deepEqual(a.log, [did], said);
     assert.equal(a.flow.openNote(), '');
   }
-  a = make(flowRooms, true);
+  // A bot that never had a chat is reachable too: the app makes its chat and it comes to the stage.
+  a = make(flowRooms, true, (row) => Promise.resolve('made-' + row.id));
   a.flow.appOpens(['New bot']);
+  await new Promise((done) => setTimeout(done, 0));
+  assert.deepEqual(a.log, ['chat:made-b3']);
+  assert.equal(a.flow.openNote(), '');
+  // When the app could not make it, Mia hears of it on the next turn.
+  a = make(flowRooms, true, () => Promise.reject(new Error('no')));
+  a.flow.appOpens(['New bot']);
+  await new Promise((done) => setTimeout(done, 0));
   assert.deepEqual(a.log, []);
   assert.match(a.flow.openNote(), /\[Could not open: New bot\./);
+  const botChat = app.slice(app.indexOf('function aiModeBotChat(row){'), app.indexOf('function aiModeBotSetup('));
+  assert.match(botChat, /createNativeAgentConversation\(chatSearchAgentRecord\(agent\)\)/);
+  // The bots on the right of the stage stay the ones at work in this session.
+  assert.doesNotMatch(js.slice(js.indexOf('function stageOpen(t){'), js.indexOf('function appOpens(list){')), /crew\.push/);
   // Nothing the person says is matched on the page: every word goes to Mia.
   assert.doesNotMatch(js, /appAsk/);
   assert.doesNotMatch(js, /stageAsk/);
@@ -186,4 +198,52 @@ test('a bot Mia briefed and a bot the person drives are read by one function, an
   const both = js.slice(js.indexOf('function followBot(b){'), js.indexOf('// Mia looks at a finished bot')) + js.slice(js.indexOf('function watchBots(){'), js.indexOf('function watchStart(){'));
   assert.doesNotMatch(both, /senderType|meta\.progress|askBeforeDo/, 'neither listener filters a bot chat by itself');
   assert.equal(js.match(/h\.rooms\(\)/g).length, 1, 'the app list is read in appRooms only');
+});
+
+test('Mia makes a new bot from Flow and Flow Tandem with the app\'s own draft and creation', () => {
+  // One start for the draft, used by Mia's chat in the app and by Flow.
+  const start = app.slice(app.indexOf('function syncMiaBotSetupRequest(roomId, state){'), app.indexOf('function answerMiaBotSetupRequest('));
+  assert.match(start, /if\(message\) openMiaBotDraft\(roomId, message\.nativeEvent\);/);
+  const host = app.slice(app.indexOf('function aiModeBotSetup('), app.indexOf('// A web page Mia opens for the person'));
+  assert.match(host, /openMiaBotDraft\(roomId, event\)/);
+  assert.match(host, /accept: function\(\)\{ if\(live\(\)\) activateMiaBotDraft\(roomId\); \}/);
+  assert.match(host, /dismiss: function\(\)\{ if\(live\(\)\) cancelMiaBotDraft\(roomId\); \}/);
+  assert.match(host, /navigateToAgentChat\(chatWs\.gatewayAgent, true\)/);
+  assert.doesNotMatch(host, /api\(/);
+  // The card on the stage is drawn from the app's draft and writes back to it.
+  const src = js.slice(js.indexOf('var botCard=null;'), js.indexOf('function choiceHtml(){'));
+  const log = [];
+  let view = { phase: 'review', name: 'Price <Watch>', instructions: 'Check prices.', automation: 'Every Monday', error: '' };
+  const card = { view: () => view, edit: (n, i) => log.push('edit:' + n + ':' + i), accept: () => log.push('accept'), dismiss: () => log.push('dismiss') };
+  const fields = { newBotName: { value: 'Price Watch' }, newBotBrief: { value: 'Check prices daily.' } };
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const make = (tandem, hostApi) => new Function('esc', '$', 'draw', 'redraw', 'readChat', 'appHost', 'conv', 'tandem', src +
+    'return {html:botCardHtml,act:botCardAct,next:botCardNext,asked:botSetupAsked,set:function(c){botCard=c;},get:function(){return botCard;}};')(
+    esc, (id) => fields[id], () => {}, () => {}, (r) => log.push('chat:' + r.id), () => hostApi || {}, 'flow-conv', tandem);
+  let api = make(false, { botSetup: (conv, ev) => { log.push('setup:' + conv + ':' + ev.id); return card; } });
+  assert.equal(api.html(), '');
+  api.asked({ id: 'ev1' });
+  assert.deepEqual(log.splice(0), ['setup:flow-conv:ev1']);
+  assert.match(api.html(), /value="Price &lt;Watch&gt;"/);
+  assert.match(api.html(), /Every Monday/);
+  api.act('accept');
+  assert.deepEqual(log.splice(0), ['edit:Price Watch:Check prices daily.', 'accept']);
+  view = { phase: 'created', created: { name: 'Price Watch', conversationId: 'c9', handedOff: true } };
+  api.act('open');
+  assert.deepEqual(log.splice(0), ['chat:c9']);
+  // The next thing said closes a draft nobody accepted, and leaves one being created alone.
+  view = { phase: 'review', name: 'A', instructions: 'B', automation: '', error: '' };
+  api.next();
+  assert.deepEqual(log.splice(0), ['dismiss']);
+  assert.equal(api.get(), null);
+  api.set(card); view = { phase: 'activating', name: 'A', instructions: 'B', automation: '', error: '' };
+  api.next();
+  assert.deepEqual(log.splice(0), []);
+  assert.equal(api.get(), card);
+  assert.match(js, /suggest=null;botCardNext\(\);/);
+  assert.match(js, /if\(meta\.botSetupRequest&&meta\.botSetupRequest\.status==='pending'\)botSetupAsked\(ev\);/);
+  // In Flow Tandem the app shows its own card in Mia's chat.
+  api = make(true, { botSetupInApp: (ev) => { log.push('app:' + ev.id); return Promise.resolve(true); }, botSetup: () => { log.push('stage'); return card; } });
+  api.asked({ id: 'ev2' });
+  assert.deepEqual(log.splice(0), ['app:ev2']);
 });

@@ -26,7 +26,8 @@ and how Mia talks change. Nothing is kept in a place only one of them knows.
 | Cards from Mia and bots | No | No | Yes |
 | Canvas and views | No | Only when asked, saved as a file | Yes, by default |
 | Browser | The app's browser and tabs | The app's browser and tabs | Flow's own view of the same browser |
-| Mia moving the app | No | Yes: Mia herself opens a chat, a bot or a web page, and is told when the app could not open it | Not needed |
+| Mia moving the app | No | Yes: Mia herself opens a chat, a bot or a web page, and is told when the app could not open it | Yes: Mia puts the chat of any bot, another chat or a web page on the stage. A bot with no chat yet gets one |
+| Making a new bot | Mia drafts it in her chat, the person accepts the card | The same card, opened in Mia's chat in the app | The same draft, shown as a card on the stage |
 
 ### Why Flow Tandem
 

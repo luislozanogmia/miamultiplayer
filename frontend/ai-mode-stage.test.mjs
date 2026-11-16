@@ -93,7 +93,7 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
 
 test('a drawer at the right edge lists the chats with people, and picking one reads it on the stage as search does', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, model: aiModeModel\}/);
+  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, model: aiModeModel\}/);
   assert.match(app, /function aiModePeopleChats\(\)\{[\s\S]*?channel\.kind !== 'bot'[\s\S]*?member\.kind === 'human'/, 'bots are left out, in a company and in Solo');
   assert.match(app, /function aiModeChatLines\(row\)\{[\s\S]*?loadHubRoomPreview\(roomId, state, activeWorkspaceKey\)/, 'a company chat is read by the loader the sidebar uses');
   assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
