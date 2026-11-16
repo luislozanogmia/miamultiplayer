@@ -9722,14 +9722,14 @@ app.post('/api/ai-mode/seed', requireAuth, async (req, res) => {
 });
 
 // Mia's voice in AI mode. GET says how many voices there are to pick from (0:
-// the page uses the computer's own voice); POST {text, voice} returns the line
+// Mia says nothing out loud, and `problem` says why when a key is saved); POST {text, voice} returns the line
 // spoken. The key is the one saved for ElevenLabs in Connected apps.
 const speechKey = () => mcpApps.readProfileKey(mcpAppKeyFiles()[0], mcpApps.keyEnvName('elevenlabs'));
 app.get('/api/ai-mode/voices', requireAuth, async (req, res) => {
   try {
-    res.status(200).json({ voices: (await aiMode.speechVoices({ key: speechKey() })).length });
+    res.status(200).json(await aiMode.speechState({ key: speechKey() }));
   } catch (err) {
-    res.status(200).json({ voices: 0 });
+    res.status(200).json({ voices: 0, problem: '' });
   }
 });
 app.post('/api/ai-mode/speech', requireAuth, async (req, res) => {

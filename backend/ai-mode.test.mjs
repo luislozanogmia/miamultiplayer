@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -153,6 +153,22 @@ test('speech is off without a key, and a line is read in the voice picked', asyn
   assert.equal(await synthesize('', 0, { key, env, request }), null);
   assert.equal(await synthesize('Hi', 0, { env, request }), null);
   assert.equal(await synthesize('Hi', 0, { key, env, request: async () => ({ ok: false }) }), null);
+});
+
+test('the page is told why Mia has no voice: no key, a key that is not taken, or a key that works', async () => {
+  const env = {};
+  assert.deepEqual(await speechState({ env }), { voices: 0, problem: '' });
+  const refuse = async () => ({ ok: false, status: 400 });
+  assert.deepEqual(await speechState({ key: 'key-id-not-a-key', env, request: refuse }), { voices: 0, problem: 'key' });
+  assert.deepEqual(await speechState({ key: 'busy-key', env, request: async () => ({ ok: false, status: 503 }) }), { voices: 0, problem: 'refused' });
+  // Another key is judged on its own answer, not on the last one's.
+  const accept = async () => ({ ok: true, json: async () => ({ voices: [{ voice_id: 'voiceone1' }] }) });
+  assert.deepEqual(await speechState({ key: 'good-key-1', env, request: accept }), { voices: 1, problem: '' });
+  // Voices named on this computer do not hide a key that a spoken line shows is not taken.
+  const named = { MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234' };
+  assert.deepEqual(await speechState({ key: 'named-key', env: named, request: refuse }), { voices: 1, problem: '' });
+  assert.equal(await synthesize('Hi', 0, { key: 'named-key', env: named, request: refuse }), null);
+  assert.deepEqual(await speechState({ key: 'named-key', env: named, request: refuse }), { voices: 0, problem: 'key' });
 });
 
 test('with no voices named, Mia speaks in the first voices of the key\u2019s own account, asked for once', async () => {

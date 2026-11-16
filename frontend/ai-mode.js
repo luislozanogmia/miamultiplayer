@@ -35,6 +35,7 @@ var MARKUP=
       '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
+      '<button class="btn ghost" id="voiceSet" hidden>Connect a voice</button>'+
       '<button class="btn ghost" id="own" aria-pressed="true" title="When a bot finishes, Mia checks its work first and shows you only what needs you">Mia reviews on her own</button>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="full" hidden>Full screen</button>'+
@@ -53,6 +54,7 @@ var MARKUP=
       '<ul id="phoneList"></ul>'+
       '<button class="btn" id="phonePair">Connect a phone</button>'+
     '</div>'+
+    '<div class="voice-ask" id="voiceAsk" role="group" aria-label="Mia\'s voice" hidden></div>'+
     '<div class="cv pad" id="cv"></div>'+
     '<button class="log-tab" id="logTab" aria-expanded="false" aria-label="What you asked and what Mia reported" title="What you asked and what Mia reported" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>'+
     '<aside class="log" id="log" aria-label="What you asked and what Mia reported" hidden></aside>'+
@@ -1372,7 +1374,8 @@ function siteWire(){
   bar.addEventListener('pointerup',drop);bar.addEventListener('pointercancel',drop);
   window.addEventListener('resize',function(){if(open)sitePlace();});
 }
-// Mia's lines are read in the voice the person picked when this computer has one, else in the browser's own.
+// Mia's lines are read in the voice the person picked. With no voice connected she says nothing out loud:
+// the words are on the screen, and the person is offered to connect one.
 var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
 // Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
 function speak(t){
@@ -1392,10 +1395,10 @@ function sayNext(){
       .then(function(buf){
         if(my!==speakId||muted||quiet||!open)return;
         var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.onended=done;src.start();speaking=src;
-      }).catch(function(){if(my===speakId)speakOwn(t,done);});
+      }).catch(function(){if(my===speakId){lines=[];busy=false;voiceCheck();}});
     return;
   }
-  speakOwn(t,done);
+  lines=[];busy=false;
 }
 // The welcome is said once: by the intro's ending the first time, with what Flow is; on entering
 // after that it is the greeting alone.
@@ -1410,10 +1413,9 @@ function introSay(t){
   var off=false,ctx=null,AC=window.AudioContext||window.webkitAudioContext;
   if(muted||quiet)return function(){};
   introSpoke=true;
-  function own(){if(!off)speakOwn(t,function(){});}
   call('/api/ai-mode/voices').then(function(r){
     if(off)return;
-    if(!(+r.data.voices)||!AC)return own();
+    if(!(+r.data.voices)||!AC)return;
     return fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:0})})
       .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
       .then(function(b){ctx=new AC();return ctx.decodeAudioData(b);})
@@ -1421,16 +1423,75 @@ function introSay(t){
         if(off)return;
         var src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);src.start();
       });
-  }).catch(own);
+  }).catch(function(){});
   return function(){
     off=true;introSpoke=false;
     try{if(ctx)ctx.close();}catch(e){}
-    try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
   };
 }
-function speakOwn(t,done){
-  if(!window.speechSynthesis)return done();
-  try{var u=new SpeechSynthesisUtterance(t);u.rate=0.95;u.onend=u.onerror=done;window.speechSynthesis.speak(u);}catch(e){done();}
+// Mia's voice comes from the person's ElevenLabs account, connected in Connected apps. When there is
+// none, entering Flow offers to connect it here, in three steps, or to skip; skipping is remembered.
+// The key goes straight from the field to Connected apps and is not kept on the page.
+var VOICE_KEYS='https://elevenlabs.io/app/settings/api-keys';
+var ask='',askNote='',askWhy='';
+function voiceSkipped(){try{return localStorage.getItem('miaAiModeVoiceSkip')||'';}catch(e){return '';}}
+// What the server says about her voice: how many voices, and why none when a key is saved.
+function voiceCheck(){
+  return call('/api/ai-mode/voices').then(function(r){
+    voices=+r.data.voices||0;voice=0;askWhy=voices?'':str(r.data.problem,20);
+    $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices;
+    // A saved key that stopped working is said once more even after a skip.
+    if(voices){if(ask!=='done')ask='';}
+    else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask='offer';
+    voiceAskDraw();
+  },function(){});
+}
+function voiceAskDraw(){
+  var box=$('voiceAsk'),h='';
+  if(ask==='offer')h=askWhy
+    ?'<b>Mia\'s voice is not working</b><p>'+(askWhy==='key'?'ElevenLabs did not accept the key that is saved.':'ElevenLabs is not answering with the key that is saved.')+' Until it does, Mia stays silent.</p><div class="va-row"><button class="btn primary" data-va="setup">Fix it</button><button class="btn ghost" data-va="skip">Skip</button></div>'
+    :'<b>Give Mia a voice</b><p>For a better experience, connect your ElevenLabs account and Mia will talk to you.</p><div class="va-row"><button class="btn primary" data-va="setup">Set up</button><button class="btn ghost" data-va="skip">Skip</button></div>';
+  else if(ask==='setup'||ask==='saving')h='<b>Connect ElevenLabs</b>'+
+    '<ol><li>Open <a href="'+VOICE_KEYS+'" target="_blank" rel="noopener noreferrer">your ElevenLabs API keys</a> and create a key.</li>'+
+    '<li>Copy the key itself. It starts with <code>sk_</code> and is shown only once, when you create it.</li>'+
+    '<li>Paste it here.</li></ol>'+
+    '<input id="voiceKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk_…" aria-label="Your ElevenLabs key"'+(ask==='saving'?' disabled':'')+'>'+
+    '<p class="va-note" role="alert"'+(askNote?'':' hidden')+'>'+esc(askNote)+'</p>'+
+    '<div class="va-row"><button class="btn primary" data-va="save"'+(ask==='saving'?' disabled':'')+'>'+(ask==='saving'?'Connecting…':'Connect')+'</button><button class="btn ghost" data-va="back"'+(ask==='saving'?' disabled':'')+'>Back</button></div>';
+  else if(ask==='done')h='<b>Mia has her voice</b><p>You can change or mute it in the menu.</p>';
+  // What is typed stays in the field when only the note under it changes.
+  var typed=$('voiceKey')?$('voiceKey').value:'';
+  box.innerHTML=h;box.hidden=!h;
+  if($('voiceKey')&&ask==='setup'){$('voiceKey').value=typed;$('voiceKey').focus();}
+}
+function voiceAskDo(act){
+  if(act==='setup'){ask='setup';askNote='';}
+  else if(act==='back'){ask='offer';askNote='';}
+  else if(act==='skip'){ask='';try{localStorage.setItem('miaAiModeVoiceSkip',askWhy||'none');}catch(e){}}
+  else if(act==='save')return voiceSave();
+  voiceAskDraw();
+}
+function voiceSave(){
+  var key=$('voiceKey')?$('voiceKey').value.trim():'';
+  if(ask!=='setup')return;
+  if(!key){askNote='Paste your key first.';return voiceAskDraw();}
+  if(key.indexOf('sk_')!==0){askNote='That is not the key itself. The key starts with sk_ and is shown only once, when you create it. If you no longer have it, create a new one.';return voiceAskDraw();}
+  ask='saving';askNote='';voiceAskDraw();
+  call('/api/mcp-apps/elevenlabs/key',{key:key}).then(function(r){
+    if(r.status!==200)throw new Error(str(r.data.message,200)||'save');
+    return call('/api/ai-mode/voices');
+  }).then(function(r){
+    if(ask!=='saving')return;
+    voices=+r.data.voices||0;askWhy=voices?'':str(r.data.problem,20);
+    if(!voices){ask='setup';askNote=askWhy==='key'?'ElevenLabs did not accept that key. Check that you copied all of it, or create a new one.':'The key is saved, but ElevenLabs is not answering right now. Try again in a moment.';return voiceAskDraw();}
+    ask='done';$('voice').hidden=voices<2;$('voiceSet').hidden=true;voiceAskDraw();
+    try{localStorage.removeItem('miaAiModeVoiceSkip');}catch(e){}
+    if(open)speak('Welcome to Flow.');
+    setTimeout(function(){if(ask==='done'){ask='';if(host)voiceAskDraw();}},4000);
+  },function(e){
+    if(ask!=='saving')return;
+    ask='setup';askNote=e&&e.message&&e.message!=='save'?e.message:'The key could not be saved. Try again.';voiceAskDraw();
+  });
 }
 // Mia's voice has a switch of its own: off, she still works and writes, and the other sounds stay.
 // It is kept for the next visit. The person's mic is muted by its own button.
@@ -1447,7 +1508,6 @@ function quietSet(){
 function hush(){
   speakId++;lines=[];busy=false;
   try{if(speaking){speaking.onended=null;speaking.stop();speaking=null;}}catch(e){}
-  try{if(window.speechSynthesis)window.speechSynthesis.cancel();}catch(e){}
 }
 // Speaking to Mia: one press starts the mic, the next sends what was said to her as a direction.
 // The words are written down on this computer by the same recorder the chat box uses.
@@ -1644,7 +1704,10 @@ function build(){
     var turn=e.target.closest('[data-view]');
     if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
   };
-  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();$('own').onclick=ownSet;ownShow();
+  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();
+  $('voiceSet').onclick=function(){ask='setup';askNote='';voiceAskDraw();};
+  $('voiceAsk').addEventListener('click',function(e){var b=e.target.closest('[data-va]');if(b&&!b.disabled)voiceAskDo(b.dataset.va);});
+  $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=earToggle;$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=takeWheel;$('back').onclick=handBack;
@@ -1757,10 +1820,8 @@ function enter(){
   if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
   startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
-  call('/api/ai-mode/voices').then(function(r){
-    voices=+r.data.voices||0;voice=0;$('voice').hidden=voices<2;$('voice').textContent='Voice 1';
-    if(open&&s===1)welcome();
-  },function(){welcome();});
+  ask='';askNote='';voiceAskDraw();
+  voiceCheck().then(function(){if(open&&s===1)welcome();});
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
   setTimeout(function(){if(open)$('box').focus();},400);
   openChat().catch(function(){});

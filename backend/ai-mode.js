@@ -417,8 +417,8 @@ async function fetchImage(value, { request = fetch } = {}) {
 }
 
 // Mia's voice. With a key saved for ElevenLabs in Connected apps her lines are
-// read by ElevenLabs in one of that account's voices; without one the page
-// falls back to the computer's own voice. Only the line Mia says out loud is
+// read by ElevenLabs in one of that account's voices; without one she says
+// nothing out loud and the page offers to connect it. Only the line Mia says out loud is
 // sent. The key is handed in by the caller and is never logged.
 const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const SPEECH_MODEL = 'eleven_turbo_v2_5';
@@ -428,6 +428,8 @@ const SPEECH_TIMEOUT_MS = 20000;
 const VOICES_API = 'https://api.elevenlabs.io/v1/voices';
 const VOICES_KEPT_MS = 10 * 60 * 1000;
 let voicesKept = null;
+// The last key ElevenLabs refused, and the number it answered with.
+let voicesRefused = null;
 
 // speechVoices({key}) -> the voice ids to choose from, or [] when speech is
 // not set up (no key, or no voice). They are the first voices of the key's
@@ -442,12 +444,26 @@ async function speechVoices({ key = '', env = process.env, request = fetch, now 
   if (voicesKept && voicesKept.key === secret && now() - voicesKept.at < VOICES_KEPT_MS) return voicesKept.ids;
   const response = await request(VOICES_API, { headers: { 'xi-api-key': secret }, signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS) });
   if (!response.ok) {
-    console.warn(`[ai-mode] the list of voices was refused (${response.status}); using the computer's voice`);
+    console.warn(`[ai-mode] the list of voices was refused (${response.status}); Mia stays silent`);
+    voicesRefused = { key: secret, status: Number(response.status) || 1 };
     return [];
   }
+  voicesRefused = null;
   const ids = clean(((await response.json()).voices || []).map((voice) => voice && voice.voice_id));
   voicesKept = { key: secret, at: now(), ids };
   return ids;
+}
+
+// speechState({key}) -> {voices, problem}: how many voices there are to speak
+// in, and why there are none when a key is saved: 'key' when ElevenLabs did
+// not take the key, 'refused' for any other refusal.
+async function speechState(options = {}) {
+  const secret = String(options.key || '').trim();
+  let voices = 0;
+  try { voices = (await speechVoices(options)).length; } catch (_) { return { voices: 0, problem: secret ? 'refused' : '' }; }
+  const refused = voicesRefused && voicesRefused.key === secret ? voicesRefused.status : 0;
+  if (!refused) return { voices, problem: '' };
+  return { voices: 0, problem: [400, 401, 403].includes(refused) ? 'key' : 'refused' };
 }
 
 // synthesize(text, voice) -> {type, body} of the spoken line, or null.
@@ -464,10 +480,12 @@ async function synthesize(text, voice, { key = '', env = process.env, request = 
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });
   if (!response.ok) {
-    // The page falls back to the computer's voice; the log says why (the answer's number only).
-    console.warn(`[ai-mode] speech was refused (${response.status}); using the computer's voice`);
+    // Mia stays silent; the log says why (the answer's number only).
+    console.warn(`[ai-mode] speech was refused (${response.status}); Mia stays silent`);
+    voicesRefused = { key: String(key).trim(), status: Number(response.status) || 1 };
     return null;
   }
+  voicesRefused = null;
   const body = Buffer.from(await response.arrayBuffer());
   return body.length ? { type: 'audio/mpeg', body } : null;
 }
@@ -536,6 +554,6 @@ function createStagePages({ now = Date.now } = {}) {
 
 module.exports = {
   CARD_ICONS,
-  speechVoices, synthesize, workerSignal, pageFrame, createStagePages,
+  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages,
   AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };

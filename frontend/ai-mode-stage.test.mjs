@@ -145,6 +145,49 @@ test('a returning person hears the greeting alone, not what Flow is', () => {
   assert.match(js, /function welcome\(\)\{\s*if\(introSpoke\)\{introSpoke=false;return;\}\s*speak\('Welcome to Flow\.'\);\s*\}/);
 });
 
+test('Mia never speaks in the browser\u2019s own voice; with none connected she is silent and offers to connect ElevenLabs', () => {
+  assert.doesNotMatch(js, /speechSynthesis|SpeechSynthesisUtterance/);
+  const draw = js.slice(js.indexOf('function voiceAskDraw('), js.indexOf('function voiceAskDo('));
+  assert.match(draw, /For a better experience, connect your ElevenLabs account/);
+  assert.match(draw, /data-va="setup">Set up<\/button><button class="btn ghost" data-va="skip">Skip</);
+  assert.match(draw, /<input id="voiceKey" type="password" autocomplete="off"/);
+  // Skipping is remembered; a saved key that stopped working is said once more.
+  assert.match(js, /localStorage\.setItem\('miaAiModeVoiceSkip',askWhy\|\|'none'\)/);
+  assert.match(js, /else if\(!ask&&voiceSkipped\(\)!==\(askWhy\|\|'none'\)\)ask='offer';/);
+});
+
+test('the key goes to Connected apps only when it is the key itself, and a key ElevenLabs refuses is said', async () => {
+  const src = js.slice(js.indexOf('function voiceSave('), js.indexOf('// Mia\'s voice has a switch of its own'));
+  const make = (answers) => {
+    const calls = [], el = { value: '' }, st = { ask: 'setup', askNote: '', spoke: '' };
+    const run = new Function('st', 'el', 'call', 'function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+      'var ask=st.ask,askNote="",askWhy="",voices=0,open=true,host=null,localStorage={removeItem(){}};' +
+      'function $(id){return id==="voiceKey"?el:{};}function voiceAskDraw(){st.ask=ask;st.askNote=askNote;st.voices=voices;}function speak(t){st.spoke=t;}function setTimeout(){}' +
+      src + '\nreturn voiceSave;');
+    const call = (path, body) => { calls.push([path, body ? Object.keys(body) : null]); return Promise.resolve(answers.shift()); };
+    return { calls, el, st, save: run(st, el, call) };
+  };
+  const id = make([]);
+  id.el.value = 'a'.repeat(64); id.save();
+  assert.deepEqual(id.calls, [], 'a key ID is never sent');
+  assert.match(id.st.askNote, /starts with sk_/);
+  const bad = make([{ status: 200, data: {} }, { status: 200, data: { voices: 0, problem: 'key' } }]);
+  bad.el.value = ' sk_example '; bad.save();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(bad.calls, [['/api/mcp-apps/elevenlabs/key', ['key']], ['/api/ai-mode/voices', null]]);
+  assert.equal(bad.st.ask, 'setup');
+  assert.match(bad.st.askNote, /did not accept that key/);
+  const good = make([{ status: 200, data: {} }, { status: 200, data: { voices: 3, problem: '' } }]);
+  good.el.value = 'sk_example'; good.save();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(good.st.ask, 'done');
+  assert.equal(good.st.spoke, 'Welcome to Flow.');
+});
+
+test('the welcome does not fade in again when the bots at work are drawn beside it', () => {
+  assert.match(css, /\.again \.canvas,\.again \.card,\.again \.thumb,\.again \.front,\.again \.in\{animation:none\}/);
+});
+
 test('a card draws its picture from its own facts, and a photo is only looked up when no picture was drawn', async () => {
   const at = js.indexOf('var MAX_CARDS=9,pics={};');
   const run = new Function('function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +

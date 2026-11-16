@@ -459,4 +459,16 @@ a.file:hover{border-color:var(--accent)}
 /* On a wide screen the stage moves over so the drawer covers nothing. */
 @media(min-width:1000px){:host(.log-on) .cv{padding-left:316px}}
 /* a stage redrawn as it grows does not fade in again, which would blink what Mia drew */
-.again .canvas,.again .card,.again .thumb,.again .front{animation:none}
+.again .canvas,.again .card,.again .thumb,.again .front,.again .in{animation:none}
+/* Connecting Mia's voice: offered above the box where the person types, out of the way of the stage. */
+.voice-ask{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) + 44px);z-index:5;width:min(420px,calc(100% - 32px));display:flex;flex-direction:column;gap:10px;padding:14px 16px;border:1px solid var(--rule-strong);border-radius:12px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px);font-size:13px;line-height:1.45;color:var(--soft)}
+.voice-ask[hidden]{display:none}
+.voice-ask b{font-weight:600;font-size:14px;color:var(--ink)}
+.voice-ask p,.voice-ask ol{margin:0}
+.voice-ask ol{padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.voice-ask a{color:var(--accent)}
+.voice-ask code{font:12px var(--mono);color:var(--ink)}
+.voice-ask input{height:36px;padding:0 10px;border:1px solid var(--rule-strong);border-radius:8px;background:rgba(255,255,255,.06);color:var(--ink);font:13px var(--mono);min-width:0}
+.voice-ask input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.voice-ask .va-note{color:var(--accent)}
+.voice-ask .va-row{display:flex;gap:8px}
