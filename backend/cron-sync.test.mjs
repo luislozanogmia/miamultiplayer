@@ -831,6 +831,29 @@ test('active automation runs use Hermes execution liveness and retain their deli
   };
   require('./db').saveOne(appDb, 'bots', bot.id, bot);
 
+  // The session a run's commands send leads back to that run, and to nothing
+  // once the id is not a run's or names another job.
+  const named = cronSync.activeBotCronRunForSession(appDb, 'cron_job-live_20260907_111226');
+  assert.equal(named.bot.id, bot.id);
+  assert.equal(named.jobId, 'job-live');
+  assert.deepEqual(named.folders, []);
+  for (const other of ['', 'job-live', 'cron_job-live', 'cron_job-other_20260907_111226', 'execution-live', 'x'.repeat(201)]) {
+    assert.equal(cronSync.activeBotCronRunForSession(appDb, other), null);
+  }
+  // A long run that compacted its history goes on under a new session id.
+  const state = new (require('better-sqlite3'))(stateDbFile);
+  state.exec('CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, end_reason TEXT)');
+  if (!state.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'parent_session_id'").get()) {
+    state.exec('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT');
+  }
+  const addSession = state.prepare('INSERT INTO sessions (id, source, started_at, parent_session_id) VALUES (?, ?, 1, ?)');
+  addSession.run('compacted-1', 'cron', 'cron_job-live_20260907_111226');
+  addSession.run('compacted-2', 'cron', 'compacted-1');
+  addSession.run('chat-child', 'desktop', 'chat-parent');
+  state.close();
+  assert.equal(cronSync.activeBotCronRunForSession(appDb, 'compacted-2').jobId, 'job-live');
+  assert.equal(cronSync.activeBotCronRunForSession(appDb, 'chat-child'), null);
+
   const runs = cronSync.listActiveBotCronRuns(appDb);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].sessionId, 'execution-live');

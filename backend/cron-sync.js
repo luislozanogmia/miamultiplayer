@@ -1430,6 +1430,41 @@ function listAutomationChecklists(conn) {
   }
 }
 
+// The job a live Hermes session is a run of, or '' when it is not a scheduled
+// run. A run's session is named cron_<job id>_<start time>; a long run that
+// compacts its history goes on under a new id whose parents lead back to it.
+function cronJobIdForSession(sessionId) {
+  const named = (id) => (/^cron_(.+)_\d{8}_\d{6}$/.exec(id) || [])[1] || '';
+  let id = String(sessionId || '');
+  if (!id || id.length > 200 || named(id) || !fs.existsSync(HERMES_STATE_DB)) return named(id);
+  const Database = require('better-sqlite3');
+  const state = new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true });
+  try {
+    const parent = state.prepare('SELECT parent_session_id AS parent FROM sessions WHERE id = ?');
+    for (let hop = 0; hop < 8; hop += 1) {
+      const row = parent.get(id);
+      id = String((row && row.parent) || '');
+      if (!id || named(id)) return named(id);
+    }
+    return '';
+  } catch (_) {
+    return '';
+  } finally {
+    state.close();
+  }
+}
+
+// The scheduled run going on right now that a live Hermes session belongs to,
+// with the folders that run works in, or null. A finished run matches nothing.
+function activeBotCronRunForSession(conn, sessionId) {
+  const jobId = cronJobIdForSession(sessionId);
+  if (!jobId) return null;
+  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === jobId);
+  if (!run) return null;
+  const job = readHermesJobs().byId.get(jobId) || {};
+  return { ...run, folders: [job.artifact_workspace, job.workdir].filter(Boolean) };
+}
+
 module.exports = {
   automationToCronExpr,
   isValidAutomationTime,
@@ -1450,6 +1485,7 @@ module.exports = {
   reconcileBotCrons,
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
+  activeBotCronRunForSession,
   listInterruptedBotCronRuns,
   listAutomationChecklists,
   automationChecklist,

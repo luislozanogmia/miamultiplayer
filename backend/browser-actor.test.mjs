@@ -10,8 +10,13 @@ function route() {
   const end = source.indexOf('// Per-session chain', start);
   const sessions = new Map(); const shared = new Map(); const calls = []; let handler;
   const requireAuth = () => {};
+  // Scheduled runs going on now, by the session the run's commands send.
+  const scheduled = new Map(); const botChats = new Map(); const inactive = new Set();
   // Conversations: Solo ones live in the Solo company; 'company' is the local team space.
   const context = { String, Date, path, nativeGatewaySessionConversations: sessions, sharedBotRunSessions: shared, requireAuth,
+    conn: {}, cronSync: { activeBotCronRunForSession: (conn, session) => { if (session === 'broken') throw new Error('unreadable'); return scheduled.get(session) || null; } },
+    ownerOf: record => String(record.owner).toLowerCase(), sameOwner: (record, email) => String(record.owner).toLowerCase() === String(email || '').toLowerCase(),
+    isActiveWorkspaceUser: email => !inactive.has(email), workspaceIdForRecord: record => record.workspaceId, nativeBotConversation: bot => botChats.get(bot.id) || null,
     DEFAULT_WORKSPACE_ID: 'multiplayer_test', nativeCompanyId: (workspace, email) => workspace + ':' + email,
     app: { get: (path, auth, callback) => { assert.equal(path, '/api/browser/actor'); assert.equal(auth, requireAuth); handler = callback; } },
     nativeConversationService: { getConversation: input => { calls.push(input); if (input.principal.principalId !== 'owner@example.test') throw new Error('denied'); return { id: input.conversationId, metadata: input.conversationId === 'team-chat' ? { teamWorkspace: 'hub_' + 'b'.repeat(32) } : {} }; } } };
@@ -20,8 +25,32 @@ function route() {
     let response; const res = { status: () => res, json: value => { response = JSON.parse(JSON.stringify(value)); } };
     handler({ query: { session }, userEmail: email }, res); return response;
   };
-  return { sessions, shared, calls, invoke, context };
+  return { sessions, shared, calls, invoke, context, scheduled, botChats, inactive };
 }
+
+test('a scheduled run of a bot uses the browser as that bot, for its owner, while the run is going', () => {
+  const h = route();
+  const session = 'cron_job-1_20261116_090000';
+  const bot = { id: 'pr-merger', name: 'PR Merger', owner: 'Owner@example.test', workspaceId: 'solo' };
+  h.scheduled.set(session, { bot, jobId: 'job-1', folders: ['/data/mia/bots/PR Merger', '/data/packages/pr-merger', 'relative'] });
+  assert.deepEqual(h.invoke(session), { actor: { kind: 'bot', botId: 'pr-merger', name: 'PR Merger', workspace: 'solo',
+    folders: ['/data/mia/bots/PR Merger', '/data/packages/pr-merger'] } });
+  h.sessions.set('own-chat', { companyId: 'solo:owner@example.test', conversationId: 'bot-private', botId: 'pr-merger', agentName: 'PR Merger',
+    agent: bot, browserActiveUntil: Date.now() + 60_000 });
+  const chat = h.invoke('own-chat').actor, run = h.invoke(session).actor;
+  assert.equal(run.botId, chat.botId, 'one bot, one tab group');
+  assert.equal(run.workspace, chat.workspace, 'the run works in the browser of the bot\'s own chat');
+  assert.deepEqual(h.invoke(session, 'stranger@example.test'), { actor: null }, 'only the bot\'s owner');
+  h.inactive.add('owner@example.test');
+  assert.deepEqual(h.invoke(session), { actor: null }, 'an owner who left has no runs here');
+  h.inactive.clear();
+  h.botChats.set('pr-merger', { id: 'team-chat', metadata: { teamWorkspace: 'hub_' + 'b'.repeat(32) } });
+  assert.equal(h.invoke(session).actor.workspace, 'hub_' + 'b'.repeat(32), 'a company bot\'s run is that company\'s');
+  h.scheduled.delete(session);
+  assert.deepEqual(h.invoke(session), { actor: null }, 'a finished run cannot reuse its session');
+  assert.deepEqual(h.invoke('broken'), { actor: null }, 'an unreadable run list names nobody');
+  assert.equal(h.calls.length, 1, 'a scheduled run never acquires a conversation principal');
+});
 
 test('browser actor route distinguishes authorized Mia and bot sessions from unresolved or denied sessions', () => {
   const h = route();

@@ -7757,6 +7757,22 @@ function browserActorFolders(folders) {
     .map((folder) => path.resolve(folder));
 }
 
+// A bot's scheduled run uses the browser as the bot does in its own chat with
+// its owner: the same identity, so the same tab group, in that chat's
+// workspace. Only for the bot's owner, and only while the run is going.
+function browserActorForScheduledRun(sessionId, email) {
+  let run;
+  try {
+    run = cronSync.activeBotCronRunForSession(conn, sessionId);
+  } catch (_) {
+    return null;
+  }
+  if (!run || !sameOwner(run.bot, email) || !isActiveWorkspaceUser(ownerOf(run.bot))) return null;
+  const companyId = nativeCompanyId(workspaceIdForRecord(run.bot), ownerOf(run.bot));
+  const workspace = browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
+  return browserBotActor({ botId: browserBotId(run.bot), name: run.bot.name, workspace, folders: run.folders });
+}
+
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
 // identity; unknown sessions and inaccessible conversations never become Mia.
@@ -7769,6 +7785,9 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
     return res.status(200).json({ actor: browserBotActor(shared) });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
+  if (!target && sessionId && sessionId.length <= 200) {
+    return res.status(200).json({ actor: browserActorForScheduledRun(sessionId, String(req.userEmail || '').trim().toLowerCase()) });
+  }
   if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
   let conversation;
   try {
