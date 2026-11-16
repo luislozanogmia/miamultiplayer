@@ -4863,6 +4863,18 @@ async function inferenceOptionsForUser(email, baseOptions) {
   return Object.keys(options).length ? options : undefined;
 }
 
+// replyModelMetadata(options) -> { model: { provider, model, reasoningEffort } } for a reply's
+// record: the model the turn was sent to run on, after every default and pin was applied, so a
+// chat (Flow and Flow Tandem included) keeps which model wrote each reply. {} when none was set.
+function replyModelMetadata(options) {
+  const provider = options && typeof options.provider === 'string' ? options.provider.trim() : '';
+  const model = options && typeof options.model === 'string' ? options.model.trim() : '';
+  if (!provider || !model) return {};
+  const reasoningEffort = typeof options.reasoningEffort === 'string' && options.reasoningEffort.trim()
+    ? options.reasoningEffort.trim() : '';
+  return { model: { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } };
+}
+
 // The model a bot runs on when no turn picked one: its own while connected,
 // else the person's current model, the one chats and new bots use. Every path
 // outside a chat turn (schedules, Mia's tools, browser work) asks here.
@@ -9331,6 +9343,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           agentName: agent.name,
           artifact: true,
           artifactSource: 'interactive',
+          ...replyModelMetadata(inferenceOptions),
           ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
           ...(index === validatedArtifacts.length - 1 ? tidyPlan.metadata || {} : {}),
         },
@@ -9359,6 +9372,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       runtime: 'hermes',
       dispatchId: dispatch.id,
       agentName: agent.name,
+      ...replyModelMetadata(inferenceOptions),
       ...(instructionUpdate.metadata || {}),
       ...(automationAction.metadata || {}),
       ...(tidyPlan.metadata || {}),
