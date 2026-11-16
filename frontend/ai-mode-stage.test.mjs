@@ -446,8 +446,9 @@ test('a pulled chat turns the bar into its message box, a bot can be put on the 
   assert.match(js, /crewAsks\.concat\(R\?R\.asks:\[\]\)/);
   // The card of the page Mia is in opens her tab, not the one in front.
   assert.match(js, /else if\(R\.focus==='page'\)\{site\.open=true;pageShow\(\);\}/);
-  // "Show <bot> big" is handled on the stage and is not sent to Mia.
-  assert.match(js, /if\(!shown&&!tandem&&stageAsk\(t\)\)return;/);
+  // "Show <bot> big" is not matched on the page: it goes to Mia, and her "Open:" line sets the stage.
+  assert.doesNotMatch(js, /stageAsk/);
+  assert.match(js, /if\(mate\)\{mateShow\(mate,true,!t\.small\);return true;\}/);
   assert.match(css, /\.work\.big,\.work\.big\.solo\{grid-template-columns:minmax\(0,1fr\);max-width:none\}/);
   // Sounds a transcriber invents are dropped; a word or two while Mia works does not redirect her.
   const at = js.indexOf('var PHANTOM='), end = js.indexOf('function talkStart(){');

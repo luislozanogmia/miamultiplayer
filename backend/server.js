@@ -9357,8 +9357,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       conversationId: handoff.conversationId, dispatchId: handoff.id,
     })) : [];
     if (bots.length) publishAiModeSignal({ aiMode: 'handoff', bots });
-    // In Flow Tandem Mia moves the app herself: each "Open:" line of her reply is done by the app.
-    const opens = aiModeRun && trigger.metadata && trigger.metadata.aiModeTandem === true ? aiMode.parseOpens(safeReply) : [];
+    // Mia moves what the person sees herself: each "Open:" line of her reply is done by the app,
+    // in the app itself in Flow Tandem and on the stage in Flow.
+    const opens = aiModeRun ? aiMode.parseOpens(safeReply) : [];
     if (opens.length) publishAiModeSignal({ aiMode: 'open', targets: opens });
   }
   return result;

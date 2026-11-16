@@ -630,18 +630,9 @@ function choiceHtml(){
 }
 // Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
 // bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
-// "Show LinkedIn big" or "put LinkedIn on stage": that bot's chat takes the whole stage and the
-// other bots draw small; "make it small" gives the stage its usual width back.
+// Mia puts a bot's chat across the whole stage with an "Open:" line (stageOpen); the other bots draw
+// small. The button on that chat gives the stage its usual width back.
 var big=false;
-function stageAsk(t){
-  t=String(t||'').trim();
-  if(big&&shownBot()&&/^(?:make|show) (?:it|that) (?:small|smaller)(?: again)?[.!]?$/i.test(t)){big=false;draw();return true;}
-  var m=/^(?:show|put|bring|open)\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\s+bot)?\s+(?:big|bigger|large|full ?screen|on (?:the )?stage)[.!]?$/i.exec(t);
-  if(!m)return false;
-  var want=m[1].toLowerCase(),mate=crew.filter(function(b){var n=b.name.toLowerCase();return n===want||n.indexOf(want)===0;})[0];
-  if(!mate)return false;
-  mateShow(mate,true,true);return true;
-}
 // mateShow(mate,asChat,wide): the chat with a bot, or what it brought back, takes the stage.
 function mateShow(mate,asChat,wide){
   // A bot from an earlier visit can be opened before anything was said this time.
@@ -1312,9 +1303,8 @@ function inkWire(){
 }
 function direct(t,shown){
   startAudio();
-  if(!shown&&!tandem&&stageAsk(t))return;
   suggest=null;
-  var marked=inkNote()||(tandem?openNote():'');
+  var marked=inkNote()||openNote();
   if(marked){shown=shown||t;t+=marked;}
   if(ink.on)inkSet(false);
   var steering=s===2&&R&&R.running&&R.sent,away=past[view]||null;
@@ -1342,7 +1332,7 @@ function direct(t,shown){
       // What the person saw themselves say, so it reads the same when this chat is opened again.
       ev.metadata={aiModeSaid:str(shown||t,2000)};
       if(pick)ev.metadata.chatModelSelection=pick;
-      if(tandem){ev.metadata.aiModeTandem=true;ev.metadata.aiModeRooms=roomNames();}
+      ev.metadata.aiModeRooms=roomNames();if(tandem)ev.metadata.aiModeTandem=true;
       return call(chat(id,'/events'),ev);
     });
   };
@@ -1432,27 +1422,45 @@ function watchBots(){
 }
 function watchStart(){watchBots();clearInterval(watchTimer);watchTimer=setInterval(watchBots,30000);}
 function watchStop(){clearInterval(watchTimer);watchTimer=null;Object.keys(watchSocks).forEach(function(k){try{if(watchSocks[k])watchSocks[k].close();}catch(e){}});watchSocks={};}
-// Mia moves the app herself: each "Open:" line of her reply comes here from the run. A name is one of
-// the app's bots or chats, anything else with a dot or a scheme is a web address. What could not be
-// opened is told to her with the next thing the person says.
+// Mia moves what the person sees herself: each "Open:" line of her reply comes here from the run. A name
+// is one of the person's bots or chats, anything else with a dot or a scheme is a web address. In Flow
+// Tandem the app opens it (appOpen); in Flow it comes to the stage (stageOpen). What could not be opened
+// is told to her with the next thing the person says.
 var openMissed=[];
-function appOpen(target){
-  var h=appHost(),want=String(target||'').trim(),low=want.toLowerCase();
-  if(!want)return false;
-  var hit=appRooms().filter(function(r){return String(r.label).toLowerCase()===low;})[0];
+function openTarget(target){
+  var want=String(target||'').trim(),small=/\s*\(small\)$/i.test(want);
+  want=want.replace(/\s*\(small\)$/i,'');
+  var low=want.toLowerCase(),row=want?appRooms().filter(function(r){return String(r.label).toLowerCase()===low;})[0]:null;
+  return {want:want,row:row||null,small:small,page:!row&&(/^https?:\/\/\S+$/i.test(want)||/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(want))};
+}
+function appOpen(t){
+  var h=appHost();
   try{
-    if(hit&&h.open)return h.open(hit)!==false;
-    if(/^https?:\/\/\S+$/i.test(want)||/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(want))return !!(h.openPage&&h.openPage(want));
+    if(t.row&&h.open)return h.open(t.row)!==false;
+    if(t.page)return !!(h.openPage&&h.openPage(t.want));
   }catch(e){}
   return false;
 }
+// On the stage a bot's chat is drawn across it, or at its usual width with "(small)"; another chat is
+// pulled the way a pick from the chats list is; a page opens in the stage's browser.
+function stageOpen(t){
+  if(t.page)return siteOpen(/^https?:/i.test(t.want)?t.want:'https://'+t.want);
+  if(!t.row)return false;
+  if(t.row.kind!=='bot'){readChat(t.row);return true;}
+  var mate=crew.filter(function(b){return b.name.toLowerCase()===t.want.toLowerCase();})[0];
+  if(mate){mateShow(mate,true,!t.small);return true;}
+  if(!t.row.conversationId)return false;
+  readChat({id:t.row.conversationId,label:t.row.label});return true;
+}
 function appOpens(list){
-  if(!tandem)return;
-  (Array.isArray(list)?list:[]).slice(0,3).forEach(function(t){if(!appOpen(t)&&openMissed.length<6)openMissed.push(str(t,120));});
+  (Array.isArray(list)?list:[]).slice(0,tandem?3:1).forEach(function(x){
+    var t=openTarget(x);
+    if(!(t.want&&(tandem?appOpen(t):stageOpen(t)))&&openMissed.length<6)openMissed.push(str(x,120));
+  });
 }
 function openNote(){
   if(!openMissed.length)return '';
-  var n='\n\n[The app could not open: '+openMissed.join('; ')+'. Nothing in the app has that exact name, or it is not a web address.]';
+  var n='\n\n[Could not open: '+openMissed.join('; ')+'. The person has no bot or chat with that exact name, or it is not a web address.]';
   openMissed=[];return n;
 }
 // The names the app can open, sent with each Tandem turn so Mia asks for one that exists.

@@ -132,7 +132,8 @@ function turnNote(hub) {
     '- What a bot looks like: every bot is shown as its Mote, the small character Mia draws for it. The ' +
     'drawings are part of the app itself, picked by the bot\'s name, and tinted with the color in the ' +
     'bot\'s own record (avatarColor). A bot has no picture file, and none is missing. When the person ' +
-    'speaks of a bot\'s image, icon or picture they mean its Mote; its color is the part that can be changed.' +
+    'speaks of a bot\'s image, icon or picture they mean its Mote; its color is the part that can be changed.\n' +
+    openLine(hub) +
     routerNote(hub)
   );
 }
@@ -234,11 +235,30 @@ function matchModel(name, providers) {
   };
 }
 
+// openLine({ rooms, tandem }) -> how Mia puts a bot's chat, another chat or a web page in front of
+// the person. She decides it and writes it; the app never guesses it from the person's words. In
+// Flow Tandem the app opens it, in Flow it comes to the stage.
+function openLine(hub) {
+  const rooms = (hub && Array.isArray(hub.rooms) ? hub.rooms : []).map((name) => clip(name, 60)).filter(Boolean).slice(0, 80);
+  const tandem = !!(hub && hub.tandem);
+  return (
+    (tandem ? '- You move the app for the person. ' : '- You move the stage for the person. ') +
+    'To put the chat of a bot, another chat or a web page in front of them, write a ' +
+    'line on its own: "Open: <the exact name>" or "Open: <the web address>". ' +
+    (tandem ? 'The app opens it and the line is not read out. '
+      : 'It comes to the stage and the line is not shown: the chat of a bot is drawn across the whole stage with ' +
+        'the other bots small, or at its usual width when you write "Open: <the exact name> (small)". One "Open:" line in a reply. ') +
+    'Say in a few words what you opened. Do it when they ask ("open the LinkedIn bot", "show LinkedIn big", ' +
+    '"show me that page") and when what you are talking about is better seen. Open only what you name here; ' +
+    'if it could not be opened you are told on the next turn.' +
+    (rooms.length ? ' What can be opened by name: ' + rooms.join('; ') + '.' : '')
+  );
+}
+
 // tandemNote({ bots, models, reports }) -> what Mia is told on a Flow Tandem turn. The person is
 // in the normal app and she is on a call with them: she answers in spoken words, speaks up when
 // something needs them, and makes nothing to look at unless they ask.
 function tandemNote(hub) {
-  const rooms = (hub && Array.isArray(hub.rooms) ? hub.rooms : []).map((name) => clip(name, 60)).filter(Boolean).slice(0, 80);
   return (
     '[Flow Tandem] The person is working in the normal Mia app and you are on a voice call with them, ' +
     'working beside them. They see their chats, bots, files and browser themselves. Nothing you write is ' +
@@ -249,12 +269,7 @@ function tandemNote(hub) {
     'no headings, no canvas, and no addresses or file paths read out letter by letter.\n' +
     '- Make something to look at only when the person asks for it. Then save it as an HTML file and say ' +
     'in one sentence what it is called and where it is.\n' +
-    '- You move the app for the person. To put the chat of a bot, another chat or a web page in front of them, write a ' +
-    'line on its own: "Open: <the exact name>" or "Open: <the web address>". The app opens it and the line ' +
-    'is not read out. Say in a few words what you opened. Do it when they ask ("open the LinkedIn bot", ' +
-    '"show me that page") and when what you are talking about is better seen. Open only what you name here; ' +
-    'if the app could not open it you are told on the next turn.' +
-    (rooms.length ? ' What the app can open by name: ' + rooms.join('; ') + '.' : '') + '\n' +
+    openLine(hub) + '\n' +
     '- Speak up. When a bot is back, when something is ready, or when something needs the person, say so ' +
     'and ask what to do next: "LinkedIn is done. Do you want us to send it?" When they answer in a word ' +
     'or two ("yes, send it"), act on it without asking again.\n' +

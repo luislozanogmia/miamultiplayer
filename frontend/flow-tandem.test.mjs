@@ -21,7 +21,7 @@ test('Flow Tandem is Flow with the app on screen: one conversation, one voice, o
   // The stage is out of sight and out of the way of the app.
   assert.match(css, /:host\(\.tandem\)\{pointer-events:none;opacity:0;visibility:hidden;/);
   // The turn goes to Mia through Flow's own send, marked as a Tandem turn.
-  assert.match(js, /if\(tandem\)\{ev\.metadata\.aiModeTandem=true;/);
+  assert.match(js, /if\(tandem\)ev\.metadata\.aiModeTandem=true;/);
   // "Let me drive" on the stage is the way into it.
   assert.match(js, /\$\('drive'\)\.onclick=tandemStart;/);
   assert.doesNotMatch(js, /takeWheel|handBack|driving/);
@@ -64,8 +64,9 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
   const make = (rooms, page) => {
     const log = [];
     const host = { rooms: () => rooms, open: (row) => { log.push(row.id); }, openPage: page ? (url) => { log.push(url); return true; } : undefined };
-    const api = new Function('appHost', 'str', 'tandem', 'function appRooms(){return appHost().rooms();}' + src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), true);
-    return { log, api };
+    const stage = { crew: [{ name: 'LinkedIn' }], mateShow: (m, chat, wide) => { log.push('mate:' + m.name + ':' + wide); }, readChat: (r) => { log.push('chat:' + r.id); }, siteOpen: (url) => { log.push('site:' + url); return true; } };
+    const api = (tandem) => new Function('appHost', 'str', 'tandem', 'crew', 'mateShow', 'readChat', 'siteOpen', 'function appRooms(){return appHost().rooms();}' + src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), tandem, stage.crew, stage.mateShow, stage.readChat, stage.siteOpen);
+    return { log, api: api(true), flow: api(false) };
   };
   const rooms = [{ kind: 'bot', id: 'b1', label: 'LinkedIn' }, { kind: 'chat', id: 'c1', label: 'Design review' }];
   let a = make(rooms, true);
@@ -77,13 +78,27 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
   a = make(rooms, false);
   a.api.appOpens(['Quarterly numbers', 'example.com']);
   assert.deepEqual(a.log, []);
-  assert.match(a.api.openNote(), /\[The app could not open: Quarterly numbers; example\.com\./);
+  assert.match(a.api.openNote(), /\[Could not open: Quarterly numbers; example\.com\./);
   assert.equal(a.api.openNote(), '');
+  // In Flow the same lines set the stage: a bot Mia works with is drawn across it or small, another
+  // bot's chat and a chat with people are pulled, a page opens in the stage's browser. One per reply.
+  const flowRooms = rooms.concat([{ kind: 'bot', id: 'b2', label: 'Research', conversationId: 'conv2' }, { kind: 'bot', id: 'b3', label: 'New bot', conversationId: '' }]);
+  for (const [said, did] of [['LinkedIn', 'mate:LinkedIn:true'], ['linkedin (small)', 'mate:LinkedIn:false'], ['Research', 'chat:conv2'],
+    ['Design review', 'chat:c1'], ['example.com/pricing', 'site:https://example.com/pricing']]) {
+    a = make(flowRooms, true);
+    a.flow.appOpens([said, 'Design review']);
+    assert.deepEqual(a.log, [did], said);
+    assert.equal(a.flow.openNote(), '');
+  }
+  a = make(flowRooms, true);
+  a.flow.appOpens(['New bot']);
+  assert.deepEqual(a.log, []);
+  assert.match(a.flow.openNote(), /\[Could not open: New bot\./);
   // Nothing the person says is matched on the page: every word goes to Mia.
   assert.doesNotMatch(js, /appAsk/);
-  assert.match(js, /if\(!shown&&!tandem&&stageAsk\(t\)\)return;/);
+  assert.doesNotMatch(js, /stageAsk/);
   assert.match(js, /if\(a\.aiMode==='open'\)\{appOpens\(a\.targets\);return;\}/);
-  assert.match(js, /ev\.metadata\.aiModeTandem=true;ev\.metadata\.aiModeRooms=roomNames\(\);/);
+  assert.match(js, /ev\.metadata\.aiModeRooms=roomNames\(\);if\(tandem\)ev\.metadata\.aiModeTandem=true;/);
   // The app opens it the way its own search does, and a page in a new tab of its browser.
   const open = app.slice(app.indexOf('function aiModeOpenRoom(row){'), app.indexOf('function aiModePeopleChats(){'));
   assert.match(open, /closeBrowserSidebarDrawer\(\);\s*closeLocalBrowser\(\);\s*closeAutomationsPage\(\);/);

@@ -380,6 +380,17 @@ test('in Flow Tandem Mia opens things in the app with "Open:" lines, and is told
   assert.deepEqual(parseOpens('No line of that kind.'), []);
   const note = tandemNote({ tandem: true, rooms: ['LinkedIn', 'Design review'] });
   assert.match(note, /"Open: <the exact name>" or "Open: <the web address>"/);
-  assert.match(note, /What the app can open by name: LinkedIn; Design review\./);
-  assert.doesNotMatch(tandemNote({ tandem: true }), /What the app can open by name/);
+  assert.match(note, /You move the app for the person\./);
+  assert.match(note, /What can be opened by name: LinkedIn; Design review\./);
+  assert.doesNotMatch(tandemNote({ tandem: true }), /What can be opened by name/);
+});
+
+test('in Flow Mia puts a chat or a page on the stage with the same "Open:" line, and decides its size', () => {
+  const note = turnNote({ rooms: ['LinkedIn'] });
+  assert.match(note, /^\[Flow mode\]/);
+  assert.match(note, /You move the stage for the person\./);
+  assert.match(note, /"Open: <the exact name> \(small\)"/);
+  assert.match(note, /What can be opened by name: LinkedIn\./);
+  // One sentence of the note is written once for both ways of working.
+  assert.equal(turnNote({ rooms: ['LinkedIn'] }).match(/"Open: <the exact name>" or "Open: <the web address>"/g).length, 1);
 });
