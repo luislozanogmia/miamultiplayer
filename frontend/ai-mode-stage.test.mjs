@@ -169,19 +169,21 @@ test('Mia never speaks in the browser\u2019s own voice; with none connected she 
   assert.match(draw, /<input id="voiceKey" type="password" autocomplete="off"/);
   // Skipping is remembered; a saved key that stopped working is said once more.
   assert.match(js, /localStorage\.setItem\('miaAiModeVoiceSkip',askWhy\|\|'none'\)/);
-  assert.match(js, /else if\(!ask&&voiceSkipped\(\)!==\(askWhy\|\|'none'\)\)ask='offer';/);
+  assert.match(js, /else if\(!ask&&voiceSkipped\(\)!==\(askWhy\|\|'none'\)\)ask=window\.MiaRemotePhone\?'phone':'offer';/);
+  assert.match(js, /\$\('voiceSet'\)\.hidden=!!voices\|\|!!window\.MiaRemotePhone;/);
+  assert.match(draw, /if\(window\.MiaRemotePhone && \(ask==='offer'\|\|ask==='setup'\|\|ask==='saving'\)\)ask='phone';/);
 });
 
 test('the key goes to Connected apps only when it is the key itself, and a key ElevenLabs refuses is said', async () => {
   const src = js.slice(js.indexOf('function voiceSave('), js.indexOf('// Mia\'s voice has a switch of its own'));
-  const make = (answers) => {
+  const make = (answers, phone = false) => {
     const calls = [], el = { value: '' }, st = { ask: 'setup', askNote: '', spoke: '' };
-    const run = new Function('st', 'el', 'call', 'function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
-      'var ask=st.ask,askNote="",askWhy="",voices=0,open=true,host=null,localStorage={removeItem(){}};' +
+    const run = new Function('st', 'el', 'call', 'phone', 'function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+      'var window={MiaRemotePhone:phone},ask=st.ask,askNote="",askWhy="",voices=0,open=true,host=null,localStorage={removeItem(){}};' +
       'function $(id){return id==="voiceKey"?el:{};}function voiceAskDraw(){st.ask=ask;st.askNote=askNote;st.voices=voices;}function speak(t){st.spoke=t;}function setTimeout(){}' +
       src + '\nreturn voiceSave;');
     const call = (path, body) => { calls.push([path, body ? Object.keys(body) : null]); return Promise.resolve(answers.shift()); };
-    return { calls, el, st, save: run(st, el, call) };
+    return { calls, el, st, save: run(st, el, call, phone) };
   };
   const id = make([]);
   id.el.value = 'a'.repeat(64); id.save();
@@ -198,6 +200,9 @@ test('the key goes to Connected apps only when it is the key itself, and a key E
   await new Promise((r) => setImmediate(r));
   assert.equal(good.st.ask, 'done');
   assert.equal(good.st.spoke, 'Welcome to Flow.');
+  const pairedPhone = make([], true);
+  pairedPhone.el.value = 'sk_example'; pairedPhone.save();
+  assert.deepEqual(pairedPhone.calls, [], 'a paired phone never sends an ElevenLabs key');
 });
 
 test('the welcome does not fade in again when the bots at work are drawn beside it', () => {
