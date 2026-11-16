@@ -28,6 +28,11 @@ const MAX_LOCAL_APPS = 200;
 const MAX_DEPTH = 4;
 const SKIP_DIRS = new Set(['node_modules', 'hermes', '__pycache__', 'venv', '.venv']);
 const INSTALL_MARKER = '.mia-install.json';
+// In a copy made to edit a company app: which app it is a copy of. Hidden, so
+// it never goes into a bundle.
+const SOURCE_MARKER = '.mia-app-source.json';
+const COPIES_FOLDER = 'apps';
+const MAX_COPIES = 50;
 const ID = /^[a-f0-9]{32}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^[1-9][0-9]{0,8}$/;
@@ -247,6 +252,52 @@ function listInstalledFiles(appsDir, identity) {
   return { files, totalBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0) };
 }
 
+// The company app a local folder was copied from, when it was.
+function readSource(folder) {
+  let source;
+  try { source = JSON.parse(fs.readFileSync(path.join(folder, SOURCE_MARKER), 'utf8')); } catch (_) { return null; }
+  if (!source || !ID.test(String(source.teamId)) || !ID.test(String(source.appId))) return null;
+  return { teamId: source.teamId, appId: source.appId };
+}
+
+// Puts an installed version's files in a new folder of the Mia folder, so the
+// person or a bot can change them and send the change back as a suggestion.
+// An existing folder is never written into: the copy gets a name of its own.
+function copyInstalledApp(appsDir, identity, sha256, workspaceDir) {
+  if (!isInstalled(appsDir, identity, sha256)) throw appError(404, 'not_found', "That app isn't installed yet.");
+  const root = installLocation(appsDir, identity);
+  const { files } = listInstalledFiles(appsDir, identity);
+  let base;
+  try { base = fs.realpathSync(workspaceDir); } catch (_) { throw appError(404, 'not_found', 'The Mia folder could not be found.'); }
+  const parent = path.join(base, COPIES_FOLDER);
+  fs.mkdirSync(parent, { recursive: true });
+  if (fs.realpathSync(parent) !== parent) throw appError(400, 'invalid_app', 'The apps folder in your Mia folder is a link, so nothing was copied.');
+  const name = bundleFilename(readMarker(root).name).slice(0, -'.miaapp'.length).replace(/[. ]+$/, '');
+  const wanted = !name || WINDOWS_RESERVED.test(name) ? 'app' : name;
+  let target = '';
+  for (let copy = 1; copy <= MAX_COPIES && !target; copy++) {
+    const candidate = path.join(parent, copy === 1 ? wanted : `${wanted} ${copy}`);
+    try { fs.mkdirSync(candidate); target = candidate; }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  }
+  if (!target) throw appError(409, 'too_many_copies', `You already have ${MAX_COPIES} copies of this app. Remove some from the apps folder, then try again.`);
+  try {
+    for (const file of files) {
+      if (!safeBundlePath(file.path)) throw appError(400, 'invalid_bundle', 'This app file is damaged, so it was not copied.');
+      const parts = file.path.split('/');
+      const destination = path.join(target, ...parts);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(path.join(root, ...parts), destination, fs.constants.COPYFILE_EXCL);
+    }
+    fs.writeFileSync(path.join(target, SOURCE_MARKER), JSON.stringify({ teamId: String(identity.teamId), appId: String(identity.appId), version: String(identity.version) }), { flag: 'wx' });
+  } catch (error) {
+    fs.rmSync(target, { recursive: true, force: true });
+    throw error;
+  }
+  const folder = `${COPIES_FOLDER}/${path.basename(target)}`;
+  return { id: `folder:${folder}`, name: path.basename(target), folder };
+}
+
 // path.relative's answer with forward slashes, on any system.
 function toSlashes(relative, separator = path.sep) {
   return relative.split(separator).join('/');
@@ -283,6 +334,7 @@ function listLocalApps(root) {
         name: safeAppName(entry.name) || entry.name,
         folder: relative,
         from: parts[0] === 'bots' && parts.length > 2 ? parts[1] : '',
+        source: readSource(full),
         modifiedAt: Math.floor(stat.mtimeMs),
       });
     }
@@ -373,6 +425,11 @@ function registerAppRoutes(app, { express, requireAuth, requireInteractiveAuth, 
     try { res.json(listInstalledFiles(folderFor(req.query), identity(req.query))); }
     catch (error) { send(res, error); }
   });
+  // A copy of an installed company app, in the Mia folder, to change and suggest back.
+  app.post('/api/apps/installed/copy', requireInteractiveAuth, (req, res) => {
+    try { res.status(201).json({ copy: copyInstalledApp(appsDir(), identity(req.query), String(req.query.sha256 || ''), workspaceDir()) }); }
+    catch (error) { send(res, error); }
+  });
   app.post('/api/apps/install', requireAuth, express.raw({ type: 'application/octet-stream', limit: MAX_BUNDLE_BYTES }), (req, res) => {
     try { res.status(201).json({ installed: installBundle(folderFor(req.query), identity(req.query), { sha256: String(req.query.sha256 || ''), bytes: req.body }) }); }
     catch (error) { send(res, error); }
@@ -381,6 +438,6 @@ function registerAppRoutes(app, { express, requireAuth, requireInteractiveAuth, 
 
 module.exports = {
   BUNDLE_FORMAT, ENTRY, INSTALL_MARKER, MAX_BUNDLE_BYTES, MAX_BYTES, MAX_FILES,
-  buildBundle, bundleFilename, findPathConflict, installBundle, isInstalled, listInstalledFiles, listLocal, listLocalApps,
+  buildBundle, bundleFilename, copyInstalledApp, findPathConflict, installBundle, isInstalled, listInstalledFiles, listLocal, listLocalApps,
   parseBundle, registerAppRoutes, resolveLocalApp, safeAppName, safeBundlePath, sha256Hex, toSlashes,
 };

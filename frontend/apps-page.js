@@ -28,6 +28,8 @@
     version_rejected: 'This version was already turned down. Change the app, then publish again.',
     version_superseded: 'This version is no longer available. Check the list and try again.',
     version_already_approved: 'This version is already live.',
+    version_pending: 'Someone else’s change to this app is waiting for approval. Try again once it is decided.',
+    edit_pending_limit: 'You have 20 suggested edits waiting for approval. Try again once some are decided.',
     app_pending_limit: 'You have 20 apps that aren’t live yet, including any that were turned down. Remove any you no longer need, then try again.',
   };
   function errorMessage(error, fallback){
@@ -164,6 +166,35 @@
       return app.name.trim().toLowerCase() === wanted && !!me && app.publisher.id === me;
     })[0] || null;
   }
+
+  // Where publishing a local item goes: a new version of a company app, or a new
+  // app when there is none. A folder copied from a company app goes back to that
+  // app, as a suggested edit when someone else published it; anything else
+  // updates the app this person published under the same name.
+  function publishTarget(catalog, item, teamId, me){
+    var source = item && item.source;
+    if(source && teamId && source.teamId === teamId){
+      var copied = catalog.filter(function(app){ return app.id === source.appId && !!app.live; })[0];
+      if(copied) return {app: copied, suggest: !me || copied.publisher.id !== me};
+    }
+    var mine = publishedAs(catalog, item && item.name, me);
+    return mine ? {app: mine, suggest: false} : null;
+  }
+  // A suggested edit is a version sent by someone other than the app's publisher.
+  function suggestedBy(app){
+    var pending = app && app.pending;
+    if(!pending || typeof pending.proposedBy !== 'string' || !pending.proposedBy || pending.proposedBy === app.publisher.id) return '';
+    return typeof pending.proposedByName === 'string' && pending.proposedByName.trim() ? pending.proposedByName.trim().slice(0, MAX_NAME_LENGTH) : 'a colleague';
+  }
+  function publishConfirmText(files, target){
+    if(target && target.suggest) return 'Send these ' + files.length + ' files as a suggested edit to "' + target.app.name + '"? An admin approves it before anyone gets it.\n\n' + files.join('\n');
+    return 'Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n');
+  }
+  function publishedNotice(name, target, isAdmin){
+    if(target && target.suggest) return isAdmin ? 'Your edit to "' + target.app.name + '" is live.' : 'Your edit to "' + target.app.name + '" is waiting for an admin to approve it.';
+    return isAdmin ? '"' + name + '" is published.' : '"' + name + '" is waiting for an admin to approve it.';
+  }
+  function copiedNotice(name, folder){ return 'A copy of "' + name + '" is in your Mia folder, in ' + folder + '. Change it, then choose Suggest an edit.'; }
 
   function matches(values, query){
     var q = String(query || '').trim().toLowerCase();
@@ -321,35 +352,41 @@
     return rows.length ? '<div class="artifacts-section-title">' + esc(title) + '</div><div class="artifacts-list" role="list">' + rows.join('') + '</div>' : '';
   }
   var STEP_TEXT = {building: 'Checking app files…', reviewing: 'Waiting for your review…', uploading: 'Uploading…', publishing: 'Publishing…'};
-  function publishCell(esc, item, state, itemId, existing){
+  function publishCell(esc, item, state, itemId, target){
     var job = state.publishing && state.publishing[itemId];
     if(job && job.step) return '<span class="apps-note" role="status">' + esc(STEP_TEXT[job.step] || 'Working…') + '</span>';
-    var label = existing ? 'Publish update' : 'Publish to company';
+    var label = target ? (target.suggest ? 'Suggest an edit' : 'Publish update') : 'Publish to company';
     return (job && job.error ? '<span class="apps-note apps-note-bad" role="alert">' + esc(job.error) + '</span>' : '')
       + button(esc, label, 'data-app-publish="' + esc(itemId) + '"');
   }
   function localRows(esc, state){
     var team = !!state.teamId;
     var folders = state.local.filter(function(item){ return matches([item.name, item.folder, item.from], state.query); }).map(function(item){
-      var existing = team ? publishedAs(state.catalog, item.name, state.me) : null;
-      var meta = esc(item.folder) + (item.from ? ' · ' + esc(item.from) : '');
-      return row(esc, 'App', item.name, meta, button(esc, 'Open', 'data-app-open-local="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''));
+      var target = team ? publishTarget(state.catalog, item, state.teamId, state.me) : null;
+      var meta = esc(item.folder) + (item.from ? ' · ' + esc(item.from) : '') + (target && target.suggest ? ' · your copy of ' + esc(target.app.name) : '');
+      return row(esc, 'App', item.name, meta, button(esc, 'Open', 'data-app-open-local="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, target) : ''));
     });
     var links = state.links.filter(function(item){ return matches([item.name, item.url], state.query); }).map(function(item){
-      var existing = team ? publishedAs(state.catalog, item.name, state.me) : null;
+      var existing = team ? publishTarget(state.catalog, item, state.teamId, state.me) : null;
       var running = item.running === true ? ' · <span class="artifacts-dot on">● running</span>' : item.running === false ? ' · <span class="artifacts-dot">○ off</span>' : '';
       return row(esc, 'Link', item.name, esc(address(item.url)) + running, (item.running === true && item.local ? button(esc, 'Stop', 'data-app-stop-link="' + esc(item.id) + '"') : '') + button(esc, 'Open', 'data-app-open-link="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''), item.url);
     });
     return folders.concat(links);
   }
   function catalogRow(esc, app, state){
-    var status = appState(app, state.scans), busy = state.installing && state.installing[app.id];
+    var status = appState(app, state.scans), busy = state.installing && state.installing[app.id], copying = state.copying && state.copying[app.id];
     var who = app.publisher && app.publisher.name ? esc(app.publisher.name) : '';
-    var meta = [who, app.description ? esc(app.description) : '', '<span class="apps-state apps-state-' + esc(status) + '">' + esc(stateText(status)) + '</span>'].filter(Boolean).join(' · ');
+    var edit = isWaitingForReview(app) && suggestedBy(app);
+    var meta = [who, app.description ? esc(app.description) : '', '<span class="apps-state apps-state-' + esc(status) + '">' + esc(stateText(status)) + '</span>',
+      edit ? 'edit suggested by ' + esc(edit) : ''].filter(Boolean).join(' · ');
     var actions = '';
     if(busy && busy.error) actions += '<span class="apps-note apps-note-bad" role="alert">' + esc(busy.error) + '</span>';
     if(busy && !busy.error) actions += '<span class="apps-note" role="status">' + esc(busy.percent != null ? 'Getting it… ' + busy.percent + '%' : 'Getting it…') + '</span>';
     else if(app.live) actions += button(esc, 'Open', 'data-app-open-team="' + esc(app.id) + '"', true);
+    // A copy in the Mia folder is where a change to this app is made, by anyone.
+    if(copying && copying.error) actions += '<span class="apps-note apps-note-bad" role="alert">' + esc(copying.error) + '</span>';
+    if(copying && !copying.error) actions += '<span class="apps-note" role="status">Copying…</span>';
+    else if(app.live && app.live.kind === 'bundle' && !(busy && !busy.error)) actions += button(esc, 'Edit a copy', 'data-app-copy="' + esc(app.id) + '"');
     if(state.isAdmin && app.pending && app.pending.state !== 'rejected'){
       var ready = status === 'pending' || status === 'live-pending';
       if(ready) actions += button(esc, 'Approve', 'data-app-approve="' + esc(app.id) + '"') + button(esc, 'Reject', 'data-app-reject="' + esc(app.id) + '"');
@@ -365,7 +402,8 @@
       return html + '<div class="apps-review-head">Version ' + Number(pending.version) + ' is this address:</div><div class="apps-review-address">' + esc(pending.url) + '</div>'
         + '<div class="apps-review-actions">' + button(esc, 'Open address', 'data-app-preview="' + esc(app.id) + '"') + '</div></div>';
     }
-    html += '<div class="apps-review-head">Version ' + Number(pending.version) + ' · ' + esc(formatSize(pending.sizeBytes)) + '</div>';
+    var edit = suggestedBy(app);
+    html += '<div class="apps-review-head">Version ' + Number(pending.version) + ' · ' + esc(formatSize(pending.sizeBytes)) + (edit ? ' · an edit suggested by ' + esc(edit) : '') + '</div>';
     if(status === 'scanning') return html + '<div class="apps-note" role="status">You can preview it once the virus check is done.</div></div>';
     if(status === 'blocked') return html + '<div class="apps-note apps-note-bad" role="status">The virus check refused this version, so it can’t be previewed.</div></div>';
     var previews = state.previews || {}, preview = previews[app.id] && previews[app.id].version === pending.version ? previews[app.id] : null;
@@ -412,6 +450,6 @@
   return {APP_SCAN_NOTE: APP_SCAN_NOTE, approveMessage: approveMessage, blockedLinkNote: blockedLinkNote, isWaitingForReview: isWaitingForReview, reviewCount: reviewCount, reviewFromEvent: reviewFromEvent, reviewNotice: reviewNotice, reviewTag: reviewTag, reviewTagApp: reviewTagApp,
     BUILD_PROMPT: BUILD_PROMPT, appState: appState, bodyHtml: bodyHtml, createUploader: createUploader, errorMessage: errorMessage, filesToCheck: filesToCheck, installVersion: installVersion,
     isPublishableAddress: isPublishableAddress, linkPublishProblem: linkPublishProblem, matches: matches, newAppId: newAppId, openErrorMessage: openErrorMessage, nextTabAfterClose: nextTabAfterClose,
-    normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, runHtml: runHtml, stateText: stateText,
+    normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, publishTarget: publishTarget, publishConfirmText: publishConfirmText, publishedNotice: publishedNotice, copiedNotice: copiedNotice, suggestedBy: suggestedBy, runHtml: runHtml, stateText: stateText,
     stripTabs: stripTabs, submitVersion: submitVersion, waitForScan: waitForScan};
 });

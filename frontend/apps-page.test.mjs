@@ -381,3 +381,48 @@ test('a rejected version whose file is gone asks for nothing and offers no revie
   assert.equal(page.reviewCount({ isAdmin: true, catalog: [app], scans: {} }), 0);
   assert.equal(page.appState(app, {}), 'rejected');
 });
+
+test('a copy of a company app goes back to that app: an update for its publisher, a suggested edit for anyone else', () => {
+  const live = bundle({ state: 'approved' });
+  const theirs = catalogApp({ name: 'Report', publisher: { id: 'kim', name: 'Kim' }, live });
+  const copy = { id: 'folder:apps/Report', name: 'Report', folder: 'apps/Report', source: { teamId: TEAM, appId: APP } };
+  assert.deepEqual(page.publishTarget([theirs], copy, TEAM, 'me'), { app: theirs, suggest: true });
+  assert.deepEqual(page.publishTarget([theirs], copy, TEAM, 'kim'), { app: theirs, suggest: false });
+  // Another company's app, an app that is gone or not live, and a plain folder of the same name are not suggestions.
+  assert.equal(page.publishTarget([theirs], copy, 'c'.repeat(32), 'me'), null);
+  assert.equal(page.publishTarget([catalogApp({ publisher: { id: 'kim' } })], copy, TEAM, 'me'), null);
+  assert.equal(page.publishTarget([theirs], { id: 'folder:apps/Report', name: 'Report' }, TEAM, 'me'), null);
+  const mine = catalogApp({ name: 'Report', live });
+  assert.deepEqual(page.publishTarget([mine], { id: 'folder:x', name: 'report' }, TEAM, 'me'), { app: mine, suggest: false });
+
+  const html = page.bodyHtml(state({ teamId: TEAM, me: 'me', local: [copy], catalog: [theirs] }), esc);
+  assert.match(html, /your copy of Report[\s\S]*>Suggest an edit</);
+  assert.doesNotMatch(html, /Publish to company|Publish update/);
+  assert.match(html, /data-app-copy="b{32}"[^>]*>Edit a copy</);
+  assert.match(page.publishConfirmText(['index.html'], { app: theirs, suggest: true }), /suggested edit to "Report"\? An admin approves it/);
+  assert.match(page.publishConfirmText(['index.html'], null), /^Publish these 1 files to the company\?/);
+  assert.match(page.publishedNotice('Report', { app: theirs, suggest: true }, false), /Your edit to "Report" is waiting for an admin/);
+  assert.match(page.publishedNotice('Report', null, false), /"Report" is waiting for an admin/);
+  assert.match(page.errorMessage({ code: 'version_pending' }), /Someone else/);
+});
+
+test('a suggested edit is sent as a new version of the app it was copied from', async () => {
+  const calls = [];
+  await page.submitVersion({ call: async (...args) => { calls.push(args); return {}; }, teamId: TEAM, existing: catalogApp({ publisher: { id: 'kim' } }), newId: () => assert.fail('no new app'),
+    name: 'Report', version: { kind: 'bundle', fileId: FILE } });
+  assert.deepEqual(calls, [['POST', `/v1/teams/${TEAM}/apps/${APP}/versions`, { kind: 'bundle', fileId: FILE }]]);
+});
+
+test('a reviewer is told who suggested an edit, and a link app has no copy to edit', () => {
+  const live = bundle({ state: 'approved' });
+  const suggested = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, live, pending: bundle({ version: 2, state: 'pending', proposedBy: 'lee', proposedByName: '<b>Lee</b>' }) });
+  assert.equal(page.suggestedBy(suggested), '<b>Lee</b>');
+  assert.equal(page.suggestedBy(catalogApp({ publisher: { id: 'kim' }, pending: bundle({ proposedBy: 'kim', proposedByName: 'Kim' }) })), '');
+  assert.equal(page.suggestedBy(catalogApp({ publisher: { id: 'kim' }, pending: bundle({ proposedBy: 'lee' }) })), 'a colleague');
+  const html = page.bodyHtml(state({ teamId: TEAM, me: 'admin', isAdmin: true, catalog: [suggested], scans: { [suggested.pending.fileId]: 'clean' } }), esc);
+  assert.match(html, /an edit suggested by &lt;b&gt;Lee&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>Lee/);
+  const link = catalogApp({ live: { version: 1, kind: 'link', url: 'https://example.com/' } });
+  assert.doesNotMatch(page.bodyHtml(state({ teamId: TEAM, catalog: [link] }), esc), /data-app-copy/);
+  assert.match(page.bodyHtml(state({ teamId: TEAM, catalog: [catalogApp({ live })], copying: { [APP]: {} } }), esc), /Copying…/);
+});

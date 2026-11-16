@@ -9659,7 +9659,7 @@
   // its own tab beside the page's.
   var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
   var appsPage = {open:false, tabClosed:!!closedPageTabs.apps, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
-    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, previews:{}, teamId:'', me:'', isAdmin:false};
+    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, copying:{}, previews:{}, teamId:'', me:'', isAdmin:false};
   var appsUploaders = {};
   var appsScanTimer = null;
 
@@ -10035,7 +10035,7 @@
     var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
     var item = folder || link;
     if(!item || appsPage.publishing[id] && appsPage.publishing[id].step) return;
-    var existing = window.MiaAppsPage.publishedAs(appsPage.catalog, item.name, appsPage.me);
+    var target = window.MiaAppsPage.publishTarget(appsPage.catalog, item, teamId, appsPage.me), existing = target && target.app;
     var setStep = function(step){ appsPage.publishing[id] = {step: step}; renderAppsPage(); };
     var publishing;
     if(link){
@@ -10052,7 +10052,7 @@
           });
         },
         confirmBundle: function(files){
-          return appConfirm('Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+          return appConfirm(window.MiaAppsPage.publishConfirmText(files, target), target && target.suggest ? 'Send the edit' : 'Publish files', {fileList: true});
         },
         buildBundle: function(appId, sha256){
           return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
@@ -10065,10 +10065,34 @@
     publishing.then(function(result){
       delete appsPage.publishing[id];
       if(result && result.cancelled) return renderAppsPage();
-      showBenchToast(appsPage.isAdmin ? '"' + item.name + '" is published.' : '"' + item.name + '" is waiting for an admin to approve it.');
+      showBenchToast(window.MiaAppsPage.publishedNotice(item.name, target, appsPage.isAdmin));
       return loadAppsCatalog(teamId);
     }).then(renderAppsPage).catch(function(error){
       appsPage.publishing[id] = {error: window.MiaAppsPage.errorMessage(error, 'That app could not be published.')};
+      renderAppsPage();
+    });
+  }
+  // Puts the live version's files in the Mia folder, where the person or a bot
+  // changes them. Publishing that folder sends the change back to this app.
+  function copyTeamApp(id){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!app || !app.live || app.live.kind !== 'bundle' || appsPage.copying[id] && !appsPage.copying[id].error) return;
+    if(!window.MiaTeamFiles){ showBenchToast('Apps run in the Mia desktop app.'); return; }
+    var version = app.live;
+    appsPage.copying[id] = {};
+    renderAppsPage();
+    installTeamVersion(teamId, id, version, false, function(){}).then(function(identity){
+      return api('/api/apps/installed/copy?' + appsIdentityQuery(identity, version.sha256), {method: 'POST'});
+    }).then(function(res){
+      if(res.status !== 201 || !res.data.copy) throw new Error(res.data && res.data.message || 'That app could not be copied.');
+      delete appsPage.copying[id];
+      showBenchToast(window.MiaAppsPage.copiedNotice(app.name, res.data.copy.folder));
+      return api('/api/apps/local');
+    }).then(function(res){
+      if(res.status === 200 && Array.isArray(res.data.apps)) appsPage.local = res.data.apps;
+      renderAppsPage();
+    }).catch(function(error){
+      appsPage.copying[id] = {error: window.MiaAppsPage.openErrorMessage(error, app.publisher && app.publisher.name)};
       renderAppsPage();
     });
   }
@@ -10118,6 +10142,7 @@
       'data-app-open-local': openLocalApp,
       'data-app-open-team': openTeamApp,
       'data-app-publish': publishLocalApp,
+      'data-app-copy': copyTeamApp,
       'data-app-approve': function(id){ decideTeamApp(id, 'approve'); },
       'data-app-reject': function(id){ decideTeamApp(id, 'reject'); },
       'data-app-archive': archiveTeamApp,
