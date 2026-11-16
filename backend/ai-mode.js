@@ -518,8 +518,27 @@ async function fetchImage(value, { request = fetch } = {}) {
   if (!response.ok) return null;
   const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   if (!IMAGE_TYPES.has(type)) return null;
-  const body = Buffer.from(await response.arrayBuffer());
-  return body.length && body.length <= MAX_IMAGE_BYTES ? { type, body } : null;
+  const size = Number(response.headers.get('content-length'));
+  if (size > MAX_IMAGE_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!response.body) return null;
+  const reader = response.body.getReader(), chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { value: chunk, done } = await reader.read();
+      if (done) break;
+      length += chunk.byteLength;
+      if (length > MAX_IMAGE_BYTES) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+  } finally { reader.releaseLock(); }
+  return length ? { type, body: Buffer.concat(chunks, length) } : null;
 }
 
 // Mia's voice. With a key saved for ElevenLabs in Connected apps her lines are

@@ -120,7 +120,7 @@ test('the turn note tells Mia what the marks drawn on the stage mean', () => {
 });
 
 test('a picture is passed on only from the allowed host, as a picture, under the size limit', async () => {
-  const reply = (type, bytes) => async () => ({ ok: true, headers: { get: () => type }, arrayBuffer: async () => new ArrayBuffer(bytes) });
+  const reply = (type, bytes) => async () => new Response(new Uint8Array(bytes), { headers: { 'Content-Type': type } });
   const picture = await fetchImage(THUMB, { request: reply('image/jpeg; charset=binary', 10) });
   assert.equal(picture.type, 'image/jpeg');
   assert.equal(picture.body.length, 10);
@@ -130,6 +130,19 @@ test('a picture is passed on only from the allowed host, as a picture, under the
   let called = false;
   assert.equal(await fetchImage('https://example.com/a.jpg', { request: async () => { called = true; } }), null);
   assert.equal(called, false);
+});
+
+test('an oversized picture stops streaming before the full response reaches memory', async () => {
+  let reads = 0, cancelled = false;
+  const response = { ok: true, headers: new Headers({ 'Content-Type': 'image/jpeg' }), body: new ReadableStream({
+    pull(controller) { reads++; controller.enqueue(new Uint8Array(128 * 1024)); },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 }) };
+  assert.equal(await fetchImage(THUMB, { request: async () => response }), null);
+  assert.ok(reads <= 5, `read ${reads} chunks`);
+  assert.equal(cancelled, true);
+  const large = new Response(new Uint8Array(1), { headers: { 'Content-Type': 'image/jpeg', 'Content-Length': '700000' } });
+  assert.equal(await fetchImage(THUMB, { request: async () => large }), null);
 });
 
 test('speech is off without a key, and a line is read in the voice picked', async () => {

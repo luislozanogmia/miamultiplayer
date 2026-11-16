@@ -1924,13 +1924,14 @@ function voiceCheck(){
     $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices;
     // A saved key that stopped working is said once more even after a skip.
     if(voices){if(ask!=='done')ask='';}
-    else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask='offer';
+    else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask=window.MiaRemotePhone?'phone':'offer';
     voiceAskDraw();
   },function(){});
 }
 function voiceAskDraw(){
   var box=$('voiceAsk'),h='';
-  if(ask==='offer')h=askWhy
+  if(ask==='phone')h='<b>Give Mia a voice</b><p>Connect ElevenLabs in Mia on your computer, then reopen Flow here.</p><div class="va-row"><button class="btn ghost" data-va="skip">Got it</button></div>';
+  else if(ask==='offer')h=askWhy
     ?'<b>Mia\'s voice is not working</b><p>'+(askWhy==='key'?'ElevenLabs did not accept the key that is saved.':'ElevenLabs is not answering with the key that is saved.')+' Until it does, Mia stays silent.</p><div class="va-row"><button class="btn primary" data-va="setup">Fix it</button><button class="btn ghost" data-va="skip">Skip</button></div>'
     :'<b>Give Mia a voice</b><p>For a better experience, connect your ElevenLabs account and Mia will talk to you.</p><div class="va-row"><button class="btn primary" data-va="setup">Set up</button><button class="btn ghost" data-va="skip">Skip</button></div>';
   else if(ask==='setup'||ask==='saving')h='<b>Connect ElevenLabs</b>'+
