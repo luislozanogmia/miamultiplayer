@@ -31,7 +31,7 @@ var MARKUP=
       '<button class="btn" id="drive" hidden>Let me drive</button>'+
       '<button class="btn ghost" id="web" hidden>Browser</button>'+
       '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
-      '<button class="btn ghost" id="modelBtn" aria-expanded="false" hidden>Model</button>'+
+      '<button class="btn ghost" id="modelBtn" aria-expanded="false">Model</button>'+
       '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
       '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
       '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
@@ -77,7 +77,7 @@ var MARKUP=
         '<button id="siteZoom" title="Page size: 100%" aria-label="Page size"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5M8.5 11h5M11 8.5v5"/></svg></button>'+
         '<button id="siteClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>'+
       '</div>'+
-      '<div class="site-page" id="sitePage"></div>'+
+      '<div class="site-body"><div class="site-tabs" id="siteTabs" role="tablist" aria-label="This card\'s pages" hidden></div><div class="site-page" id="sitePage"></div></div>'+
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
       '<button type="button" class="mode" id="find"><svg class="m-type" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="3.75" width="13" height="8.5" rx="2"/><path d="M4.5 6.8h.01M7 6.8h.01M9.5 6.8h.01M11.5 6.8h.01M5.5 9.6h5"/></svg><svg class="m-find" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></button>'+
@@ -634,13 +634,20 @@ function stageHtml(seen){
   try{
     var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
     var main=R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
-    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':R.own?'Mia, on her own':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p></div>':'')+
+    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':R.own?'Mia, on her own':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p>'+(past.length+(now&&now.said?1:0)>1?'<button class="said-log" data-log="1" aria-label="The conversation so far" title="The conversation so far"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6zM6 3v18M3.5 7.5h3M3.5 12h3M3.5 16.5h3M10 8h5M10 12h5"/></svg></button>':'')+'</div>':'')+
       '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
   }finally{R=now;}
 }
 // Stepping through earlier views: left is the past, right comes back up to now. Nothing is sent to Mia.
-function stops(){var a=[];past.forEach(function(r,i){if(r.body)a.push(i);});return a;}
+// A view is one page however many turns were spent on it: an answer in words joins the page of the view
+// it is about, and the page shows the newest of those turns above the view.
+function lastOf(i){
+  var v=viewOf(past[i]),j=i,k;
+  for(k=i+1;k<past.length;k++)if(past[k].body&&viewOf(past[k])===v)j=k;
+  return R&&R.sent&&!R.running&&R.body&&viewOf(R)===v?past.length:j;
+}
+function stops(){var a=[];past.forEach(function(r,i){if(r.body&&lastOf(i)===i)a.push(i);});return a;}
 function step(d){
   var a=stops(),at=peek||view<0?a.length:a.indexOf(view);
   if(at<0)at=a.length;
@@ -673,7 +680,7 @@ function logDraw(){
   if(!drawerOn){box._h='';return;}
   var seen=seeing();
   var h='<header><b>You and Mia</b><button class="new" data-new="1">New chat</button><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
-    var to=r===R?-1:r.body?i:null;
+    var to=r===R?-1:r.body?lastOf(i):null;if(to>=past.length)to=-1;
     return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>'+(r.own?'Mia, on her own':'You')+'</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
   }).join('')+'</div>';
   if(box._h===h)return;
@@ -1104,7 +1111,7 @@ function direct(t,shown){
   else{
     crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});
     // The view on the stage stays there while Mia works on the next thing.
-    var was=R||past[past.length-1],keep=viewOf(was);
+    var was=away||R||past[past.length-1],keep=viewOf(was);
     // A page the person opened or chose to keep open is theirs: it stays up through the next run.
     var mine=!!(R&&R.picked&&site.open);
     shelve(R);if(site.card){site.card='';site.open=false;site.deckRun=null;}R=newRun(shown||t);R.keep=keep;
@@ -1112,8 +1119,9 @@ function direct(t,shown){
     if(was&&was.picks&&!was.decided&&showsView(keep)){R.picks=was.picks;R.leaf=was.leaf||0;R.carried=true;}
     R.at=Date.now()-2000;seed(shown||t);
     if(mine){R.picked=true;R.focus='page';}
+    // Said from an earlier view, that view comes with the person: it stays on the stage and her answer is read above it.
+    away=null;
   }
-  // Said from an earlier view, it goes to Mia and the person stays where they are; "Back to now" shows her answer.
   s=2;peek=null;view=away?past.indexOf(away):-1;draw();if(!steering&&view<0)$('cv').scrollTop=0;
   var my=R;
   var send=function(text){
@@ -1198,6 +1206,7 @@ function sitePlace(){
   b=b||siteBox();el.classList.toggle('docked',site.docked);el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
   el.classList.toggle('moving',site.moving);
   $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
+  siteTabs();
   var r=$('sitePage').getBoundingClientRect();
   n.stage(site.moving?false:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)});
 }
@@ -1207,8 +1216,14 @@ function tools(fold){
   if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');modelShow(false);phoneShow(false);}
 }
 // The model Mia works with here. Her own pick stays unless the person chooses one of the models
-// they have connected, the same ones the chat offers.
-function modelList(){var h=window.miaAiModeHost;try{return h&&h.models?h.models()||[]:[];}catch(e){return [];}}
+// they have connected. Flow offers four, in this order, under their short names.
+var MODELS=[[/sonnet-5-5/i,'Sonnet 5.5'],[/opus-5-5/i,'Opus 5.5'],[/6\.1-terra/i,'Terra 6.1'],[/6\.1-sol/i,'Sol 6.1']];
+function modelList(){
+  var h=window.miaAiModeHost,all=[],out=[];
+  try{all=h&&h.models?h.models()||[]:[];}catch(e){}
+  MODELS.forEach(function(m){all.forEach(function(e){if(e&&m[0].test(e.model||''))out.push({provider:e.provider,providerLabel:e.providerLabel,model:e.model,name:m[1]});});});
+  return out;
+}
 function modelKept(){try{return localStorage.getItem('miaAiModeModel')||'';}catch(e){return '';}}
 function modelPick(){
   var k=modelKept();if(!k)return null;
@@ -1220,10 +1235,11 @@ function modelShow(on){
   if(!on)return;
   $('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);
   var k=modelKept();
-  $('model').innerHTML='<option value="">Mia\'s pick</option>'+modelList().map(function(e){
+  var list=modelList(),twice=function(e){return list.filter(function(x){return x.name===e.name;}).length>1;};
+  $('model').innerHTML='<option value="">Mia\'s pick</option>'+(list.length?list.map(function(e){
     var v=e.provider+'|'+e.model;
-    return '<option value="'+esc(v)+'"'+(v===k?' selected':'')+'>'+esc(e.family+' '+e.variant+' \u00b7 '+e.providerLabel)+'</option>';
-  }).join('');
+    return '<option value="'+esc(v)+'"'+(v===k?' selected':'')+'>'+esc(e.name+(twice(e)?' \u00b7 '+e.providerLabel:''))+'</option>';
+  }).join(''):'<option disabled>Connect Claude or ChatGPT in Mia to choose one</option>');
 }
 // A phone the person paired uses AI mode on this computer through the Hub.
 // The computer shows a code; the person types it on the phone once.
@@ -1293,6 +1309,7 @@ function siteState(st){
     }
   }
   if(!site.open||!tab)return;
+  if(site.url!==tab.url){site.url=tab.url||'';if(!$('siteTabs').hidden)sitePlace();}
   var u=$('siteUrl');if(root.activeElement!==u)u.value=tab.url||'';
   $('siteBack').disabled=!tab.canGoBack;$('siteForward').disabled=!tab.canGoForward;
   $('siteBar').classList.toggle('loading',!!tab.loading);
@@ -1300,6 +1317,38 @@ function siteState(st){
 function siteDo(action,more){
   var c={action:action},k;for(k in more||{})c[k]=more[k];
   return web.command(c).then(function(st){if(st&&st.tabs)siteState(st);},function(){});
+}
+// Filling the stage, the browser shows the other pages of the card it was opened from down its left
+// side, as the stage manager shows the other items: the company's site, a person's profile, the report.
+// Each is a tab of its own in the browser, so going from one to another keeps where each one was.
+function siteLinks(){
+  var run=site.deckRun||R;if(!site.card||!run)return [];
+  var it=deckItems(run).filter(function(i){return i.key===site.card;})[0],c=it&&it.card;
+  return c?cardLinks(c,c.bot||botNamed(c.title)):[];
+}
+function samePage(a,b){var x=shotKey(a||''),y=shotKey(b||'');return !!x&&!!y&&x.page===y.page;}
+function siteTabs(){
+  var el=$('siteTabs'),links=site.wide&&innerWidth>=760?siteLinks():[],h='';
+  if(links.length>1){
+    // The tab in front is the page the browser is on; a page gone elsewhere leaves the one last chosen lit.
+    var at=links.filter(function(l){return samePage(l.url,site.url);})[0]||links.filter(function(l){return l.url===site.tab;})[0];
+    h=links.map(function(l){
+      var shot=shotOf(l.url),on=l===at;
+      return '<button class="thumb site-tab'+(on?' on':'')+'" role="tab" aria-selected="'+(on?'true':'false')+'" data-tab="'+esc(l.url)+'" title="'+esc(l.url)+'"><span class="pic">'+
+        (shot?'<img alt="" data-shot src="'+esc(shot)+'">':'<span class="site-n">'+esc(siteName(l.url))+'</span>')+'</span><b>'+esc(l.label)+'</b></button>';
+    }).join('');
+  }
+  if(el._h!==h){el._h=h;el.innerHTML=h;}
+  el.hidden=!h;
+}
+// A card can carry two pages of one site, so a tab is found by its page, not by its site alone.
+function siteTab(url){
+  site.tab=url;siteTabs();
+  web.command({action:'state'}).then(function(st){
+    var tab=(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return samePage(t.url,url);})[0];
+    if(tab)return siteDo('select',{id:tab.id});
+    return siteDo('new').then(function(){return siteDo('navigate',{value:url});});
+  }).catch(function(){});
 }
 // siteShow(url): the tab already on that site comes forward; without one the site opens in a new tab.
 function siteShow(url){
@@ -1404,6 +1453,7 @@ function siteWire(){
   $('siteBack').onclick=function(){siteDo('back');};$('siteForward').onclick=function(){siteDo('forward');};
   $('siteReload').onclick=function(){siteDo('reload');};$('siteClose').onclick=siteClose;
   $('siteWide').onclick=function(){site.wide=!site.wide;sitePlace();};
+  $('siteTabs').onclick=function(e){var b=e.target.closest('[data-tab]');if(b)siteTab(b.dataset.tab);};
   $('siteZoom').onclick=function(){
     site.zoom=(site.zoom+1)%ZOOMS.length;this.title='Page size: '+Math.round(ZOOMS[site.zoom]*100)+'%';
     siteDo('zoom',{factor:ZOOMS[site.zoom]});
@@ -1623,12 +1673,21 @@ function talkShow(){
 function talkMute(){
   if(!talkOn||!talk)return;
   talkMuted=!talkMuted;
+  // Back from standing by, her voice comes back with the mic.
+  if(!talkMuted&&stoodBy){stoodBy=false;if(quiet)quietSet();}
   if(talkMuted)talk.stop();
   else Promise.resolve().then(function(){return talk.start();}).catch(function(){talkStop('The mic could not start. Type it here.');});
   talkShow();earShow('');
 }
+// "Stand by", said by itself: the mic lets go and Mia stops talking, until the mic is turned back on.
+var stoodBy=false;
+function standBy(){
+  if(!talkOn||talkMuted)return;
+  stoodBy=!quiet;if(!quiet)quietSet();else hush();
+  talkMute();earShow('','Standing by. Turn the mic on when you want me.');
+}
 function talkStop(note){
-  talkOn=false;talkMuted=false;findOn=false;if(talk)talk.stop();
+  talkOn=false;talkMuted=false;stoodBy=false;findOn=false;if(talk)talk.stop();
   if(host){talkShow();earShow('',note);}
 }
 function talkStart(){
@@ -1644,6 +1703,7 @@ function talkStart(){
       earShow('');t=heard(t);
       if(!t||!open)return;
       if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
+      if(/^\W*(mia\W+)?(stand\W?by|en espera)(\W+mia)?\W*$/i.test(t)){standBy();return;}
       direct(t.slice(0,2000));
     }});
   window.MiaSpeech.ready({
@@ -1772,7 +1832,6 @@ function build(){
   // The controls stay folded behind one mark until the person asks for them.
   $('more').onclick=function(){tools(!$('tools').hidden);};
   $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden){phoneShow(false);modelShow(false);}};
-  $('modelBtn').hidden=!modelList().length;
   $('modelBtn').onclick=function(){modelShow($('modelBar').hidden);};
   $('model').onchange=function(){try{localStorage.setItem('miaAiModeModel',this.value);}catch(e){}};
   phoneWire();
@@ -1785,6 +1844,7 @@ function build(){
   };
   document.addEventListener('fullscreenchange',function(){$('full').textContent=document.fullscreenElement?'Exit full screen':'Full screen';if(!document.fullscreenElement)fullOwn=false;});
   $('cv').addEventListener('click',function(e){
+    if(e.target&&e.target.closest&&e.target.closest('[data-log]')){drawerOn=true;logDraw();return;}
     // A decision at the edge of the deck is turned to, not answered or followed.
     var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
     if(leaf&&!leaf.classList.contains('on')){e.preventDefault();deckTo([].indexOf.call(leaf.parentNode.children,leaf),true);return;}

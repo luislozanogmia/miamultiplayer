@@ -60,7 +60,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .center{align-items:center;text-align:center}
 .hello{margin:18px 0 0;font:500 clamp(26px,4.4vw,40px)/1.15 var(--sans);letter-spacing:-.02em;text-wrap:balance}
 .line{margin:0;font-size:clamp(16px,2vw,20px);color:var(--soft)}
-.said{display:flex;flex-direction:column;gap:4px}
+.said{display:flex;flex-direction:column;gap:4px;position:relative}
+.said:has(.said-log){padding-right:40px}
+.said-log{appearance:none;position:absolute;right:0;bottom:0;width:30px;height:30px;padding:0;border:1px solid var(--rule-strong);border-radius:50%;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center;-webkit-app-region:no-drag}
+.said-log:hover{color:var(--ink)}
+.said-log svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .said small{font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
 .said p{margin:0;font:500 clamp(20px,3vw,28px)/1.2 var(--sans);letter-spacing:-.01em;text-wrap:balance}
 .mia{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--soft)}
@@ -372,7 +376,15 @@ a.file:hover{border-color:var(--accent)}
 .site-bar input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:13px var(--sans)}
 .site-bar.loading form{background:linear-gradient(90deg,rgba(255,255,255,.08),rgba(227,166,27,.22),rgba(255,255,255,.08));background-size:200% 100%;animation:site-load 1.2s linear infinite}
 @keyframes site-load{to{background-position:-200% 0}}
-.site-page{flex:1;min-height:0;margin:0 6px 6px;border-radius:9px;background:rgba(255,255,255,.04)}
+.site-body{flex:1;min-height:0;display:flex}
+.site-tabs{flex:none;width:148px;display:flex;flex-direction:column;gap:12px;padding:6px 6px 10px 10px;overflow-y:auto;scrollbar-width:none}
+.site-tabs[hidden]{display:none}
+.site-tab{animation:none;transform:none;opacity:.72}
+.site-tab:hover,.site-tab.on{opacity:1}
+.site-tab.on{color:var(--ink)}
+.site-tab.on .pic{border-color:var(--accent-text);box-shadow:0 0 0 1px var(--accent-text),0 10px 24px rgba(0,0,0,.4)}
+.site-tab .pic{position:relative}
+.site-page{flex:1;min-width:0;min-height:0;margin:0 6px 6px;border-radius:9px;background:rgba(255,255,255,.04)}
 :host(.driving) .site{display:none}
 @media(prefers-reduced-motion:reduce){.site-bar.loading form{animation:none}}
 

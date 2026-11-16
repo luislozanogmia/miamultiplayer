@@ -288,10 +288,104 @@ test('an answer in words alone leaves the view it is about on the stage', () => 
   assert.match(js, /if\(!kept&&R\.keep&&text&&!showsView\(text\)&&showsView\(R\.keep\)\)\{words='<div class="panel result answer">/);
   assert.match(js, /return from\+words\+\(front\?/);
   assert.match(js, /past\.forEach\(function\(r\)\{r\.keep=keep;keep=viewOf\(r\);\}\);/);
-  assert.match(js, /var was=R\|\|past\[past\.length-1\],keep=viewOf\(was\);/);
   // Answers already given on a deck that was not sent stay through the question, and go when a new view comes.
   assert.match(js, /if\(was&&was\.picks&&!was\.decided&&showsView\(keep\)\)\{R\.picks=was\.picks;R\.leaf=was\.leaf\|\|0;R\.carried=true;\}/);
   assert.match(js, /else if\(R\.carried&&!R\.running\)\{R\.carried=false;if\(!R\.decided\)\{R\.picks=\{\};R\.leaf=0;\}\}/);
   // The kept view is the same stage going on, so it is brought up to date in place and does not come in again.
   assert.match(draw, /var on=cv\._k===key\|\|\(key===R&&!!cv\._k&&typeof cv\._k==='object'&&!!R\.keep&&R\.keep===viewOf\(cv\._k\)\);/);
+});
+
+test('filling the stage, the browser lists the other pages of its card as tabs down its left side', () => {
+  assert.match(js, /<div class="site-body"><div class="site-tabs" id="siteTabs" role="tablist"[^>]*hidden><\/div><div class="site-page" id="sitePage"><\/div><\/div>/);
+  const at = js.indexOf('function siteLinks(){');
+  const src = js.slice(at, js.indexOf('// A card can carry two pages of one site'));
+  const el = { hidden: true, innerHTML: '', _h: '' };
+  const site = { wide: true, card: 'c0', deckRun: null, url: 'https://www.linkedin.com/in/someone/', tab: '' };
+  const card = { title: 'A company', page: 'example.com', links: [{ label: 'Company page', url: 'https://www.linkedin.com/company/example' }, { label: 'Its founder', url: 'https://www.linkedin.com/in/someone' }] };
+  const run = new Function('site', 'el', 'card', 'var innerWidth=1200,R={},esc=String,' +
+    'siteName=function(u){try{return new URL(u).hostname.replace(/^www\\./,"")}catch(e){return ""}},' +
+    'shotOf=function(){return ""},botNamed=function(){return ""},$=function(){return el},' +
+    'deckItems=function(){return [{key:"c0",card:card}]},' +
+    'cardLinks=function(c){return [{label:"example.com",url:"https://example.com"}].concat(c.links)};' +
+    js.slice(js.indexOf('function shotKey(u){'), js.indexOf('function shotKeep(u,image){')) + src + 'return siteTabs;')(site, el, card);
+  run();
+  assert.equal(el.hidden, false);
+  assert.equal((el.innerHTML.match(/data-tab=/g) || []).length, 3);
+  // Two pages of one site are two tabs, and the one the browser is on is the one lit.
+  assert.match(el.innerHTML, /class="thumb site-tab on" role="tab" aria-selected="true" data-tab="https:\/\/www\.linkedin\.com\/in\/someone"/);
+  assert.equal((el.innerHTML.match(/site-tab on/g) || []).length, 1);
+  // Docked in its card, or opened from no card, the browser has no tabs beside it.
+  site.wide = false; run(); assert.equal(el.hidden, true);
+  site.wide = true; site.card = ''; run(); assert.equal(el.hidden, true);
+  assert.match(js, /\$\('siteTabs'\)\.onclick=function\(e\)\{var b=e\.target\.closest\('\[data-tab\]'\);if\(b\)siteTab\(b\.dataset\.tab\);\};/);
+  assert.match(js, /filter\(function\(t\)\{return samePage\(t\.url,url\);\}\)\[0\];\s*if\(tab\)return siteDo\('select',\{id:tab\.id\}\);/);
+  assert.match(css, /\.site-body\{flex:1;min-height:0;display:flex\}/);
+});
+
+test('a view is one page however many questions were asked about it', () => {
+  const at = js.indexOf('var MAX_CARDS=9,pics={};');
+  const pages = new Function('past', 'R', 'function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+    js.slice(at, js.indexOf('function hasCanvas(){')) + js.slice(js.indexOf('function lastOf(i){'), js.indexOf('function step(d){')) +
+    'return {stops:stops,lastOf:lastOf};');
+  const deck = 'Decision: Pursue the first company\nText: It fits.\nDecision: Drop the second\nText: Too small.';
+  const other = 'Card: One\nIcon: check\nText: Done.';
+  const past = [{ body: other, keep: '' }, { body: deck, keep: other }, { body: 'Then I act on each answer.', keep: deck }, { body: 'Only the ones you approved.', keep: deck }];
+  // The deck and the two answers about it are one page, the one of the newest answer.
+  assert.deepEqual(pages(past, null).stops(), [0, 3]);
+  assert.equal(pages(past, null).lastOf(1), 3);
+  // An answer that is on the stage now has that view: the page is "now", not one more behind it.
+  const now = { sent: true, running: false, body: 'Yes, all nine.', keep: deck };
+  assert.deepEqual(pages(past, now).stops(), [0]);
+  assert.equal(pages(past, now).lastOf(1), past.length);
+  // Asked from an earlier view, the answer joins that view's page.
+  assert.deepEqual(pages(past, { sent: true, running: false, body: 'It was the first one.', keep: other }).stops(), [3]);
+  // While she is still working nothing is taken away, and a new view is a new page.
+  assert.deepEqual(pages(past, { sent: true, running: true, body: '', keep: deck }).stops(), [0, 3]);
+  assert.deepEqual(pages(past, { sent: true, running: false, body: '```canvas\n<p>New</p>\n```', keep: deck }).stops(), [0, 3]);
+  assert.match(js, /var was=away\|\|R\|\|past\[past\.length-1\],keep=viewOf\(was\);/);
+  assert.match(js, /var to=r===R\?-1:r\.body\?lastOf\(i\):null;if\(to>=past\.length\)to=-1;/);
+});
+
+test('the heading of a turn carries a journal button that opens the drawer of the conversation', () => {
+  assert.match(js, /<button class="said-log" data-log="1" aria-label="The conversation so far"/);
+  assert.match(js, /closest\('\[data-log\]'\)\)\{drawerOn=true;logDraw\(\);return;\}/);
+  assert.match(css, /\.said-log\{[^}]*position:absolute;right:0;bottom:0/);
+});
+
+test('"stand by", said by itself, mutes the mic and Mia, and the mic coming back brings her voice back', () => {
+  const m = js.match(/if\((\/\^\\W\*\(mia[^\n]+?\/i)\.test\(t\)\)\{standBy\(\);return;\}/);
+  assert.ok(m, 'the spoken command is read before anything goes to Mia');
+  const re = new Function('return ' + m[1])();
+  ['Stand by.', 'stand by', 'Standby!', 'Mia, stand by.', 'Stand-by', 'en espera'].forEach((t) => assert.equal(re.test(t), true, t));
+  ['Stand by for the report and send it', 'Tell them to stand by', 'What does standby mean?'].forEach((t) => assert.equal(re.test(t), false, t));
+  const src = js.slice(js.indexOf('function standBy(){'), js.indexOf('function talkStop(note){'));
+  const made = (quiet) => {
+    const log = [];
+    const run = new Function('log', 'quiet', 'var talkOn=true,talkMuted=false,stoodBy=false,' +
+      'quietSet=function(){quiet=!quiet;log.push(quiet?"voice off":"voice on")},hush=function(){log.push("hush")},' +
+      'talkMute=function(){talkMuted=!talkMuted;if(!talkMuted&&stoodBy){stoodBy=false;if(quiet)quietSet();}log.push(talkMuted?"mic off":"mic on")},earShow=function(){};' +
+      src + 'return {standBy:standBy,talkMute:talkMute};')(log, quiet);
+    return { log, run };
+  };
+  const a = made(false); a.run.standBy(); a.run.talkMute();
+  assert.deepEqual(a.log, ['voice off', 'mic off', 'voice on', 'mic on']);
+  // Her voice was already off by the person's own choice: it stays off afterwards.
+  const b = made(true); b.run.standBy(); b.run.talkMute();
+  assert.deepEqual(b.log, ['hush', 'mic off', 'mic on']);
+  assert.match(js, /if\(!talkMuted&&stoodBy\)\{stoodBy=false;if\(quiet\)quietSet\(\);\}/);
+});
+
+test('Flow offers four models by their short names, and the Model button is always there', () => {
+  const src = js.slice(js.indexOf('var MODELS=[['), js.indexOf('function modelKept(){'));
+  const win = { miaAiModeHost: { models: () => [
+    { provider: 'b', providerLabel: 'ChatGPT', model: 'gpt-6.1-sol' }, { provider: 'b', providerLabel: 'ChatGPT', model: 'gpt-6-luna' },
+    { provider: 'b', providerLabel: 'ChatGPT', model: 'gpt-6.1-terra' }, { provider: 'a', providerLabel: 'Claude', model: 'claude-opus-5-5[1m]' },
+    { provider: 'a', providerLabel: 'Claude', model: 'claude-haiku-5-5' }, { provider: 'a', providerLabel: 'Claude', model: 'claude-sonnet-5-5[1m]' }] } };
+  const list = new Function('window', src + 'return modelList;')(win);
+  assert.deepEqual(list().map((e) => e.name), ['Sonnet 5.5', 'Opus 5.5', 'Terra 6.1', 'Sol 6.1']);
+  assert.equal(list()[0].provider + '|' + list()[0].model, 'a|claude-sonnet-5-5[1m]');
+  // Before the app has its list, or with nothing connected, there is nothing to offer and nothing breaks.
+  assert.deepEqual(new Function('window', src + 'return modelList;')({})(), []);
+  assert.match(js, /id="modelBtn" aria-expanded="false">Model<\/button>/);
+  assert.doesNotMatch(js, /\$\('modelBtn'\)\.hidden=/);
 });
