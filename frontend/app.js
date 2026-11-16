@@ -8223,6 +8223,16 @@
     });
   }
 
+  // The files of one message, uploaded in turn the way one file is.
+  function prepareChatAttachments(files, roomId, onProgress){
+    return files.reduce(function(chain, file, index){
+      return chain.then(function(list){
+        onProgress(index + 1, files.length);
+        return prepareChatAttachment(file, roomId).then(function(prepared){ return list.concat([prepared.attachment]); });
+      });
+    }, Promise.resolve([])).then(function(list){ return {attachment: list[0], attachments: list}; });
+  }
+
   function chatAttentionStorageKey(){
     return 'miaChatAttention:' + String(currentUser || 'preview').toLowerCase() + ':' + activeWorkspaceKey;
   }
@@ -17328,7 +17338,7 @@
     state.thinkingAgentName = thinkingAgentName;
     var content = {text: text};
     if(preparedAttachment && preparedAttachment.attachment){
-      content.attachments = [preparedAttachment.attachment];
+      content.attachments = preparedAttachment.attachments || [preparedAttachment.attachment];
     }
     // A running dispatch already owns the animated progress row. A steering
     // message stays sendable, but must not create a second thinking bubble.
@@ -21046,13 +21056,22 @@
         var extras = (chatAttachment.more || []).slice();
         if(extras.length) chatAttachment.progress = 'Uploading 1 of ' + (extras.length + 1) + '\u2026';
         renderChatAttachment();
-        prepareChatAttachment(file, roomId, null).then(function(prepared){
+        // A bot's or Mia's chat takes every file in one message, so the reply
+        // sees them together. A company's Hub takes one file a message, so
+        // there the others follow one by one.
+        var together = extras.length > 0 && !inHubRoom(roomId);
+        var uploaded = !together ? prepareChatAttachment(file, roomId, null)
+          : prepareChatAttachments([file].concat(extras.map(function(item){ return item.file; })), roomId, function(number, total){
+            chatAttachment.progress = 'Uploading ' + number + ' of ' + total + '\u2026';
+            renderChatAttachment();
+          });
+        uploaded.then(function(prepared){
           if(input.value.trim() === draftText) input.value = '';
           return sendActiveRoomMessage(text, threadRoot, prepared, roomId).then(function(result){
             if(result && (result.status === 200 || result.status === 201 || result.undelivered)){
               googleDriveDrafts[driveRoomId]=(googleDriveDrafts[driveRoomId]||[]).filter(function(item){return !driveFiles.some(function(sent){return sent.id===item.id;});});
               clearChatAttachment();
-              if(extras.length) return sendMoreChatAttachments(extras, roomId, 2, extras.length + 1);
+              if(extras.length && !together) return sendMoreChatAttachments(extras, roomId, 2, extras.length + 1);
             } else {
               chatAttachment.busy = false;
               chatAttachment.error = result && result.data && result.data.error || 'Message send failed.';
@@ -21146,13 +21165,13 @@
     input.addEventListener('paste', function(e){
       var items = e.clipboardData && e.clipboardData.items;
       if(!items) return;
+      // A pasted image joins the files already waiting, as one picked with + does.
+      var pasted = [];
       for(var i = 0; i < items.length; i++){
-        if(items[i].kind === 'file' && /^image\//.test(items[i].type || '')){
-          var pasted = items[i].getAsFile();
-          if(pasted && stageChatAttachment(pasted)) syncDraftState();
-          break;
-        }
+        var image = items[i].kind === 'file' && /^image\//.test(items[i].type || '') ? items[i].getAsFile() : null;
+        if(image) pasted.push(image);
       }
+      if(pasted.length && stageChatAttachments(pasted)) syncDraftState();
     });
     // Files dragged onto the composer attach as if picked with +: the same
     // checks, previews, upload progress and errors.
