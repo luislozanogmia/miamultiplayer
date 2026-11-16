@@ -1381,12 +1381,13 @@ function tandemStart(){
   // Tandem is a call, so the mic is open for it even when hands-free is off in Flow.
   tandemTalk=!talkOn&&!!earParts();if(tandemTalk)talkStart();
   if(!fresh){hush();speak('I am with you while you work. Just talk.');}
-  tandemTell();
+  watchStart();tandemTell();
 }
 // Back to the stage, with the same conversation.
 function tandemStage(){
   if(!tandem)return;
   tandem=false;host.classList.remove('tandem');
+  watchStop();
   if(tandemTalk&&!talkKept())talkStop();tandemTalk=false;
   if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
   sitePlace();draw();setTimeout(function(){if(open&&!tandem)$('box').focus();},200);
@@ -1395,6 +1396,28 @@ function tandemStage(){
 // The card's mic button: one click mutes the mic or turns it back on.
 function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMute();tandemTell();}
 // "Open the LinkedIn bot", said in Flow Tandem, moves the app itself the way a click in the sidebar would.
+// In Flow Tandem the person drives bots too, in the app. Mia listens in every bot's chat, so a bot the
+// person briefed is announced like one she briefed, and its question for an OK is asked out loud. A bot
+// Mia put on the work is followed by followBot, and this stays silent for it.
+var watchSocks={},watchTimer=null;
+function watchBots(){
+  if(!tandem)return;
+  var h=appHost(),rows=h&&h.rooms?h.rooms():[];
+  rows.forEach(function(row){
+    var id=row&&row.kind==='bot'?row.conversationId:'';
+    if(!id||id===conv||watchSocks[id]||Object.keys(watchSocks).length>=24)return;
+    var bot={name:str(row.label,40)||'Bot'},since=Date.now()-2000;
+    watchSocks[id]=listen(id,function(ev){
+      var meta=(ev&&ev.metadata)||{};
+      if(!tandem||!ev||botSocks[id])return;
+      if(meta.askBeforeDo&&meta.askBeforeDo.id){botAsk(bot,meta.askBeforeDo);return;}
+      if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<since)return;
+      if(ev.content&&typeof ev.content.text==='string'&&ev.content.text)speak(bot.name+' has finished.');
+    },function(){});
+  });
+}
+function watchStart(){watchBots();clearInterval(watchTimer);watchTimer=setInterval(watchBots,30000);}
+function watchStop(){clearInterval(watchTimer);watchTimer=null;Object.keys(watchSocks).forEach(function(k){try{if(watchSocks[k])watchSocks[k].close();}catch(e){}});watchSocks={};}
 function appAsk(t){
   var h=appHost(),m=/^(?:mia[,\s]+)?(?:please\s+)?(?:open|show(?:\s+me)?|go to|take me to|abre|muestra|ve a)\s+(?:the\s+|my\s+|el\s+|la\s+|mi\s+)?(.+?)(?:\s+(?:bot|chat|channel|group))?(?:\s+please)?[.!]?$/i.exec(String(t||'').trim());
   if(!m||!h.rooms||!h.open)return false;
@@ -2223,7 +2246,7 @@ function leave(){
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
-  host.classList.remove('tandem');tandem=false;tandemTalk=false;tandemTell();
+  host.classList.remove('tandem');tandem=false;tandemTalk=false;watchStop();tandemTell();
   site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
   setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';$('cv')._h='';mindSet({});}},1600);

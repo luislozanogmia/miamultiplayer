@@ -19562,8 +19562,11 @@
   }
   // Every bot and chat the sidebar can open, for "open the LinkedIn bot" said in Flow Tandem.
   function aiModeRooms(){
+    var remembered = rememberedAgentChats() || {};
     var bots = chatSearchDirectorySnapshot().agents.filter(function(agent){ return agent && agent.id && agent.id !== 'gateway' && agent.name; }).map(function(agent){
-      return {kind:'bot', id:String(agent.id), label:String(agent.name)};
+      // Its chat, when it has one, so Flow Tandem can hear the bot finish there.
+      var roomId = agent.roomId || agent.nativeConversationId || agent.conversationId || remembered[String(agent.id)] || '';
+      return {kind:'bot', id:String(agent.id), label:String(agent.name), conversationId:String(roomId)};
     });
     return bots.concat(aiModePeopleChats());
   }

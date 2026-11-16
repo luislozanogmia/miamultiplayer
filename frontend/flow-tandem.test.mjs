@@ -125,3 +125,17 @@ test('the card says where the call stands in one line and keeps no state of its 
   assert.match(html, /<script src="flow-tandem\.js\?v=/);
   assert.ok(html.indexOf('ai-mode.js?v=') < html.indexOf('flow-tandem.js?v='));
 });
+
+test('in Tandem Mia listens in every bot chat and announces a bot the person drove', () => {
+  const src = js;
+  const watch = src.slice(src.indexOf('function watchBots(){'), src.indexOf('function watchStart(){'));
+  assert.match(watch, /if\(!tandem\)return;/);
+  assert.match(watch, /row\.kind==='bot'\?row\.conversationId:''/);
+  // A bot Mia briefed is followed by followBot, so it is not announced twice.
+  assert.match(watch, /if\(!tandem\|\|!ev\|\|botSocks\[id\]\)return;/);
+  assert.match(watch, /botAsk\(bot,meta\.askBeforeDo\)/);
+  assert.match(watch, /speak\(bot\.name\+' has finished\.'\)/);
+  assert.match(src, /watchStart\(\);tandemTell\(\);/);
+  assert.equal(src.split('watchStop();').length - 1, 2);
+  assert.match(app, /return \{kind:'bot', id:String\(agent\.id\), label:String\(agent\.name\), conversationId:String\(roomId\)\};/);
+});
