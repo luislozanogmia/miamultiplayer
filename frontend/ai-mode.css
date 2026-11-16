@@ -55,11 +55,25 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .hud .tools{display:flex;align-items:center;gap:10px;min-width:0}
 .hud .tools[hidden]{display:none}
 .hud .more{padding:0 10px;font-size:18px;line-height:1}
-.cv{position:absolute;inset:var(--top) 0 var(--bottom) 0;overflow-y:auto;display:flex;flex-direction:column;z-index:2}
+.cv{position:absolute;inset:calc(var(--top) + var(--convo,0px)) 0 var(--bottom) 0;overflow-y:auto;display:flex;flex-direction:column;z-index:2}
 .cv>.wrap{width:100%;max-width:1120px;margin:auto;padding-block:8px 44px;display:flex;flex-direction:column;gap:18px}
 .center{align-items:center;text-align:center}
 .hello{margin:18px 0 0;font:500 clamp(26px,4.4vw,40px)/1.15 var(--sans);letter-spacing:-.02em;text-wrap:balance}
 .line{margin:0;font-size:clamp(16px,2vw,20px);color:var(--soft)}
+.convo{position:absolute;top:var(--top);left:0;right:0;z-index:3;pointer-events:none}
+.convo>*{width:100%;max-width:1120px;margin-inline:auto;pointer-events:auto}
+.convo .said{padding-top:6px}
+.convo .mia{align-items:flex-start;padding-block:8px 12px}
+.convo .mia p{margin:0;min-width:0;max-height:6.6em;overflow-y:auto;scrollbar-width:none;line-height:1.45;padding-top:1px}
+.convo .said p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:clamp(18px,2.3vw,23px)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.morph .w{display:inline-block;white-space:nowrap}
+.morph .l{display:inline-block;white-space:pre}
+.morph .l.in{animation:l-in .46s cubic-bezier(.2,.7,.2,1) both;animation-delay:var(--d)}
+.morph.out .l{animation:l-out .22s ease-in both;animation-delay:var(--o)}
+@keyframes l-in{from{opacity:0;transform:translate(var(--x),var(--y)) scale(.7);filter:blur(5px)}}
+@keyframes l-out{to{opacity:0;transform:translate(var(--x),calc(var(--y)*-1)) scale(.7);filter:blur(5px)}}
+@media(prefers-reduced-motion:reduce){.morph .l{animation:none!important}}
 .said{display:flex;flex-direction:column;gap:4px;position:relative}
 .said:has(.said-log){padding-right:40px}
 .said-log{appearance:none;position:absolute;right:0;bottom:0;width:30px;height:30px;padding:0;border:1px solid var(--rule-strong);border-radius:50%;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center;-webkit-app-region:no-drag}
@@ -214,7 +228,7 @@ div.bot{cursor:default;opacity:1}
 @media(prefers-reduced-motion:reduce){.leaf,.dot{transition:none}}
 /* What Mia drew herself, large, in place of cards. */
 .work:has(.canvas){grid-template-columns:minmax(0,1fr);max-width:none}
-.canvas{height:calc(100vh - var(--top) - var(--bottom) - 150px);min-height:360px;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px);animation:rise .5s ease both}
+.canvas{height:calc(100vh - var(--top) - var(--bottom) - var(--convo,0px) - 60px);min-height:360px;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px);animation:rise .5s ease both}
 .canvas-f{display:block;width:100%;height:100%;border:0;background:transparent}
 .blur-bar select{font:inherit;color:var(--fg,#fff);background:rgba(255,255,255,.06);border:1px solid var(--rule);border-radius:8px;padding:5px 8px;max-width:260px}
 .blur-bar select option{color:#111;background:#fff}

@@ -153,7 +153,7 @@ test('Mia reviews a finished bot by herself, waits while the person is busy, and
   assert.match(js, /if\(!bot\.seen&&!ownReview\(\)\)speak\(bot\.name\+' has finished\. Want to see it\?'\);/);
   assert.match(js, /localStorage\.setItem\('miaAiModeOwn',own\?'1':'0'\)/);
   assert.match(js, /id="own" aria-pressed="true"/);
-  assert.match(js, /R\.own\?'Mia, on her own'/);
+  assert.match(js, /run\.own\?'Mia, on her own'/);
 });
 
 test('a returning person hears the greeting alone, not what Flow is', () => {
@@ -285,7 +285,7 @@ test('an answer in words alone leaves the view it is about on the stage', () => 
   assert.equal(read.viewOf({ body: '', keep: deck }), deck);
   assert.equal(read.viewOf(null), '');
   // The answer is drawn above the kept view, and both places that pick the kept view use the same rule.
-  assert.match(js, /if\(!kept&&R\.keep&&text&&!showsView\(text\)&&showsView\(R\.keep\)\)\{words='<div class="panel result answer">/);
+  assert.match(js, /if\(!kept&&R\.keep&&text&&!showsView\(text\)&&showsView\(R\.keep\)\)\{\s*\/\/[^\n]*\n\s*if\(!spoken\(text\)\)words='<div class="panel result answer">/);
   assert.match(js, /return from\+words\+\(front\?/);
   assert.match(js, /past\.forEach\(function\(r\)\{r\.keep=keep;keep=viewOf\(r\);\}\);/);
   // Answers already given on a deck that was not sent stay through the question, and go when a new view comes.
@@ -396,4 +396,34 @@ test('hands-free, the mic in the bar stays and one click mutes or unmutes it', (
   assert.doesNotMatch(js, /\$\('mic'\)\.hidden=talkOn/);
   assert.match(js, /mic\.disabled=!talkOn&&state==='wait';/);
   assert.match(css, /\.mic\.off::after\{/);
+});
+
+test('what was said last stays in a strip above the stage and a changed line is taken apart and built again', () => {
+  // The strip is its own element before the stage, and the stage no longer draws the heading.
+  assert.match(js, /'<div class="convo pad" id="convo" hidden><\/div>'\+\s*'<div class="cv pad" id="cv"><\/div>'/);
+  const stage = js.slice(js.indexOf('function stageHtml(seen){'), js.indexOf('function draw(){'));
+  assert.doesNotMatch(stage, /class="said"|class="mia"/);
+  assert.match(js, /var seen=seeing\(\);\s*convoDraw\(\);/);
+  // The stage and the browser begin under the strip, whatever its height.
+  assert.match(css, /\.cv\{position:absolute;inset:calc\(var\(--top\) \+ var\(--convo,0px\)\) 0 var\(--bottom\) 0;/);
+  assert.match(js, /host\.style\.setProperty\('--convo',h\+'px'\)/);
+  assert.match(js, /top=60\+convoH,bottom=H-92/);
+  // Letters for a short line, words for a long one, spaces kept between them.
+  const at = js.indexOf('function plainOf(t){'), end = js.indexOf('function lettersHtml(');
+  const mid = js.slice(js.indexOf('function pieces(text){'), end);
+  const make = new Function(js.slice(at, js.indexOf('function convoOf(seen){')) + mid + 'return {pieces:pieces,spoken:spoken,plainOf:plainOf};');
+  const { pieces, spoken, plainOf } = make();
+  assert.deepEqual(pieces('Hi you'), [['H', 'i'], null, ['y', 'o', 'u']]);
+  const long = 'word '.repeat(40).trim();
+  assert.equal(pieces(long).filter(Boolean).every(p => p.length === 1 && p[0] === 'word'), true);
+  // A short answer in words is read in the strip without its marks; a long one is not.
+  assert.equal(plainOf('**Yes**, the `second` one.\n\n- cheaper'), 'Yes, the second one. cheaper');
+  assert.equal(spoken('It is the second one.'), 'It is the second one.');
+  assert.equal(spoken('x'.repeat(601)), '');
+  // A line that only grows keeps its letters; any other change takes the old line apart first.
+  assert.match(js, /if\(text\.indexOf\(old\)===0&&\(text\.length>180\)===\(old\.length>180\)\)return put\(unitsOf\(old\)\);\s*el\.classList\.add\('out'\);el\._timer=setTimeout\(function\(\)\{put\(0\);\},360\);/);
+  assert.match(js, /if\(calm\)return put\(Infinity\);/);
+  assert.match(css, /\.morph\.out \.l\{animation:l-out/);
+  assert.match(css, /\.morph \.l\.in\{animation:l-in/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.morph \.l\{animation:none!important\}\}/);
 });

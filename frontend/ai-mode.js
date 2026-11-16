@@ -55,6 +55,7 @@ var MARKUP=
       '<button class="btn" id="phonePair">Connect a phone</button>'+
     '</div>'+
     '<div class="voice-ask" id="voiceAsk" role="group" aria-label="Mia\'s voice" hidden></div>'+
+    '<div class="convo pad" id="convo" hidden></div>'+
     '<div class="cv pad" id="cv"></div>'+
     '<button class="log-tab" id="logTab" aria-expanded="false" aria-label="What you asked and what Mia reported" title="What you asked and what Mia reported" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>'+
     '<aside class="log" id="log" aria-label="What you asked and what Mia reported" hidden></aside>'+
@@ -554,7 +555,11 @@ function resultHtml(){
   // The view from before stays on the stage until the new one is whole; a reply with nothing to show keeps it.
   var kept=!!R.keep&&(R.running||!text),words='';
   // An answer in words alone does not take the view away: it is read above the view it is about.
-  if(!kept&&R.keep&&text&&!showsView(text)&&showsView(R.keep)){words='<div class="panel result answer"><div class="md">'+format(text)+'</div></div>';kept=true;}
+  if(!kept&&R.keep&&text&&!showsView(text)&&showsView(R.keep)){
+    // Short, it is read in the strip above the stage; a long one is laid out here, above the view.
+    if(!spoken(text))words='<div class="panel result answer"><div class="md">'+format(text)+'</div></div>';
+    kept=true;
+  }
   if(kept)text=R.keep;
   // A new view of her own starts clean: answers carried over belonged to the view before.
   else if(R.carried&&!R.running){R.carried=false;if(!R.decided){R.picks={};R.leaf=0;}}
@@ -627,6 +632,79 @@ function filesHtml(){
   if(!made.length&&!touched.length)return '';
   return '<span class="lbl">Files</span><div class="files">'+made.concat(touched).join('')+'</div>';
 }
+// The strip above the stage: what the person said last and what Mia said last. It stays in place
+// while the stage under it scrolls, changes or is built again, so the talk never waits on the view.
+var convoH=0;
+function plainOf(t){return String(t||'').replace(/```[\s\S]*?```/g,' ').replace(/^\s*[-*]\s+/gm,'').replace(/[*_`#>|]+/g,'').replace(/\s+/g,' ').trim();}
+// An answer in words short enough to be read in the strip.
+function spoken(text){var t=plainOf(text);return t.length<=600?t:'';}
+function convoOf(seen){
+  var run=seen||R;if(!run||(!seen&&s===1))return null;
+  var now=R,mia='';R=run;
+  try{
+    var words=!run.running&&!run.plain&&run.body&&!showsView(run.body)&&showsView(run.keep)?spoken(run.body):'';
+    mia=run.plain?'':words||miaLine();
+  }finally{R=now;}
+  return {by:run.plain?'Chat':run.own?'Mia, on her own':seen?'You said earlier':'You said',said:run.said||'',mia:mia,busy:!!run.running,
+    log:past.length+(now&&now.said?1:0)>1};
+}
+// Words move letter by letter; a long line moves word by word so it stays light.
+function pieces(text){
+  var by=text.length>180?'w':'c';
+  return text.split(/(\s+)/).filter(Boolean).map(function(w){return /^\s+$/.test(w)?null:by==='w'?[w]:Array.from(w);});
+}
+function lettersHtml(text,kept){
+  var ps=pieces(text),total=0,n=0;ps.forEach(function(p){if(p)total+=p.length;});
+  var fresh=Math.max(1,total-kept),run=Math.min(520,fresh*16),gone=Math.min(140,total*6);
+  return ps.map(function(p){
+    if(!p)return ' ';
+    return '<span class="w">'+p.map(function(ch){
+      var i=n++,isNew=i>=kept;
+      return '<span class="l'+(isNew?' in':'')+'" style="--x:'+(((i*37)%13-6)*1.3).toFixed(1)+'px;--y:'+((i*53)%11-5)+'px;--d:'+Math.round(isNew?(i-kept)/fresh*run:0)+'ms;--o:'+Math.round(i/Math.max(1,total)*gone)+'ms">'+esc(ch)+'</span>';
+    }).join('')+'</span>';
+  }).join('');
+}
+function unitsOf(text){var n=0;pieces(text).forEach(function(p){if(p)n+=p.length;});return n;}
+// A line that changes is taken apart and the new one is built in its place; a line that only
+// grows keeps what is there and builds the rest. Nothing around it is drawn again.
+function morph(el,text){
+  text=text||'';
+  if(el._t===text)return;
+  el._t=text;
+  var put=function(kept){
+    el._timer=null;el._shown=el._t;el.classList.remove('out');
+    el.innerHTML=el._t?'<span class="sr">'+esc(el._t)+'</span><span aria-hidden="true">'+lettersHtml(el._t,kept)+'</span>':'';
+    if(convoSize()){canvasPlace();deckPlace();if(pane())sitePlace();}
+  };
+  if(el._timer)return;
+  var old=el._shown||'',calm=host.classList.contains('calm')||(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches);
+  if(calm)return put(Infinity);
+  if(!old)return put(0);
+  if(text.indexOf(old)===0&&(text.length>180)===(old.length>180))return put(unitsOf(old));
+  el.classList.add('out');el._timer=setTimeout(function(){put(0);},360);
+}
+function convoSize(){
+  var el=$('convo'),h=el.hidden?0:el.offsetHeight;
+  if(h===convoH)return false;
+  convoH=h;host.style.setProperty('--convo',h+'px');return true;
+}
+function convoDraw(){
+  var el=$('convo'),c=convoOf(seeing());
+  if(!c){
+    if(!el.hidden){el.hidden=true;unmount(el);el.innerHTML='';el._mode='';}
+    convoSize();return;
+  }
+  if(!el.firstChild)el.innerHTML='<div class="said"><small id="saidBy"></small><p class="morph" id="saidP"></p>'+
+    '<button class="said-log" data-log="1" aria-label="The conversation so far" title="The conversation so far" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6zM6 3v18M3.5 7.5h3M3.5 12h3M3.5 16.5h3M10 8h5M10 12h5"/></svg></button></div>'+
+    '<div class="mia" id="miaRow"><span id="miaMk"></span><p class="morph" id="miaLine" role="status"></p></div>';
+  el.hidden=false;
+  var mode=c.busy?'activity':'static',mk=$('miaMk');
+  if(el._mode!==mode){el._mode=mode;unmount(mk);mk.innerHTML=mark(22,mode);mount(mk);}
+  $('saidBy').textContent=c.by;el.querySelector('.said').hidden=!c.said;el.querySelector('.said-log').hidden=!c.log;
+  $('miaRow').hidden=!c.mia;
+  morph($('saidP'),c.said);morph($('miaLine'),c.mia);
+  convoSize();
+}
 // The stage for one run: the one going on now, or an earlier one the person stepped back to.
 function stageHtml(seen){
   var rail=botsHtml(),now=R;stageNow=now;
@@ -634,8 +712,8 @@ function stageHtml(seen){
   try{
     var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
     var main=R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
-    return '<div class="wrap still'+(quiet?' center':'')+'">'+(R.said?'<div class="said"><small>'+(R.plain?'Chat':R.own?'Mia, on her own':seen?'You said earlier':'You said')+'</small><p>'+esc(R.said)+'</p>'+(past.length+(now&&now.said?1:0)>1?'<button class="said-log" data-log="1" aria-label="The conversation so far" title="The conversation so far"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6zM6 3v18M3.5 7.5h3M3.5 12h3M3.5 16.5h3M10 8h5M10 12h5"/></svg></button>':'')+'</div>':'')+
-      '<div class="mia">'+mark(22,R.running?'activity':'static')+'<span id="miaLine">'+esc(miaLine())+'</span></div>'+
+    // What was said last is in the strip above; the stage is only the work.
+    return '<div class="wrap still'+(quiet?' center':'')+'">'+
       (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
   }finally{R=now;}
 }
@@ -777,6 +855,7 @@ function draw(){
   // What she drew takes the place of the page she read it from.
   if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
   var seen=seeing();
+  convoDraw();
   if(seen)h=stageHtml(seen);
   else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to Flow.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
   else h=stageHtml(null);
@@ -1180,7 +1259,7 @@ var web=window.miaDesktop&&window.miaDesktop.browser,webOff=null,ZOOMS=[1,1.25,1
 var site={open:false,wide:false,moving:false,docked:false,x:null,y:0,zoom:0,card:''};
 function pane(){var n=window.miaNativeBrowser;return web&&n&&n.stage?n:null;}
 function siteBox(){
-  var W=innerWidth,H=innerHeight,top=60,bottom=H-92;
+  var W=innerWidth,H=innerHeight,top=60+convoH,bottom=H-92;
   if(site.wide||W<760)return {x:12,y:top,w:W-24,h:bottom-top};
   var w=Math.min(760,W*0.58),h=Math.max(280,Math.min(bottom-top-70,H*0.62));
   // It opens where the work is drawn: the left column, under Mia's line.
@@ -1198,7 +1277,7 @@ function sitePlace(){
   var dock=show&&!site.wide&&innerWidth>=760?root.getElementById('frontPage'):null,b=null;
   site.docked=!!dock;
   if(dock){
-    var d=dock.getBoundingClientRect(),top=Math.max(60,d.top),bottom=Math.min(innerHeight-92,d.bottom);
+    var d=dock.getBoundingClientRect(),top=Math.max(60+convoH,d.top),bottom=Math.min(innerHeight-92,d.bottom);
     if(bottom-top<140)show=false;else b={x:d.left,y:top,w:d.width,h:bottom-top};
   }
   el.hidden=!show;
@@ -1803,6 +1882,7 @@ function build(){
   $('find').onclick=function(){findSet(!findOn);if(findOn)findRun();$('box').focus();};
   $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
   $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
+  $('convo').onclick=function(e){if(e.target.closest('[data-log]')){drawerOn=true;logDraw();return;}};
   $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
   $('chatsTab').onclick=function(){chatsOn=true;chatsDraw();};
   $('what').onclick=function(){var tip=$('whatTip');tip.hidden=!tip.hidden;this.setAttribute('aria-expanded',String(!tip.hidden));};
@@ -1846,7 +1926,6 @@ function build(){
   };
   document.addEventListener('fullscreenchange',function(){$('full').textContent=document.fullscreenElement?'Exit full screen':'Full screen';if(!document.fullscreenElement)fullOwn=false;});
   $('cv').addEventListener('click',function(e){
-    if(e.target&&e.target.closest&&e.target.closest('[data-log]')){drawerOn=true;logDraw();return;}
     // A decision at the edge of the deck is turned to, not answered or followed.
     var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
     if(leaf&&!leaf.classList.contains('on')){e.preventDefault();deckTo([].indexOf.call(leaf.parentNode.children,leaf),true);return;}
