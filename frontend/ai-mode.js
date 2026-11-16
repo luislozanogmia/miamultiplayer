@@ -1921,7 +1921,7 @@ function voiceSkipped(){try{return localStorage.getItem('miaAiModeVoiceSkip')||'
 function voiceCheck(){
   return call('/api/ai-mode/voices').then(function(r){
     voices=+r.data.voices||0;voice=0;askWhy=voices?'':str(r.data.problem,20);
-    $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices;
+    $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices||!!window.MiaRemotePhone;
     // A saved key that stopped working is said once more even after a skip.
     if(voices){if(ask!=='done')ask='';}
     else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask=window.MiaRemotePhone?'phone':'offer';
@@ -1930,6 +1930,7 @@ function voiceCheck(){
 }
 function voiceAskDraw(){
   var box=$('voiceAsk'),h='';
+  if(window.MiaRemotePhone && (ask==='offer'||ask==='setup'||ask==='saving'))ask='phone';
   if(ask==='phone')h='<b>Give Mia a voice</b><p>Connect ElevenLabs in Mia on your computer, then reopen Flow here.</p><div class="va-row"><button class="btn ghost" data-va="skip">Got it</button></div>';
   else if(ask==='offer')h=askWhy
     ?'<b>Mia\'s voice is not working</b><p>'+(askWhy==='key'?'ElevenLabs did not accept the key that is saved.':'ElevenLabs is not answering with the key that is saved.')+' Until it does, Mia stays silent.</p><div class="va-row"><button class="btn primary" data-va="setup">Fix it</button><button class="btn ghost" data-va="skip">Skip</button></div>'
@@ -1948,6 +1949,9 @@ function voiceAskDraw(){
   if($('voiceKey')&&ask==='setup'){$('voiceKey').value=typed;$('voiceKey').focus();}
 }
 function voiceAskDo(act){
+  if(window.MiaRemotePhone && (act==='setup'||act==='back'||act==='save')){
+    ask='phone';askNote='';voiceAskDraw();return;
+  }
   if(act==='setup'){ask='setup';askNote='';}
   else if(act==='back'){ask='offer';askNote='';}
   else if(act==='skip'){ask='';try{localStorage.setItem('miaAiModeVoiceSkip',askWhy||'none');}catch(e){}}
@@ -1955,6 +1959,7 @@ function voiceAskDo(act){
   voiceAskDraw();
 }
 function voiceSave(){
+  if(window.MiaRemotePhone)return;
   var key=$('voiceKey')?$('voiceKey').value.trim():'';
   if(ask!=='setup')return;
   if(!key){askNote='Paste your key first.';return voiceAskDraw();}
@@ -2216,7 +2221,7 @@ function build(){
     if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
   };
   $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();
-  $('voiceSet').onclick=function(){ask='setup';askNote='';voiceAskDraw();};
+  $('voiceSet').onclick=function(){voiceAskDo('setup');};
   $('voiceAsk').addEventListener('click',function(e){var b=e.target.closest('[data-va]');if(b&&!b.disabled)voiceAskDo(b.dataset.va);});
   $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
   $('stop').onclick=function(){hush();halt('');};
