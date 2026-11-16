@@ -18,6 +18,7 @@
     ['POST', new RegExp('^/api/conversations/(' + ID + ')/dispatches/' + ID + '/stop$'), true],
     ['POST', /^\/api\/ai-mode\/(?:seed|speech)$/],
     ['GET', /^\/api\/ai-mode\/voices$/],
+    ['GET', new RegExp('^/api/ai-mode/handoffs\\?conversation=' + ID + '$')],
     ['GET', /^\/api\/ai-mode\/images\?q=[^&#]{1,600}$/],
     ['GET', /^\/api\/ai-mode\/image\?u=[^&#]{1,3000}$/],
     ['GET', /^\/api\/ai-mode\/page\?since=[0-9]{1,16}$/],
@@ -32,6 +33,18 @@
     return out;
   }
   function json(status, value){ return {status:status, type:'application/json', bytes:Link.utf8(JSON.stringify(value))}; }
+  function rule(device, method, path, chats){
+    if(typeof path !== 'string' || path.length > 4000 || path.indexOf('..') >= 0) return false;
+    for(var i = 0; i < ALLOWED.length; i++){
+      var match = ALLOWED[i][0] === method && ALLOWED[i][1].exec(path);
+      if(match){
+        if(!ALLOWED[i][2]) return true;
+        try { return !!(chats[device] && chats[device][decodeURIComponent(match[1])]); }
+        catch(_badPath) { return false; }
+      }
+    }
+    return false;
+  }
 
   // deps: hub(method, path, body) calls the Hub as the signed-in person;
   // local({method, path, type, body}) asks this Mia and gives {status, type, bytes};
@@ -82,21 +95,13 @@
       if(links[device]) return links[device];
       var kept = state.devices[device];
       if(!kept) return null;
-      return links[device] = Link.channel(await Link.importKey(kept.secret), device, 'computer', now);
+      return links[device] = Link.channel(await Link.importKey(kept.secret), device, 'computer', now, kept.seen || 0);
     }
 
-    function rule(device, method, path){
-      if(typeof path !== 'string' || path.length > 4000 || path.indexOf('..') >= 0) return false;
-      for(var i = 0; i < ALLOWED.length; i++){
-        var match = ALLOWED[i][0] === method && ALLOWED[i][1].exec(path);
-        if(match) return !ALLOWED[i][2] || !!(chats[device] && chats[device][decodeURIComponent(match[1])]);
-      }
-      return false;
-    }
     async function answer(device, head, payload){
       var result;
       try {
-        if(!rule(device, head.method, head.path)) result = json(404, {error:'not_found'});
+        if(!rule(device, head.method, head.path, chats)) result = json(404, {error:'not_found'});
         else {
           result = await deps.local({method:head.method, path:head.path, type:head.type || '', body:payload.length ? payload : null});
           if(result.bytes.length > MAX_ANSWER_BYTES) result = json(502, {error:'answer_too_large'});
@@ -153,10 +158,11 @@
       for(var i = 0; i < pending.length; i++){
         var link = Link.channel(pending[i].key, device, 'computer', now), opened = await link.open(data);
         if(!opened || opened.stale) continue;
-        state.devices[device] = {secret:pending[i].secret};
+        state.devices[device] = {secret:pending[i].secret, seen:opened.head.n};
+        try { await deps.store.save(state); }
+        catch(error) { delete state.devices[device]; throw error; }
         pending.splice(i, 1);
         links[device] = link;
-        await deps.store.save(state);
         deps.changed();
         return opened;
       }
@@ -170,13 +176,22 @@
       if(changed){ await deps.store.save(state); deps.changed(); }
       var frames = Array.isArray(reply.frames) ? reply.frames : [];
       for(var i = 0; i < frames.length; i++){
-        var device = frames[i].device, link = await linkFor(device);
+        var device = frames[i].device, link = await linkFor(device), before = link ? link.lastSeen() : 0;
         var opened = link ? await link.open(frames[i].data) : await adopt(device, frames[i].data);
         if(!opened) continue;
         if(opened.stale){
           // Tell the phone at most now and then, so it can say its clock is off.
           if(!(now() - (staleAt[device] || 0) < 10000)){ staleAt[device] = now(); push(device, {head:{t:'stale'}}); }
           continue;
+        }
+        // The Hub repeats an unconfirmed frame after a computer restart. Keep
+        // the authenticated sequence before executing a request, so it cannot
+        // execute twice if this app closes before acknowledging the frame.
+        var kept = state.devices[device];
+        if(kept && kept.seen !== opened.head.n){
+          kept.seen = opened.head.n;
+          try { await deps.store.save(state); }
+          catch(error){ kept.seen = before; link.restoreSeen(before); throw error; }
         }
         handle(device, opened);
       }
@@ -255,5 +270,5 @@
   }
   if(root.document && root.MiaHubChat) install();
 
-  return {createHost:createHost};
+  return {createHost:createHost, allowedRequest:rule};
 });

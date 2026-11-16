@@ -13,8 +13,11 @@ function clean(value) {
   const devices = value.devices;
   if (!devices || typeof devices !== 'object' || Array.isArray(devices)) return null;
   const ids = Object.keys(devices);
-  if (ids.length > MAX_PHONES || !ids.every(id => HOST.test(id) && devices[id] && SECRET.test(devices[id].secret || ''))) return null;
-  return { host: value.host, devices: Object.fromEntries(ids.map(id => [id, { secret: devices[id].secret }])) };
+  if (ids.length > MAX_PHONES || !ids.every(id => HOST.test(id) && devices[id] && SECRET.test(devices[id].secret || '')
+    && (devices[id].seen === undefined || (Number.isSafeInteger(devices[id].seen) && devices[id].seen >= 0)))) return null;
+  return { host: value.host, devices: Object.fromEntries(ids.map(id => [id, {
+    secret: devices[id].secret, ...(devices[id].seen === undefined ? {} : { seen: devices[id].seen }),
+  }])) };
 }
 function readState(file) {
   try { return clean(JSON.parse(fs.readFileSync(file, 'utf8'))); }

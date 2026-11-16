@@ -38,6 +38,9 @@ export async function buildPhonePage({ out, hub = '' }) {
     const tag = /<meta name="mia-hub" content="[^"]*">/;
     if (!tag.test(page)) throw new Error('phone.html has no mia-hub tag');
     page = page.replace(tag, `<meta name="mia-hub" content="${hub}">`);
+    const cspHub = "connect-src 'self' https://hub.miamultiplayer.com;";
+    if (!page.includes(cspHub)) throw new Error('phone.html has no Hub content policy');
+    page = page.replace(cspHub, `connect-src 'self' ${hub};`);
   }
   await writeFile(join(out, 'index.html'), page);
   const manifest = JSON.parse(await readFile(join(FRONT, 'phone.webmanifest'), 'utf8'));

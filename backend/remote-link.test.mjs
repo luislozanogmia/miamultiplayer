@@ -12,6 +12,7 @@ import { buildPhonePage, PHONE_FILES } from '../scripts/build_phone_page.mjs';
 
 const require = createRequire(import.meta.url);
 const Link = require('../frontend/remote-link-core.js');
+const Host = require('../frontend/remote-link-host.js');
 const { readState, writeState } = require('./remote-link.js');
 const { hubRouteLimits } = require('./hub-client.js');
 
@@ -41,6 +42,8 @@ test('a sealed frame opens once, only for the other side of the same phone, and 
   assert.ok(!Buffer.from(frame, 'base64url').includes('hello'));
   const opened = await computer.open(frame);
   assert.equal(opened.head.id, 'r1'); assert.equal(Link.text(opened.payload), 'hello');
+  assert.deepEqual(await Link.channel(key, device, 'computer', () => clock, computer.lastSeen()).open(frame),
+    { stale: true }, 'a computer restart cannot replay an accepted frame');
   assert.deepEqual(await computer.open(frame), { stale: true }, 'played again');
   assert.equal(await computer.open(frame.slice(0, -3) + (frame.endsWith('AAA') ? 'BBB' : 'AAA')), null, 'altered');
   assert.equal(await phone.open(frame), null, 'sent back to its writer');
@@ -56,6 +59,11 @@ test('the pairing kept on the computer is checked before it is saved and private
   const good = { host: 'a'.repeat(32), devices: { ['b'.repeat(32)]: { secret: randomBytes(32).toString('base64url') } } };
   assert.deepEqual(writeState(file, { ...good, extra: 1 }), good);
   assert.deepEqual(readState(file), good);
+  const kept = { host: good.host, devices: { ['b'.repeat(32)]: { ...good.devices['b'.repeat(32)], seen: 12345 } } };
+  assert.deepEqual(writeState(file, kept), kept);
+  assert.deepEqual(readState(file), kept);
+  assert.equal(writeState(file, { host: good.host, devices: { ['b'.repeat(32)]: { secret: good.devices['b'.repeat(32)].secret, seen: -1 } } }), null);
+  writeState(file, good);
   if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
   for (const bad of [null, {}, { host: 'x', devices: {} }, { host: good.host, devices: { nope: { secret: 'x' } } }, { host: good.host, devices: { ['b'.repeat(32)]: { secret: 'short' } } },
     { host: good.host, devices: Object.fromEntries([...Array(11)].map((_, i) => [String(i).padStart(32, '0'), { secret: randomBytes(32).toString('base64url') }])) }]) {
@@ -66,6 +74,38 @@ test('the pairing kept on the computer is checked before it is saved and private
   assert.equal(readState(file), null);
 });
 
+test('the computer saves a remote request position before acting and rejects its replay after restart', async () => {
+  const device = 'b'.repeat(32), secret = randomBytes(32).toString('base64url');
+  const now = 1_000_000_000;
+  const key = await Link.importKey(secret);
+  const frame = await Link.channel(key, device, 'phone', () => now).seal({
+    t: 'req', id: 'request-1', method: 'POST', path: '/api/conversations/ai-mode', type: 'application/json',
+  }, Link.utf8('{}'));
+  let state = { host: 'a'.repeat(32), devices: { [device]: { secret } } };
+  const store = { load: async () => structuredClone(state), save: async next => { state = structuredClone(next); } };
+  const poll = { epoch: 'one', frames: [{ seq: 1, device, data: frame }], devices: [{ id: device, online: true }] };
+  let acted = 0, first;
+  first = Host.createHost({ store, now: () => now, changed: () => {},
+    hub: async (_method, path) => path.endsWith('/poll') ? poll : { ok: true },
+    local: async () => { assert.ok(state.devices[device].seen >= now); acted++; first.stop(); return { status: 200, type: 'application/json', bytes: Link.utf8('{}') }; },
+    socket: () => { throw new Error('unused'); },
+  });
+  await first.start();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(acted, 1);
+  assert.ok(state.devices[device].seen >= now);
+
+  const second = Host.createHost({ store, now: () => now, changed: () => {},
+    hub: async (_method, path) => path.endsWith('/poll') ? poll : { ok: true },
+    local: async () => { acted++; throw new Error('replayed'); },
+    socket: () => { throw new Error('unused'); },
+  });
+  await second.start();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  second.stop();
+  assert.equal(acted, 1);
+});
+
 test('the computer\'s held read and its sends to the Hub get room and time', () => {
   const base = '/v1/remote/hosts/' + 'a'.repeat(32);
   assert.equal(hubRouteLimits('POST', base + '/poll').timeout, 30000);
@@ -74,11 +114,24 @@ test('the computer\'s held read and its sends to the Hub get room and time', () 
   assert.ok(hubRouteLimits('POST', base + '/poll').response >= 1024 * 1024);
 });
 
+test('the phone can read its Flow handoff reports and page pictures through the bounded relay', () => {
+  const allowed = (method, path) => Host.allowedRequest('phone', method, path, {});
+  assert.equal(allowed('GET', '/api/ai-mode/handoffs?conversation=flow_1'), true);
+  assert.equal(allowed('GET', '/api/ai-mode/page?since=123'), true);
+  assert.equal(allowed('POST', '/api/ai-mode/page'), false);
+  assert.equal(allowed('GET', '/api/conversations/other/events?latest=true'), false);
+  assert.equal(allowed('GET', '/api/ai-mode/handoffs?conversation=../other'), false);
+});
+
 test('the phone page folder holds everything the page loads and names its Hub', async () => {
   const out = join(mkdtempSync(join(tmpdir(), 'mia-phone-page-')), 'phone');
   await buildPhonePage({ out, hub: 'https://hub.example.test' });
   const page = readFileSync(join(out, 'index.html'), 'utf8');
   assert.match(page, /<meta name="mia-hub" content="https:\/\/hub\.example\.test">/);
+  assert.match(page, /script-src 'self';/);
+  assert.match(page, /img-src 'self' data: blob:;/);
+  assert.match(page, /connect-src 'self' https:\/\/hub\.example\.test;/);
+  assert.ok(!page.includes('connect-src \'self\' https://hub.miamultiplayer.com;'));
   assert.ok(!/<script(?![^>]*\ssrc=)/.test(page), 'no inline script');
   const loaded = [...page.matchAll(/(?:src|href)="([^"?#]+)/g)].map(m => m[1]).filter(path => !/^https?:/.test(path));
   for (const path of loaded) assert.ok(statSync(join(out, path)).size > 0, path);

@@ -67,12 +67,14 @@
   // One side's end of the sealed conversation with one phone. `side` is
   // 'phone' or 'computer'; each frame says which side wrote it and for which
   // phone, so a frame cannot be played back to its own sender or to another.
-  function channel(key, device, side, now){
+  function channel(key, device, side, now, initialSeen){
     now = now || Date.now;
     var mine = utf8(LABEL + ' ' + side + ' ' + device);
     var theirs = utf8(LABEL + ' ' + (side === 'phone' ? 'computer' : 'phone') + ' ' + device);
-    var sent = 0, seen = 0;
+    var sent = 0, seen = Number.isSafeInteger(initialSeen) && initialSeen >= 0 ? initialSeen : 0;
     return {
+      lastSeen: function(){ return seen; },
+      restoreSeen: function(value){ if(Number.isSafeInteger(value) && value >= 0) seen = value; },
       seal: async function(head, payload){
         sent = Math.max(now(), sent + 1);
         var top = utf8(JSON.stringify(Object.assign({}, head, {n:sent}))), size = new Uint8Array(4);
