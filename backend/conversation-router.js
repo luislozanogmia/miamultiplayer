@@ -170,6 +170,18 @@ function createConversationRouter({ service, attachmentStore = null, resolvePrin
     res.status(201).json({ conversation });
   }));
 
+  // Opened in a company, AI mode's chat belongs to that company, like your
+  // own chat with Mia there: you must be in it.
+  router.post('/conversations/ai-mode', handle(async (req, res) => {
+    const { companyId, principal } = context(req);
+    const teamWorkspace = (req.body || {}).teamWorkspace;
+    if (teamWorkspace !== undefined && (typeof teamWorkspace !== 'string' || !/^hub_[a-f0-9]{32}$/.test(teamWorkspace)
+        || typeof authorizeTeamWorkspace !== 'function' || !(await authorizeTeamWorkspace(req, teamWorkspace)))) {
+      fail('FORBIDDEN', 'company membership is required for AI mode in a company');
+    }
+    res.status(201).json({ conversation: service.openAiModeConversation({ companyId, principal, teamWorkspace, fresh: (req.body || {}).fresh === true }) });
+  }));
+
   router.get('/conversations/:conversationId', handle((req, res) => {
     const { companyId, principal } = context(req);
     const conversation = service.getConversation({ companyId, conversationId: req.params.conversationId, principal });

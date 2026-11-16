@@ -53,3 +53,9 @@ test('Sign in asks the backend for the address and opens it in the default brows
     assert.match(await ui.signIn('attio'), /couldn’t open your browser/);
   } finally { status = 'signed_in'; delete globalThis.miaDesktop; } // the row watcher looks once more, then stops
 });
+
+test('an app Mia offers to everyone shows its key field and no Remove until it is added', () => {
+  const row = ui.rowHtml({ id: 'elevenlabs', name: 'ElevenLabs', auth: 'key', status: 'needs_key', where: 'uvx elevenlabs-mcp', offered: true }, { esc });
+  assert.match(row, /data-mcp-key="elevenlabs"/);
+  assert.doesNotMatch(row, /data-mcp-remove/);
+});

@@ -61,3 +61,8 @@ test('the demos carry no real person or the old repo link', () => {
     assert.doesNotMatch(page, /luislozanog|mia_multiplayer/, id);
   }
 });
+
+test('an open demo is the only tile marked in the rail', () => {
+  assert.match(app, /var marked = active && !document\.body\.classList\.contains\('workspace-demo-open'\);\s*option\.classList\.toggle\('active', marked\);/);
+  assert.match(app, /document\.body\.classList\.toggle\('workspace-demo-open', open\);[^}]*renderWorkspaceSwitcher\(\);/);
+});

@@ -46,6 +46,7 @@ const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisio
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
 const meetingSuggestions = require('./meeting-suggestions');
+const aiMode = require('./ai-mode');
 const nextStep = require('./next-step');
 const { reasoningRepeatsReply } = require('./reasoning-summary');
 const { safeBrowserContext } = require('./browser-context');
@@ -170,7 +171,7 @@ const { colorFromHue, botColorForName } = require('./bot-colors');
 const { createConversationDispatchService, dispatchOwnerAccountIsActive } = require('./conversation-dispatch');
 const { resolveMentionedBots } = require('./conversation-routing');
 const { createConversationRealtime } = require('./conversation-realtime');
-const { extractToolActivity } = require('./agent-activity');
+const { extractToolActivity, toolActivityLine } = require('./agent-activity');
 const { createConversationAttachmentStore } = require('./conversation-attachments');
 const turnFiles = require('./turn-files');
 const { createConversationRouter } = require('./conversation-router');
@@ -1443,7 +1444,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       if (!id) return;
       if (approvals) approvals.bind(session);
       runSessions.push(id);
-      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: String(sharedBot.id), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
+      // The person's own copy of this bot, when there is one, so its pages
+      // join the same tab group as in their own chat with it.
+      sharedBotRunSessions.set(id, { owner: String(owner || '').trim().toLowerCase(), botId: browserBotId(sharedBot, asker && asker.localBotId), name: String(sharedBot.name || 'Bot'), workspace: `hub_${String(channel.teamId || '').toLowerCase()}`,
         // The folders this run works in, the only ones it may show in the file manager.
         folders: [teamFolder, teamWorkFolder].filter(Boolean) });
     };
@@ -1465,7 +1468,12 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
       }
     }
     const turn = await runBotReplyTurn({
-      agent: teamFolder ? { ...sharedBot, filesFolder: teamFolder } : sharedBot,
+      // A company bot with a shared folder has one memory for the whole
+      // company, whoever asks: the app syncs it into the run's work folder
+      // before the run and back after it.
+      agent: { ...sharedBot, ...(teamFolder ? { filesFolder: teamFolder } : {}),
+        ...(bot.sharedFolder === true && teamWorkFolder
+          ? { memoryFile: path.join(teamWorkFolder, botSharedFolder.SHARED_DIR, botSharedFolder.MEMORY_FILE) } : {}) },
       senderLabel: trigger.author_email,
       message: trigger.body,
       promptLine: '[' + trigger.author_email + '] ' + withAttachment(trigger),
@@ -1926,6 +1934,30 @@ function botFilesTidyPlan() {
     bots: cronSync.listBotFileFolders(),
   });
 }
+// The one-time card about bots sharing what they learn (frontend/bot-memory-intro.js).
+const botMemoryIntro = require('./bot-memory-intro');
+const BOT_MEMORY_INTRO_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'bot-memory-intro.json');
+app.get('/api/bot-memory-intro', requireAuth, (req, res) => {
+  res.json({ state: botMemoryIntro.readState(BOT_MEMORY_INTRO_STATE).state || 'ask' });
+});
+app.post('/api/bot-memory-intro', requireAuth, (req, res) => {
+  const accept = req.body && req.body.accept;
+  if (typeof accept !== 'boolean') return res.status(400).json({ error: 'invalid_answer' });
+  res.json({ state: botMemoryIntro.answer(BOT_MEMORY_INTRO_STATE, accept) });
+});
+// Remote link: the phones paired with this computer (see frontend/remote-link-host.js).
+const remoteLink = require('./remote-link');
+const REMOTE_LINK_STATE = path.join(path.dirname(path.resolve(DB_PATH)), 'remote-link.json');
+// A person's own browser session only: a key used by automation must not read
+// or replace the keys the phones share with this computer.
+app.get('/api/remote-link/state', requireAuth, requireInteractiveAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store').json(remoteLink.readState(REMOTE_LINK_STATE));
+});
+app.put('/api/remote-link/state', requireAuth, requireInteractiveAuth, (req, res) => {
+  const state = remoteLink.writeState(REMOTE_LINK_STATE, req.body);
+  if (!state) return res.status(400).json({ error: 'invalid_remote_link_state' });
+  res.set('Cache-Control', 'no-store').json(state);
+});
 function botFilesTidyReview() {
   const moves = botFilesTidyPlan();
   const items = botFilesTidy.reviewPlan(miaosWorkspaceDir(), moves);
@@ -5999,8 +6031,12 @@ function mcpAppRoute(action) {
   };
 }
 function listedMcpApps() {
-  return mcpApps.defaultStore.list().map((app) => shownMcpApp(app,
-    app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))));
+  const added = mcpApps.defaultStore.list();
+  // An app Mia offers to everyone shows before it is added, waiting for its key.
+  const offered = mcpApps.builtInMcpApps().filter((app) => !added.some((item) => item.id === app.id));
+  return added.map((app) => shownMcpApp(app,
+    app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))))
+    .concat(offered.map((app) => ({ ...mcpApps.publicMcpApp(app, false), offered: true })));
 }
 app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
 app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
@@ -6019,11 +6055,15 @@ app.post('/api/mcp-apps/:id/sign-in', requireInteractiveAuth, mcpAppRoute(async 
   return { app: shownMcpApp(found, true), ...signIn };
 }));
 app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req) => {
-  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+  const id = String(req.params.id || '');
+  // The first key for an app Mia offers to everyone also adds the app.
+  const offered = mcpApps.defaultStore.get(id) ? null : mcpApps.builtInMcpApp(id);
+  const found = mcpApps.defaultStore.get(id) || offered;
   if (!found || found.auth !== 'key') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t take a key.', 404);
   const key = typeof (req.body || {}).key === 'string' ? req.body.key.trim() : '';
   await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), key);
+    if (offered) { mcpApps.defaultStore.add(offered); provisionHermesRuntimeProfiles(); shareMcpAppSignIns(); }
   }));
   // Mia, if she was told she is waiting on this key, now hears it is in.
   // The note names the app only; the key never leaves the profiles.
@@ -6050,6 +6090,15 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) 
 // bot, only its shared/ folder; file bytes travel as base64 JSON.
 const botSharedFolder = require('./bot-shared-folder');
 function sharedFolderFor(req) {
+  // A company bot asked in a channel: its work folder for that company on
+  // this computer, whether or not the person has their own copy of the bot.
+  const company = /^hub:([a-f0-9]{32}):([A-Za-z0-9_-]{1,120})$/.exec(String(req.params.id || ''));
+  if (company) {
+    if (EFFECTIVE_RELEASE_PROFILE.agentSearchOnly || !String(process.env.MIAOS_WORKSPACE_DIR || '').trim()) {
+      throw new botSharedFolder.SharedFolderError('no_work_folder', 'This bot has no working folder on this computer.', 409);
+    }
+    return botSharedFolder.createSharedFolder(cronSync.teamBotWorkFolder({ teamId: company[1] }, { registrationId: company[2] }));
+  }
   const bot = db.loadOne(conn, 'bots', String(req.params.id || ''));
   if (!bot || !botReachable(bot, req) || !sameOwner(bot, req.userEmail)) {
     throw new botSharedFolder.SharedFolderError('not_found', 'That bot is not here.', 404);
@@ -7237,6 +7286,88 @@ function nativeMiaHandoffBots(conversation, reply) {
   return resolveMentionedBots(reply, roster);
 }
 
+// AI mode: Mia is the router. The bots she can hand a job to are the person's own.
+function aiModeRouterBots(conversation, email) {
+  if (!conversation || conversation.type === 'bot') return [];
+  if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) return [];
+  // Every bot of theirs, whichever list it is kept in: the ones of this chat's own list come
+  // first, and a name is offered once.
+  const names = new Set();
+  return db.loadAll(conn, 'bots')
+    .filter((bot) => bot.name && bot.status !== 'draft' && sameOwner(bot, email))
+    .map((bot) => ({ bot, here: recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId) }))
+    .sort((a, b) => Number(b.here) - Number(a.here))
+    .filter(({ bot }) => {
+      const name = String(bot.name).trim().toLowerCase();
+      return name && !names.has(name) && names.add(name);
+    })
+    .map(({ bot }) => bot);
+}
+
+// The jobs Mia handed over from each AI mode chat, newest last, so she is told where
+// every bot stands on her next turn and the stage can show them again after the person
+// leaves and comes back. One entry per bot, for a day; kept with the chat itself.
+const aiModeHandoffLedger = new Map();
+const AI_MODE_LEDGER_MAX = 8;
+const AI_MODE_LEDGER_MS = 24 * 60 * 60 * 1000;
+
+function aiModeHandoffEntries(conversation) {
+  if (!aiModeHandoffLedger.has(conversation.id)) {
+    const saved = conversation.metadata && conversation.metadata.aiModeHandoffs;
+    aiModeHandoffLedger.set(conversation.id, (Array.isArray(saved) ? saved : [])
+      .filter((entry) => entry && entry.botId && entry.conversationId && entry.companyId));
+  }
+  return aiModeHandoffLedger.get(conversation.id).filter((entry) => Date.now() - entry.at < AI_MODE_LEDGER_MS);
+}
+
+function rememberAiModeHandoff(conversation, entry) {
+  const kept = aiModeHandoffEntries(conversation).filter((item) => item.botId !== entry.botId).concat([entry]).slice(-AI_MODE_LEDGER_MAX);
+  aiModeHandoffLedger.set(conversation.id, kept);
+  try {
+    const current = nativeConversationRepository.getConversation({ companyId: conversation.companyId, id: conversation.id });
+    nativeConversationRepository.updateConversation({
+      companyId: current.companyId, id: current.id,
+      metadata: { ...(current.metadata || {}), aiModeHandoffs: kept },
+      updatedAt: current.updatedAt || current.createdAt,
+    });
+  } catch (_) { /* still remembered while the app runs */ }
+}
+
+// -> [{ name, brief, state: 'working' | 'finished' | 'stopped', report, conversationId, at }]
+function aiModeHandoffReports(conversation) {
+  return aiModeHandoffEntries(conversation).map((entry) => {
+    const report = { name: entry.botName, brief: entry.brief, state: 'working', report: '', conversationId: entry.conversationId, at: entry.at };
+    try {
+      const { events } = nativeConversationRepository.listEvents({
+        companyId: entry.companyId, conversationId: entry.conversationId, latest: true, limit: 8, includeDeleted: false,
+      });
+      const reply = events.filter((event) => (event.senderType === 'bot' || event.senderType === 'agent')
+        && !(event.metadata && (event.metadata.progress === true || event.metadata.diagnostic === true || event.metadata.askBeforeDo))
+        && Date.parse(event.createdAt) >= entry.at && nativeEventText(event)).pop();
+      if (reply) return { ...report, state: 'finished', report: nativeEventText(reply) };
+      const dispatch = entry.dispatchId
+        ? nativeConversationRepository.getDispatch({ companyId: entry.companyId, id: entry.dispatchId }) : null;
+      if (dispatch && (dispatch.status === 'failed' || dispatch.status === 'completed')) report.state = 'stopped';
+    } catch (_) { /* a bot whose chat is gone is left as it was */ }
+    return report;
+  });
+}
+
+function aiModeHub(conversation, trigger) {
+  const providers = visibleChatModelProvidersForUser(nativeChatModelProviders, trigger.senderId);
+  return {
+    bots: aiModeRouterBots(conversation, trigger.senderId)
+      .map((bot) => ({ name: bot.name, about: bot.description || bot.instructions })),
+    models: Object.values(providers).flatMap((provider) => provider.models),
+    reports: aiModeHandoffReports(conversation),
+    // Flow Tandem: the person is in the normal app and Mia talks; the stage is not on screen.
+    tandem: !!(trigger.metadata && trigger.metadata.aiModeTandem === true),
+    // What the app can open by name, as the app listed it for this turn.
+    rooms: trigger.metadata && Array.isArray(trigger.metadata.aiModeRooms)
+      ? trigger.metadata.aiModeRooms.filter((name) => typeof name === 'string').slice(0, 80) : [],
+  };
+}
+
 function createNativeDispatchReplyEvent(dispatch, trigger, input) {
   const conversation = nativeConversationRepository.getConversation({
     companyId: dispatch.companyId,
@@ -7262,18 +7393,64 @@ function createNativeDispatchReplyEvent(dispatch, trigger, input) {
   });
 }
 
+// The bot's chat Mia hands work to. Asked from a company, it is the bot's
+// chat in that company (the one the person opens under My Bots there), so the
+// run belongs to that company and uses its browser tabs; asked from Solo it
+// is the bot's Solo chat.
+async function nativeHandoffBotConversation(bot, conversation, senderId) {
+  const main = await ensureNativeBotConversation(bot);
+  const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
+  const sender = String(senderId || '').trim().toLowerCase();
+  // Only your own bot has a chat of yours in a company.
+  if (!main || ownerOf(bot) !== sender) return main;
+  if (typeof team === 'string' && /^hub_[a-f0-9]{32}$/.test(team)) {
+    return nativeConversationService.createConversation({
+      companyId: nativeCompanyId('solo', sender),
+      principal: nativeConversationPrincipal(sender, 'solo'),
+      type: 'bot',
+      name: bot.name,
+      metadata: { botId: bot.id, departments: departmentsOf(bot), teamWorkspace: team, source: 'team-bot-chat' },
+    });
+  }
+  // A bot kept in the person's other list works in a chat beside the one that asked, so
+  // the stage that handed the job over can follow it.
+  if (!conversation || main.companyId === conversation.companyId) return main;
+  return nativeConversationService.createConversation({
+    companyId: conversation.companyId,
+    principal: { companyId: conversation.companyId, principalId: sender, principalType: 'user' },
+    type: 'bot',
+    name: bot.name,
+    metadata: { botId: bot.id, departments: departmentsOf(bot), source: 'team-bot-chat' },
+  });
+}
+
 // The legacy room transport used to turn Mia's @-mentions into worker calls after her message
 // posted. Native conversations mirror the user's delegated request into each
 // bot's own chat; the private Mia conversation remains a strict 1:1.
-async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, dispatch = null) {
+async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, dispatch = null, aiModeRun = false) {
   if (dispatch && cancelNativeDispatchForInactiveUser(dispatch, trigger)) return [];
-  const bots = nativeMiaHandoffBots(conversation, reply);
-  if (!bots.length) return [];
+  // In AI mode Mia writes each bot its own brief and may name the model for the job.
+  const jobs = [];
+  if (aiModeRun) {
+    const own = aiModeRouterBots(conversation, trigger.senderId);
+    const providers = visibleChatModelProvidersForUser(nativeChatModelProviders, trigger.senderId);
+    for (const handoff of aiMode.parseHandoffs(reply)) {
+      const wanted = handoff.bot.toLowerCase();
+      const bot = own.find((candidate) => String(candidate.name).trim().toLowerCase() === wanted);
+      if (!bot || jobs.some((job) => job.bot.id === bot.id)) continue;
+      jobs.push({ bot, brief: handoff.brief, text: aiMode.handoffText(handoff.brief), model: aiMode.matchModel(handoff.model, providers) });
+    }
+  }
   const text = nativeEventText(trigger);
-  return Promise.all(bots.map(async (bot) => {
+  for (const bot of nativeMiaHandoffBots(conversation, reply)) {
+    if (!jobs.some((job) => job.bot.id === bot.id)) jobs.push({ bot, brief: text, text, model: null });
+  }
+  if (!jobs.length) return [];
+  return Promise.all(jobs.map(async ({ bot, brief, text: jobText, model }) => {
     if (dispatch && cancelNativeDispatchForInactiveUser(dispatch, trigger)) return null;
-    const botConversation = await ensureNativeBotConversation(bot);
+    const botConversation = await nativeHandoffBotConversation(bot, conversation, trigger.senderId);
     if (!botConversation) return null;
+    const at = Date.now();
     const result = createNativeDispatchEvent(dispatch, trigger, {
       companyId: botConversation.companyId,
       conversationId: botConversation.id,
@@ -7283,12 +7460,13 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
         principalType: 'user',
       },
       type: 'message',
-      content: { text },
+      content: { text: jobText },
       clientIdempotencyKey: `native-mia-handoff-${miaEvent.id}-${bot.id}`,
       metadata: {
         delegatedBy: 'gateway',
         sourceConversationId: conversation.id,
         sourceEventId: trigger.id,
+        ...(model ? { chatModelSelection: model } : {}),
       },
       routing: {
         oneToOneAgent: {
@@ -7305,7 +7483,13 @@ async function enqueueNativeMiaHandoffs(conversation, trigger, miaEvent, reply, 
         },
       },
     });
-    return result.dispatch || null;
+    if (aiModeRun && result.dispatch) {
+      rememberAiModeHandoff(conversation, {
+        botId: bot.id, botName: bot.name || bot.id, brief, at,
+        companyId: botConversation.companyId, conversationId: botConversation.id, dispatchId: result.dispatch.id,
+      });
+    }
+    return result.dispatch ? { ...result.dispatch, botName: bot.name || bot.id } : null;
   }));
 }
 
@@ -7550,6 +7734,20 @@ function browserWorkspaceForConversation(conversation, companyId, email) {
   return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
 }
 
+// A bot's tab group is keyed by its id on this computer. A bot's own chat
+// runs it under that id; a channel run of the person's copy of a company bot
+// carries the company's versioned id, so it takes the local one when the
+// person has such a copy. Without one it keeps the company id.
+function browserBotId(bot, localBotId) {
+  return String(localBotId || (bot && bot.id) || '');
+}
+
+// What the desktop browser gets for a bot's run, from its own chat or a
+// channel alike: the same identity, so the same tab group.
+function browserBotActor({ botId, name, workspace, folders }) {
+  return { kind: 'bot', botId: String(botId), name: String(name || 'Bot'), workspace, folders: browserActorFolders(folders) };
+}
+
 // A bot may show only the folders its own run works in (its Mia folder and
 // working folder) in the system file manager; the desktop host checks the
 // path against these. Mia's own agent gets none: she may show any folder.
@@ -7568,7 +7766,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   if (shared) {
     // Only the person running it here: the bot uses their browser, as in Solo.
     if (shared.owner !== String(req.userEmail || '').trim().toLowerCase()) return res.status(200).json({ actor: null });
-    return res.status(200).json({ actor: { kind: 'bot', botId: shared.botId, name: shared.name, workspace: shared.workspace, folders: browserActorFolders(shared.folders) } });
+    return res.status(200).json({ actor: browserBotActor(shared) });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
   if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
@@ -7584,7 +7782,7 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
   }
   const workspace = browserWorkspaceForConversation(conversation, target.companyId, req.userEmail);
   return res.status(200).json({ actor: target.botId
-    ? { kind: 'bot', botId: String(target.botId), name: String(target.agentName || 'Bot'), workspace, folders: browserActorFolders(target.folders) }
+    ? browserBotActor({ botId: browserBotId(target.agent, target.botId), name: target.agentName, workspace, folders: target.folders })
     : { kind: 'mia', workspace } });
 });
 // Per-session chain so a verdict that waits on the goal snapshot still posts
@@ -7600,6 +7798,7 @@ function bindNativeHermesSessionEvents() {
     const target = nativeGatewaySessionConversations.get(key);
     if (target && kind === 'turn.start') activateBrowserRun(target, 'continuation');
     if (target && kind === 'turn.complete') expireBrowserRun(target, 'continuation');
+    if (target && kind === 'worker') return publishAiModeWorker(target, data);
     const next = (nativeHermesSessionEventChains.get(key) || Promise.resolve())
       .then(() => handleNativeHermesSessionEvent(key, kind, data))
       .catch(() => {});
@@ -7609,6 +7808,21 @@ function bindNativeHermesSessionEvents() {
     });
   });
 }
+
+// A background worker reporting after Mia's turn ended: the stage still shows it.
+function publishAiModeWorker(target, data) {
+  try {
+    const signal = aiMode.workerSignal(data && data.type, data && data.payload, aiModeStepLabel);
+    if (!signal || target.botId) return;
+    const conversation = nativeConversationRepository.getConversation({ companyId: target.companyId, id: target.conversationId });
+    if (!aiMode.isAiModeConversation(conversation)) return;
+    nativeConversationRealtime.publishActivity(target.conversationId, { agentName: target.agentName || 'Mia', at: Date.now(), ...signal });
+  } catch (_) { /* the stage must never break a turn */ }
+}
+const aiModeStepLabel = (tool) => {
+  const step = extractToolActivity('tool.start', { name: tool });
+  return (step && step.label) || 'Working';
+};
 
 // Hermes' goal state for the chip: an object, null (no goal), or undefined
 // when it could not be read (the chip then keeps what it had).
@@ -7718,6 +7932,9 @@ function redactHermesChatDetail(value) {
   return text;
 }
 
+// Any other event shows at most this much of its detail.
+const HERMES_DEBUG_EVENT_CHARS = 600;
+
 function hermesDebugEventText(type, payload) {
   const eventType = String(type || '').trim();
   const event = payload && typeof payload === 'object' ? payload : {};
@@ -7743,6 +7960,10 @@ function hermesDebugEventText(type, payload) {
     const kind = String(event.kind || '').trim();
     return status ? `Status${kind ? ` — ${kind}` : ''}\n${status}` : '';
   }
+
+  // A tool call is one plain line. Its command, code and output stay out of
+  // the chat: a single file write would otherwise fill the screen.
+  if (eventType.startsWith('tool.')) return toolActivityLine(eventType, event);
 
   const name = String(event.name || event.tool || '').trim();
   const lines = [`Debug · ${eventType}${name ? ` — ${name}` : ''}`];
@@ -7773,7 +7994,8 @@ function hermesDebugEventText(type, payload) {
     delete details.tool;
     if (Object.keys(details).length) lines.push(`Details:\n${redactHermesChatDetail(JSON.stringify(details, null, 2))}`);
   }
-  return lines.join('\n');
+  const text = lines.join('\n');
+  return text.length > HERMES_DEBUG_EVENT_CHARS ? `${text.slice(0, HERMES_DEBUG_EVENT_CHARS)}…` : text;
 }
 
 function splitHermesDebugText(text, maxLength = 7000) {
@@ -7796,6 +8018,8 @@ function splitHermesDebugText(text, maxLength = 7000) {
 // message.complete/status change).
 const HERMES_DELTA_FLUSH_CHARS = 1200;
 const HERMES_DELTA_FLUSH_MS = 1500;
+// How often AI mode is sent the reply Mia is writing.
+const AI_MODE_DRAFT_MS = 300;
 
 // Where to cut an over-cap buffer: the last newline or sentence end inside
 // the cap, provided it keeps at least half a chunk; otherwise the last
@@ -8388,8 +8612,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   const isGatewayAgent = dispatch.targetType === 'gateway';
   const message = nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename));
   const rawChatModelSelection = trigger.metadata && trigger.metadata.chatModelSelection;
+  // An AI mode run has no model picker: it takes its own model when the
+  // person can reach it, and their usual one otherwise.
+  const ownSelection = !rawChatModelSelection && isGatewayAgent && aiMode.isAiModeConversation(conversation)
+    ? await chatModelSelectionForUser(aiMode.modelSelection(), trigger.senderId).catch(() => null)
+    : null;
   const chatModelSelection = await chatModelSelectionForUser(
-    rawChatModelSelection,
+    ownSelection || rawChatModelSelection,
     trigger.senderId
   );
   if (!message) return;
@@ -8629,8 +8858,49 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       },
     })).catch(() => {});
   };
+  // AI mode has no chat to read, so its screen is drawn from the run itself:
+  // what Mia says between steps and the reply as she writes it. Her private
+  // reasoning is not shown. Never saved; only the person who gave the direction is here.
+  const aiModeRun = dispatch.targetType === 'gateway' && aiMode.isAiModeConversation(conversation);
+  const publishAiModeSignal = (signal) => {
+    try {
+      nativeConversationRealtime.publishActivity(dispatch.conversationId, {
+        dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), ...signal,
+      });
+    } catch (_) { /* the stage must never break a turn */ }
+  };
+  let aiModeDraft = '';
+  let aiModeDraftTimer = null;
+  const publishAiModeDraft = () => {
+    aiModeDraftTimer = null;
+    const text = stripAgentActionBlocks(redactHermesChatDetail(aiModeDraft)).trim();
+    if (text) publishAiModeSignal({ aiMode: 'writing', text });
+  };
+  const postAiModeSignal = (type, payload) => {
+    const text = String((payload && (payload.text || payload.rendered)) || '');
+    if (type === 'thinking.delta' || type === 'reasoning.delta') return;
+    // A background worker she started shows on the stage as a bot at work.
+    const worker = aiMode.workerSignal(type, payload, aiModeStepLabel);
+    if (worker) return publishAiModeSignal(worker);
+    if (type === 'message.delta' && text) {
+      aiModeDraft += text;
+      if (!aiModeDraftTimer) aiModeDraftTimer = setTimeout(publishAiModeDraft, AI_MODE_DRAFT_MS);
+      return;
+    }
+    if (type === 'tool.start') {
+      // What she wrote just before a step is her narration of it.
+      const line = aiMode.narration(stripAgentActionBlocks(redactHermesChatDetail(aiModeDraft)));
+      aiModeDraft = '';
+      if (line) publishAiModeSignal({ aiMode: 'said', text: line });
+    }
+    if (type === 'message.interim' && text.trim()) {
+      const line = aiMode.narration(stripAgentActionBlocks(redactHermesChatDetail(text)));
+      if (line) publishAiModeSignal({ aiMode: 'said', text: line });
+    }
+  };
   const postHermesProgress = (type, payload) => {
     if (onProgress) onProgress(type, payload);
+    if (aiModeRun) postAiModeSignal(type, payload);
     if (trackBudget) trackBudget(type, payload);
     if (type !== 'session.info') {
       const activeGateway = nativeActiveGatewaySessions.get(nativeDispatchChainKey(dispatch));
@@ -8667,6 +8937,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       try {
         nativeConversationRealtime.publishActivity(dispatch.conversationId, {
           dispatchId: dispatch.id, agentName: agent.name, at: Date.now(), step: dispatch.toolSteps || 0, ...toolActivity,
+          ...(aiModeRun && toolActivity.phase === 'start' ? { detail: aiMode.toolTrace(payload) } : {}),
         });
       } catch (_) { /* the status panel must never break a turn */ }
     }
@@ -8731,6 +9002,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     ownsPrivateAgentConversation && conversation.companyId === nativeCompanyId('solo', senderLabel)
       && !slashCommand && !privateAgent ? botFilesTidyTurnNote(trigger) : '',
     slashCommand ? '' : nextStep.nextStepInstruction(),
+    aiModeRun ? aiMode.turnNote(aiModeHub(conversation, trigger))
+      : ownsPrivateAgentConversation && !slashCommand && !privateAgent ? aiMode.aboutNote() : '',
     ].filter(Boolean).join('\n\n');
     const gatewayKey = nativeDispatchChainKey(dispatch);
     ownsMiaChat = ownsPrivateAgentConversation && !slashCommand && !privateAgent;
@@ -8750,7 +9023,8 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       storedSessionId: resumedGatewaySessionId,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       title: conversation.name || 'Mia conversation',
-      options: inferenceOptions,
+      // Her own chat keeps one session, so it is worth compacting while quiet.
+      options: ownsPrivateAgentConversation ? { ...inferenceOptions, compactWhenIdle: true } : inferenceOptions,
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
@@ -8866,7 +9140,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
         : null,
       seedMessages: nativeHermesGatewaySeedMessages(systemPrompt, historyEvents, trigger.id),
       title: conversation.name || agent.name || 'Bot conversation',
-      options: inferenceOptions,
+      options: { ...inferenceOptions, compactWhenIdle: true },
       onEvent: postHermesProgress,
       onSession: (session) => {
         throwIfNativeDispatchUserInactive(dispatch, trigger);
@@ -9076,7 +9350,17 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   });
   recordTidyPlanEvent(result, tidyPlan);
   if (dispatch.targetType === 'gateway') {
-    await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch);
+    const handoffs = await enqueueNativeMiaHandoffs(conversation, trigger, result.event, safeReply, dispatch, aiModeRun);
+    // The stage follows each bot Mia handed the work to, in that bot's own chat.
+    const bots = aiModeRun ? handoffs.filter(Boolean).map((handoff) => ({
+      id: handoff.targetId, name: handoff.botName,
+      conversationId: handoff.conversationId, dispatchId: handoff.id,
+    })) : [];
+    if (bots.length) publishAiModeSignal({ aiMode: 'handoff', bots });
+    // Mia moves what the person sees herself: each "Open:" line of her reply is done by the app,
+    // in the app itself in Flow Tandem and on the stage in Flow.
+    const opens = aiModeRun ? aiMode.parseOpens(safeReply) : [];
+    if (opens.length) publishAiModeSignal({ aiMode: 'open', targets: opens });
   }
   return result;
 }
@@ -9451,6 +9735,97 @@ app.post('/api/space/suggestions', requireAuth, async (req, res) => {
   } catch (err) {
     res.status(200).json({ suggestions: [] });
   }
+});
+
+// AI mode: what to picture behind the stage while Mia works on a direction.
+// Body: {said: the direction}. Mia's run itself goes through her hidden chat
+// (POST /api/conversations/ai-mode); this only picks the pictures and colors.
+app.post('/api/ai-mode/seed', requireAuth, async (req, res) => {
+  const prompt = aiMode.seedPrompt((req.body || {}).said);
+  if (!prompt) return res.status(400).json({ error: 'said is required' });
+  try {
+    const reply = await scheduleInference(prompt, 'background', await inferenceOptionsForUser(req.userEmail));
+    res.status(200).json({ seed: aiMode.parseSeed(reply) });
+  } catch (err) {
+    res.status(200).json({ seed: aiMode.parseSeed('') });
+  }
+});
+
+// Mia's voice in AI mode. GET says how many voices there are to pick from (0:
+// Mia says nothing out loud, and `problem` says why when a key is saved); POST {text, voice} returns the line
+// spoken. The key is the one saved for ElevenLabs in Connected apps.
+const speechKey = () => mcpApps.readProfileKey(mcpAppKeyFiles()[0], mcpApps.keyEnvName('elevenlabs'));
+app.get('/api/ai-mode/voices', requireAuth, async (req, res) => {
+  try {
+    res.status(200).json(await aiMode.speechState({ key: speechKey() }));
+  } catch (err) {
+    res.status(200).json({ voices: 0, problem: '' });
+  }
+});
+app.post('/api/ai-mode/speech', requireAuth, async (req, res) => {
+  try {
+    const spoken = await aiMode.synthesize((req.body || {}).text, Number((req.body || {}).voice), { key: speechKey() });
+    if (!spoken) return res.status(404).json({ error: 'speech unavailable' });
+    res.set('Content-Type', spoken.type).set('Cache-Control', 'no-store').status(200).send(spoken.body);
+  } catch (err) {
+    res.status(502).json({ error: 'speech failed' });
+  }
+});
+
+// Pictures for the background of AI mode, by the short subject Mia named.
+app.get('/api/ai-mode/images', requireAuth, async (req, res) => {
+  try {
+    const found = await aiMode.searchImages(req.query.q);
+    res.status(200).json({ images: found.map((url) => `/api/ai-mode/image?u=${encodeURIComponent(url)}`) });
+  } catch (err) {
+    res.status(200).json({ images: [] });
+  }
+});
+
+// The page loads pictures only from Mia, so each one passes through here.
+app.get('/api/ai-mode/image', requireAuth, async (req, res) => {
+  try {
+    const image = await aiMode.fetchImage(req.query.u);
+    if (!image) return res.status(404).end();
+    res.setHeader('Content-Type', image.type);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.status(200).end(image.body);
+  } catch (err) {
+    res.status(404).end();
+  }
+});
+
+// The bots Mia put to work from this AI mode chat, for a stage that was closed and opened again.
+app.get('/api/ai-mode/handoffs', requireAuth, (req, res) => {
+  let bots = [];
+  try {
+    const principal = nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req));
+    const conversation = nativeConversationService.getConversation({
+      companyId: principal.companyId, conversationId: String(req.query.conversation || ''), principal,
+    });
+    if (aiMode.isAiModeConversation(conversation)) {
+      bots = aiModeHandoffReports(conversation).map(({ name, state, report, conversationId, at }) => ({ name, state, report, conversationId, at }));
+    }
+  } catch (_) { /* a chat that is not theirs has no bots to show */ }
+  res.set('Cache-Control', 'no-store').status(200).json({ bots });
+});
+
+// The page Mia is working in, as a picture on the stage. GET is the stage
+// asking for the latest one. POST is the desktop app: an empty body asks
+// whether a stage wants one, {url, title, image} hands it over.
+const aiModePages = aiMode.createStagePages();
+app.get('/api/ai-mode/page', requireAuth, (req, res) => {
+  const owner = String(req.userEmail).toLowerCase();
+  aiModePages.want(owner);
+  // ?since= is the last picture the stage has, so the same one is not sent twice.
+  const page = aiModePages.get(owner);
+  res.set('Cache-Control', 'no-store').status(200).json({ page: page && page.at > (Number(req.query.since) || 0) ? page : null });
+});
+app.post('/api/ai-mode/page', requireAuth, (req, res) => {
+  const owner = String(req.userEmail).toLowerCase();
+  const frame = aiMode.pageFrame(req.body);
+  if (frame) aiModePages.put(owner, frame);
+  res.status(200).json({ wanted: aiModePages.wanted(owner) });
 });
 
 // ---------- admin ----------

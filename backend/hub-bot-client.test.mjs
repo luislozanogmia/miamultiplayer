@@ -45,7 +45,7 @@ test('sharing puts the bot in the company marketplace in one step, with no appro
   assert.equal(sent.length,2);
   assert.equal(sent[0].body.id,sent[1].body.id,'the retry is the same bot, not a second one');
   assert.match(sent[0].url,new RegExp('/v1/teams/'+teamId+'/market/bots$'));
-  assert.deepEqual(sent[0].body,{id:result.bot.id,name:'Helper',avatar_color:'',instructions:'Private instructions stay local',skills:[],tags:[],channel_id:channelId,access:{kind:'channel'}});
+  assert.deepEqual(sent[0].body,{id:result.bot.id,name:'Helper',avatar_color:'',instructions:'Private instructions stay local',skills:[],tags:[],channel_id:channelId,access:{kind:'channel'},share_folder:true});
   assert.equal(JSON.stringify(sent[0].body).includes('local-private-id'),false);
   assert.equal(f.requests.some(r=>/\/channels\/[a-f0-9]+\/bots/.test(r.url)),false,'the old route that waited for an admin is not used');
   assert.deepEqual(f.client.available(owner),{bots:[{id:'local-private-id',name:'Helper',sharedAs:[{teamId,registrationId:result.bot.id}]}]},

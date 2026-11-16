@@ -530,6 +530,17 @@ for (const roomId of ['mia-solo', 'mia-company']) {
   });
 }
 
+test('a run stopped when Mia closed shows at work again once the person restarts it', () => {
+  const { ctx, progress, running } = dispatchHarness();
+  const stop = { conversationId: 'mia-solo', senderType: 'agent', metadata: { dispatchId: 'run-1', status: 'stopped' } };
+  ctx.syncNativeDispatchFromEvent(stop);
+  ctx.syncNativeDispatchFromEvent(progress('mia-solo', 'run-1'));
+  assert.deepEqual(running(), [], 'stopped until it is started again');
+  ctx.syncNativeDispatchFromEvent({ ...stop, deletedAt: '2026-11-10T00:01:00Z' });
+  ctx.syncNativeDispatchFromEvent(progress('mia-solo', 'run-1'));
+  assert.deepEqual(running(), ['run-1'], 'the stop notice was taken back, so its status row is live');
+});
+
 test('Stop ends every run it stopped, so their late progress rows stay ignored', async () => {
   const { ctx, progress, running } = dispatchHarness();
   ctx.syncNativeDispatchFromEvent(progress('mia-company', 'run-1'));

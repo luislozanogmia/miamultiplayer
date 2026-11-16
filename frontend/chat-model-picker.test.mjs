@@ -23,7 +23,7 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.match(appSource, /disconnectHarnessProvider[\s\S]*chatModelPicker\.resetAndReload\(\)/);
   assert.doesNotMatch(appSource, /chat-model-inventory|readCachedChatModelProviders|cacheChatModelProviders/);
   assert.match(appSource, /mia\.chat-model-selection\.v1:/);
-  assert.match(appSource, /function readCachedChatModelSelection\(\)/);
+  assert.match(appSource, /function readCachedChatModelSelection\(scope\)/);
   assert.match(appSource, /function clearCachedChatModelSelection\(workspaceKey\)/);
   assert.match(appSource, /candidate\.provider === cached\.provider && candidate\.model === cached\.model/);
   assert.match(appSource, /cacheChatModelSelection\(picker\.selection\)/);

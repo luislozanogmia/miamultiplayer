@@ -645,3 +645,16 @@ test('a session with no known starter says so, and an empty list does not claim 
   await empty.hub.load('sessions');
   assert.doesNotMatch(admin.renderHubView('sessions', empty.hub.state.sessions, NOW), /right now/);
 });
+
+test('the bots list shows each company bot\'s shared memory, which an admin turns off or back on', () => {
+  const agents = admin.teamRosterAgents([], [
+    {id: 'm1', name: 'Scout', shared_by: 'user_member', folder: {enabled: true}},
+    {id: 'm2', name: 'Quiet', shared_by: 'user_member', folder: {enabled: false}},
+    {id: 'm3', name: 'New', shared_by: 'user_member', folder: null},
+  ], TEAM_MEMBERS);
+  assert.deepEqual(agents.map(a => a.sharedFolder), [true, false, null]);
+  const html = admin.renderAgentsTable(agents);
+  assert.match(html, /Shared memory: on <button[^>]*data-action="bot-folder" data-id="m1" data-on="0">Turn off/);
+  assert.match(html, /Shared memory: off <button[^>]*data-action="bot-folder" data-id="m2" data-on="1">Turn on/);
+  assert.doesNotMatch(admin.renderAgentsTable([{id: 'solo', name: 'Mine'}]), /Shared memory/, 'a bot outside a company has no switch');
+});

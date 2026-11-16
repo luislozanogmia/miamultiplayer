@@ -1807,8 +1807,9 @@ test("bot tab groups: a bot's pages land in its own group, never Mia's tab", asy
   const mine = h.command("new").activeId;
   h.command("navigate", { value: "https://example.com" });
 
-  // Mia's own verified session keeps acting on the tab in front.
-  const miaNav = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-mia" });
+  // Mia's own verified session acts on the tab in front once she has
+  // checked that the request is about it.
+  const miaNav = await h.controller.protocol("navigate", { url: "example.org", actor_session: "s-mia", for_this_request: true });
   assert.equal(miaNav.tab_id, mine);
 
   // A bot navigating with no tab of its own opens one in a group named after it.
@@ -2053,6 +2054,33 @@ test("bot tab groups: the state marks a tab while its bot is working", async () 
   // Mia's own commands mark the tab under her name, the same way.
   await h.controller.protocol("navigate", { url: "b.example", actor_session: "s-mia", wait: "none" });
   assert.deepEqual(plain(h.command("state").tabs.find(t => t.id === mine).botActivity), { botId: "mia", name: "Mia" });
+});
+
+test("Mia changes a page only where the work is hers", async () => {
+  const sessions = { "s-a": { botId: "bot-a", name: "Scout" } };
+  const h = harness({ resolveActor: id => knownActor(sessions)(id === "s-mia-2" ? "s-mia" : id) });
+  const loose = h.command("new").activeId;
+  h.command("navigate", { value: "https://docs.example/d/1" });
+  const bots = await h.controller.protocol("tab_open", { url: "https://docs.example/d/2", actor_session: "s-a", wait: "none" });
+
+  // A bot's tab: Mia reads it but does not work in it or close it.
+  await h.controller.protocol("read", { tab_id: bots.tab_id, actor_session: "s-mia" });
+  await assert.rejects(h.controller.protocol("navigate", { url: "x.example", tab_id: bots.tab_id, actor_session: "s-mia", for_this_request: true, wait: "none" }), /belongs to the bot Scout/);
+  await assert.rejects(h.controller.protocol("tab_close", { tab_id: bots.tab_id, actor_session: "s-mia" }), /belongs to the bot Scout/);
+
+  // A tab the person already had open: Mia reads it, and changes it only
+  // after saying the request is about it. Another conversation asks again.
+  await h.controller.protocol("read", { tab_id: loose, actor_session: "s-mia" });
+  await assert.rejects(h.controller.protocol("reload", { tab_id: loose, actor_session: "s-mia" }), error => error.code === "TAB_NOT_IN_TASK");
+  await h.controller.protocol("reload", { tab_id: loose, actor_session: "s-mia", for_this_request: true });
+  await h.controller.protocol("reload", { tab_id: loose, actor_session: "s-mia" });
+  await assert.rejects(h.controller.protocol("reload", { tab_id: loose, actor_session: "s-mia-2" }), error => error.code === "TAB_NOT_IN_TASK");
+
+  // A tab Mia opened herself is hers from the start.
+  const own = await h.controller.protocol("tab_open", { url: "https://docs.example/d/2", actor_session: "s-mia", wait: "none" });
+  await h.controller.protocol("reload", { tab_id: own.tab_id, actor_session: "s-mia" });
+  // But not for editing the page a bot is working on in its own tab.
+  await assert.rejects(h.controller.protocol("key", { key: "a", tab_id: own.tab_id, actor_session: "s-mia" }), error => error.code === "BOT_HAS_PAGE" && /Scout/.test(error.message));
 });
 
 async function pendingEvalFixture(options = {}) {
@@ -3806,4 +3834,12 @@ test("each workspace keeps its own split view while Mia runs", () => {
     assert.equal(back.tabs.find(tab => tab.id === ids[0]).asleep, false, "a restored tab on show is awake");
     h.window.emit("closed");
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("only a web page can be pictured out of sight, and picturing opens no tab", async () => {
+  const h = harness();
+  for (const url of ["file:///etc/hosts", "javascript:alert(1)", "about:blank", "", null]) {
+    assert.equal((await h.command("pagePicture", { url })).error, "Only web pages can be pictured.");
+  }
+  assert.equal(h.views.length, 0);
 });

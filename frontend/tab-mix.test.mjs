@@ -112,8 +112,8 @@ test('the one strip draws the showing view\'s tabs, and mixed every view\'s, in 
 test('the Automations board tab closes like any tab, and the Automations button opens it again', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /id:AUTOMATIONS_BOARD_TAB, label:'Automations', iconHtml:AUTOMATIONS_ICON, closable:false/);
-  assert.match(app, /if\(id === AUTOMATIONS_BOARD_TAB\)\{\s*automationsPage\.boardClosed = true;/);
-  assert.match(app, /function openAutomationsPage\(\)\{[^}]*automationsPage\.boardClosed = false;/);
+  assert.match(app, /if\(id === AUTOMATIONS_BOARD_TAB\)\{\s*setPageTabClosed\('automations', true\);/);
+  assert.match(app, /function openAutomationsPage\(\)\{[^}]*setPageTabClosed\('automations', false\);/);
 });
 
 test('closing the Automations page refreshes its tabs in the mixed strip, so a closed tab leaves', async () => {
@@ -124,7 +124,7 @@ test('closing the Automations page refreshes its tabs in the mixed strip, so a c
 
 test('closing the Automations tab from another view only removes it, without opening Automations', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /automationsPage\.boardClosed = true;\s*\/\/[^\n]*\n\s*if\(!automationsPage\.open \|\| automationsPage\.automationId\)\{ renderAutomationsPage\(\); return; \}/);
+  assert.match(app, /setPageTabClosed\('automations', true\);\s*\/\/[^\n]*\n\s*if\(!automationsPage\.open \|\| automationsPage\.automationId\)\{ renderAutomationsPage\(\); return; \}/);
 });
 
 test('the blank tab left after closing the last browser tab stays out of the other views\' strips', async () => {
@@ -241,4 +241,14 @@ test('an automation raises one OS notification each time it comes to need you', 
   const source = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(source, /native\.setBadge\(count\)/, 'the waiting count goes to the Dock icon');
   assert.doesNotMatch(source, /bell\.append\(bubble\)/, 'the bell carries no count of its own');
+});
+
+test('a closed Automations, Artifacts or Apps tab stays closed the next time Mia opens', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(app, /closedPageTabsStore\(\)\.get\('miaClosedPageTabs'\)/);
+  assert.match(app, /closedPageTabsStore\(\)\.set\('miaClosedPageTabs', JSON\.stringify\(closedPageTabs\)\)/);
+  assert.match(app, /boardClosed:!!closedPageTabs\.automations/);
+  assert.match(app, /tabClosed:!!closedPageTabs\.artifacts/);
+  assert.match(app, /tabClosed:!!closedPageTabs\.apps/);
+  assert.doesNotMatch(app.replace(/function setPageTabClosed[\s\S]*?\n  \}/, ''), /(boardClosed|tabClosed) = (true|false)/);
 });

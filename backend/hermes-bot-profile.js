@@ -198,10 +198,21 @@ function validProfileModel(selection) {
   const provider = String((selection && selection.provider) || '').trim();
   return model && provider && !/[\r\n]/.test(model + provider) ? { model, provider } : null;
 }
+// The helpers a turn hands work to carry most of the tokens, so on a Claude
+// sign-in they run on the small model while the turn keeps its own. They stay
+// on the turn's provider (Hermes inherits it when only the model is set); on
+// any other provider they inherit the turn's model as before.
+const CLAUDE_WORKER_MODEL = 'claude-haiku-5-5';
+function profileWorkerBlock(valid) {
+  return valid && valid.provider === CLAUDE_SUBSCRIPTION_PLUGIN
+    ? ['delegation:', `  model: ${JSON.stringify(CLAUDE_WORKER_MODEL)}`]
+    : [];
+}
 function profileModelBlock(selection) {
   const valid = validProfileModel(selection);
   if (!valid) return ['model:', SWITCH_CONFIRM_OFF];
-  return ['model:', `  default: ${JSON.stringify(valid.model)}`, `  provider: ${JSON.stringify(valid.provider)}`, SWITCH_CONFIRM_OFF];
+  return ['model:', `  default: ${JSON.stringify(valid.model)}`, `  provider: ${JSON.stringify(valid.provider)}`, SWITCH_CONFIRM_OFF,
+    ...profileWorkerBlock(valid)];
 }
 
 // The model block a previous turn wrote, so re-provisioning at boot keeps it.
@@ -223,8 +234,9 @@ function existingProfileModel(config) {
 }
 
 // Every Mia profile (Mia, bots, private agents, scheduled runs) compresses at
-// the same point, so a long chat behaves the same wherever it runs.
-const COMPRESSION_THRESHOLD_TOKENS = 64000;
+// the same point, so a long chat behaves the same wherever it runs. This is a
+// ceiling: Hermes compresses sooner for a model whose window calls for less.
+const COMPRESSION_THRESHOLD_TOKENS = 300000;
 function runtimeProfileConfig({
   toolsets, maxTurns, terminal, googleWorkspace = false, backgroundReview, editsBots = false, model = null, mcpApps = [],
   disabledToolsets = [],
@@ -252,10 +264,10 @@ function runtimeProfileConfig({
     'auxiliary:',
     '  background_review:',
     `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
-    // Long chats stay fast: Hermes summarizes older turns once a request
-    // passes this size, before sending it, and keeps working. Its default
-    // waits for half the model's window (up to 256k tokens), so a large
-    // window resent ~170k tokens every step and each one took 10-40 s.
+    // Hermes summarizes older turns once a request passes this size or its
+    // own share of the model's window, whichever is smaller, before sending
+    // it, and keeps working. A lower fixed size (64k) cut long chats short
+    // on models with room for far more.
     // The last turns stay word for word, including the last few requests.
     'compression:',
     '  enabled: true',
@@ -408,6 +420,11 @@ function setHermesProfileModel(profile, selection, { profilesRoot = path.join(he
   if (start >= 0) {
     let end = start + 1;
     while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    // The worker model written with the last pick goes with it.
+    if (lines[end] === 'delegation:') {
+      end += 1;
+      while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    }
     lines.splice(start, end - start);
   }
   lines.splice(1, 0, ...block);

@@ -70,7 +70,8 @@ test('the tips never block the app and wait for whatever is on top', () => {
   assert.match(css, /\.mia-tips\{position:fixed;inset:0;z-index:9000;pointer-events:none;/);
   assert.match(css, /\.mia-tips-card\{position:absolute;pointer-events:auto;/);
   assert.match(css, /@media \(prefers-reduced-motion:reduce\)\{\s*\.mia-tips\.is-in/);
-  assert.match(app, /blocked: function\(\)\{\s*if\(!currentUser \|\| tour\.active/);
+  assert.match(app, /blocked: appCovered/);
+  assert.match(app, /function appCovered\(\)\{\s*if\(!currentUser \|\| tour\.active/);
   assert.match(app, /#loginWall[\s\S]{0,200}#appLoadingOverlay/);
   assert.match(app, /\[role="dialog"\]\[aria-modal="true"\]/);
   assert.match(html, /<script src="view-tips\.js\?v=[^"]+"><\/script>[\s\S]*<script src="app\.js/);

@@ -143,4 +143,17 @@ function extractToolActivity(type, payload) {
   return activity;
 }
 
-module.exports = { extractToolActivity };
+// The one line a power user's chat shows for a tool event: what the bot is
+// doing and which files, never the command, the code or the output. A step
+// that worked says nothing more; one that failed says so.
+function toolActivityLine(type, payload) {
+  const activity = extractToolActivity(type, payload);
+  if (!activity) return '';
+  const what = activity.label === 'Working' ? `Using ${activity.tool}` : activity.label;
+  if (activity.phase === 'complete') return activity.ok ? '' : `${what}: this step did not work`;
+  const names = activity.files.map((file) => file.name);
+  const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ` and ${names.length - 3} more` : '');
+  return shown ? `${what} — ${shown}` : what;
+}
+
+module.exports = { extractToolActivity, toolActivityLine };

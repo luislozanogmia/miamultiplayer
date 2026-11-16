@@ -1,0 +1,2376 @@
+// AI mode: the person gives direction and watches Mia work. One full-screen
+// stage over the app, drawn in its own shadow root. What the person says goes
+// to Mia herself, in a chat of hers that no list shows (POST
+// /api/conversations/ai-mode): her real run, with her tools, her bots, the
+// browser and her approvals. This file draws that run as it happens: each
+// step she takes, the line she says about it (shown and read out loud), the
+// reply as she writes it, and whatever needs the person.
+//
+// The stage shows the last thing the person said and the work. What came
+// before is kept behind it: each earlier view can be stepped back to, and a
+// small drawer lists what was asked and what Mia reported, nothing else.
+(function(){
+'use strict';
+var KINDS=['research','inbox','calendar','sales','general','black'];
+function mote(name){var n=0,t=String(name||'');for(var i=0;i<t.length;i++)n=(n*31+t.charCodeAt(i))>>>0;return 'assets/mote/mote-'+KINDS[n%KINDS.length]+'.svg';}
+// A bot looks the way it does everywhere else in Mia; the plain art is for a page without the app.
+function moteArt(name){
+  var a=window.MiaBots&&window.MiaBots.art(name);
+  return a?'src="'+esc(a.src)+'" style="filter:'+esc(a.filter)+'"':'src="'+mote(name)+'"';
+}
+var MARKUP=
+  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-19">'+
+  '<div class="stage" id="stage">'+
+    '<canvas id="rain" aria-hidden="true"></canvas>'+
+    '<div class="mind" id="mind" aria-hidden="true"></div>'+
+    '<div class="hud pad" id="hud">'+
+      '<span class="who"><span id="hudMark" style="width:20px;height:20px"></span>Flow mode<button class="what" id="what" type="button" aria-label="What Flow mode is" aria-expanded="false">?</button><span class="what-tip" id="whatTip" role="tooltip" hidden>The ultimate interface, where the human intent becomes AI execution</span></span>'+
+      '<span class="sp"></span>'+
+      '<span class="tools" id="tools" hidden>'+
+      '<button class="btn" id="stop" hidden>Stop</button>'+
+      '<button class="btn" id="drive" hidden>Let me drive</button>'+
+      '<button class="btn ghost" id="web" hidden>Browser</button>'+
+      '<button class="btn ghost" id="blurBtn" aria-expanded="false">Background</button>'+
+      '<button class="btn ghost" id="modelBtn" aria-expanded="false">Model</button>'+
+      '<button class="btn ghost" id="talk" aria-pressed="false" hidden>Hands-free off</button>'+
+      '<button class="btn ghost" id="voice" hidden>Voice 1</button>'+
+      '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
+      '<button class="btn ghost" id="voiceSet" hidden>Connect a voice</button>'+
+      '<button class="btn ghost" id="own" aria-pressed="true" title="When a bot finishes, Mia checks its work first and shows you only what needs you">Mia reviews on her own</button>'+
+      '<button class="btn ghost" id="mute">Sound on</button>'+
+      '<button class="btn ghost" id="full" hidden>Full screen</button>'+
+      '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
+      '<button class="btn ghost" id="leave">Leave</button>'+
+      '</span>'+
+      '<button class="btn ghost more" id="more" aria-expanded="false" aria-label="Show the controls">\u2039</button>'+
+    '</div>'+
+    '<label class="blur-bar" id="blurBar" hidden><small>Sharp</small><input id="blur" type="range" min="0" max="200" step="5" value="100" aria-label="How blurry the background is"><small>Soft</small></label>'+
+    '<label class="blur-bar" id="modelBar" hidden><small>Model</small><select id="model" aria-label="The model Mia works with in Flow mode"></select></label>'+
+    '<div id="hold" hidden></div>'+
+    '<div class="phone-bar" id="phoneBar" hidden>'+
+      '<b>Flow mode on your phone</b>'+
+      '<a href="https://miamultiplayer.com/phone/" target="_blank" rel="noopener noreferrer">Open Mia on your phone</a>'+
+      '<p id="phoneNote"></p>'+
+      '<output class="phone-code" id="phoneCode" hidden></output>'+
+      '<ul id="phoneList"></ul>'+
+      '<button class="btn" id="phonePair">Connect a phone</button>'+
+    '</div>'+
+    '<div class="voice-ask" id="voiceAsk" role="group" aria-label="Mia\'s voice" hidden></div>'+
+    '<div class="convo pad" id="convo" hidden></div>'+
+    '<div class="cv pad" id="cv"></div>'+
+    '<button class="log-tab" id="logTab" aria-expanded="false" aria-label="What you asked and what Mia reported" title="What you asked and what Mia reported" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>'+
+    '<aside class="log" id="log" aria-label="What you asked and what Mia reported" hidden></aside>'+
+    '<button class="log-tab chats-tab" id="chatsTab" aria-expanded="false" aria-label="Your chats" title="Your chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>'+
+    '<aside class="log chats" id="chats" aria-label="Your chats" hidden></aside>'+
+    '<div class="ears" id="ears" hidden><i aria-hidden="true"></i><span id="earsSay">Just talk</span>'+
+      '<button id="earsVoice" aria-pressed="false" aria-label="Mute Mia\'s voice" title="Mute Mia\'s voice"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6v4h2.5L8 13V3L4.5 6z"/><path d="M10.5 5.5a3.5 3.5 0 0 1 0 5M12.5 3.5a6.3 6.3 0 0 1 0 9"/><path class="off" d="M2.5 1.5l11 13"/></svg></button>'+
+      '<button id="earsMute" aria-pressed="false" aria-label="Mute the mic" title="Mute the mic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/><path class="off" d="M2.5 1.5l11 13"/></svg></button></div>'+
+    '<div class="steps" id="steps" hidden><button id="stepBack" aria-label="The view before" title="The view before">\u2039</button><span id="stepAt"></span>'+
+      '<button id="stepNext" aria-label="The view after" title="The view after">\u203a</button><button class="now" id="stepNow" hidden>Back to now</button></div>'+
+    '<div class="finds" id="finds" hidden></div>'+
+    '<div class="ink" id="ink" aria-hidden="true" hidden><svg><g id="inkG"></g></svg></div>'+
+    '<div class="site" id="site" hidden>'+
+      '<div class="site-bar" id="siteBar">'+
+        '<button id="siteBack" title="Back" aria-label="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></svg></button>'+
+        '<button id="siteForward" title="Forward" aria-label="Forward" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m0 0-6-6m6 6-6 6"/></svg></button>'+
+        '<button id="siteReload" title="Reload" aria-label="Reload"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4"/></svg></button>'+
+        '<button id="siteWide" title="Fill the stage" aria-label="Fill the stage" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button>'+
+        '<form id="siteForm" autocomplete="off"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h9m4 0h3M4 16h3m4 0h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/></svg><input id="siteUrl" type="text" inputmode="url" spellcheck="false" autocapitalize="off" aria-label="Web address" placeholder="Search or type a web address"></form>'+
+        '<button id="siteZoom" title="Page size: 100%" aria-label="Page size"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5M8.5 11h5M11 8.5v5"/></svg></button>'+
+        '<button id="siteClose" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>'+
+      '</div>'+
+      '<div class="site-body"><div class="site-tabs" id="siteTabs" role="tablist" aria-label="This card\'s pages" hidden></div><div class="site-page" id="sitePage"></div></div>'+
+    '</div>'+
+    '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
+      '<button type="button" class="mode" id="find"><svg class="m-type" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="3.75" width="13" height="8.5" rx="2"/><path d="M4.5 6.8h.01M7 6.8h.01M9.5 6.8h.01M11.5 6.8h.01M5.5 9.6h5"/></svg><svg class="m-find" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg><svg class="m-chat" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg></button>'+
+      '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
+      '<button type="button" class="mic" id="pen" aria-pressed="false" aria-label="Mark on the screen" title="Draw on the screen to show Mia what you mean" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/><path d="M9.5 4l2.5 2.5"/></svg></button>'+
+      '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
+      '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
+    '</form></div>'+
+  '</div>';
+
+// tandem: Flow Tandem is on. The person is in the normal app, the stage is out of sight, and Mia talks.
+var host=null,root=null,open=false,tandem=false,tandemSince=0,tandemLine='',tandemTalk=false,tandemSubs=[];
+// One run: what the person said and everything Mia has done about it so far.
+var fullOwn=false;
+var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},crew=[],mindMap={},seedId=0,drawTimer=null;
+// What came before: each earlier run with the view Mia made for it, oldest first. view is the one
+// being looked at (-1 is now); peek is a chat pulled from search, shown the same way.
+var past=[],view=-1,peek=null,drawerOn=false,seqKnown=false,findOn=false,found=[],talkMuted=false;
+function seeing(){return peek||past[view]||null;}
+function $(id){return root.getElementById(id);}
+function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function str(v,n){return (typeof v==='string'?v.trim():'').slice(0,n);}
+function appHost(){return window.miaAiModeHost||{};}
+function workspace(){try{return appHost().workspace()||'solo';}catch(e){return 'solo';}}
+function format(t){try{return appHost().format(t);}catch(e){return '<p>'+esc(t)+'</p>';}}
+// The company the person is in, or '' in Solo; its sign-in proves they are in it.
+function team(){try{return appHost().team()||'';}catch(e){return '';}}
+function call(path,body,token){
+  var o={credentials:'include',headers:{'Accept':'application/json','X-MiaOS-Workspace':workspace()}};
+  if(token)o.headers['x-hub-token']=token;
+  if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+  return fetch(path,o).then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {status:r.status,data:d||{}};});});
+}
+function chat(id,rest){return '/api/conversations/'+encodeURIComponent(id)+(rest||'');}
+
+// Mindspace: each trace is a word, a glyph, a color or a picture Mia named; nothing is shown that she did not.
+function rnd(a,b){return a+Math.random()*(b-a);}
+function mindAdd(cls,text){
+  var key=cls+text;if(!text||mindMap[key])return;
+  var e=document.createElement('i'),sp=document.createElement('span');
+  sp.className=cls;
+  if(cls==='c')sp.style.background=text;
+  else if(cls==='p'){var im=document.createElement('img');im.alt='';im.src=text;im.onerror=function(){mindDrop(key);};sp.appendChild(im);}
+  else sp.textContent=text;
+  // Traces stay at the edges of the canvas, out of focus, so the work in the middle stays readable.
+  var x=rnd(0,86),y=rnd(4,80),wide=innerWidth>700;
+  if(cls!=='c'&&wide&&x>16&&x<70&&y>16&&y<70){if(Math.random()<.5)x=x<43?rnd(0,14):rnd(72,88);else y=y<43?rnd(4,13):rnd(72,82);}
+  var fs=cls==='c'?rnd(280,440):cls==='p'?rnd(wide?170:110,wide?260:150):cls==='g'?rnd(80,140):rnd(16,34);
+  var blur=cls==='p'?rnd(4,7):cls==='g'?rnd(12,18):rnd(2.5,5);
+  var op=cls==='c'?.13:cls==='p'?rnd(.2,.3)*(wide?1:.7):cls==='g'?rnd(.1,.16):rnd(.1,.2)*(wide?1:.6);
+  e.style.cssText='left:'+x+'%;top:'+y+'%;--fs:'+fs+'px;--b:'+blur+'px;--o:'+op+';--t:'+rnd(14,26)+'s;--dx:'+rnd(-50,50)+'px;--dy:'+rnd(-36,36)+'px';
+  e.appendChild(sp);$('mind').appendChild(e);mindMap[key]=e;
+  setTimeout(function(){if(mindMap[key]===e)e.classList.add('on');},60+(Object.keys(mindMap).length%12)*160);
+}
+function mindDrop(key){var e=mindMap[key];if(!e)return;delete mindMap[key];e.classList.remove('on');setTimeout(function(){e.remove();},2600);}
+function mindSet(p){
+  var keep={};p=p||{};
+  (p.palette||[]).forEach(function(x){keep['c'+x]=['c',x];});(p.glyphs||[]).forEach(function(x){keep['g'+x]=['g',x];});
+  (p.traces||[]).forEach(function(x){keep['w'+x]=['w',x];});(p.pics||[]).forEach(function(x){keep['p'+x]=['p',x];});
+  Object.keys(mindMap).forEach(function(k){if(!keep[k])mindDrop(k);});
+  Object.keys(keep).forEach(function(k){mindAdd(keep[k][0],keep[k][1]);});
+}
+// Until Mia's own steps arrive, the traces are words for the subject and the pictures it calls up.
+function seed(text){
+  var my=++seedId;
+  mindSet({});
+  (text.toLowerCase().match(/[a-z0-9À-ɏ']{4,}/g)||[]).filter(function(w){return !/^(that|this|with|from|into|about|what|want|need|have|make|your|please|could|would)$/.test(w);}).slice(0,8).forEach(function(w){mindAdd('w',w);});
+  call('/api/ai-mode/seed',{said:text}).then(function(r){
+    var p=r.data.seed;if(my!==seedId||!open||!p||!R||!R.running)return;
+    (p.palette||[]).forEach(function(x){mindAdd('c',x);});(p.glyphs||[]).forEach(function(x){mindAdd('g',x);});(p.traces||[]).forEach(function(x){mindAdd('w',x);});
+    (p.images||[]).forEach(function(q){
+      call('/api/ai-mode/images?q='+encodeURIComponent(q)).then(function(d){
+        if(my!==seedId||!open||!R||!R.running)return;
+        (Array.isArray(d.data.images)?d.data.images:[]).slice(0,2).forEach(function(u){if(typeof u==='string'&&u.indexOf('/api/ai-mode/image?u=')===0)mindAdd('p',u);});
+      },function(){});
+    });
+  },function(){});
+}
+// When the work stops the open questions are gone: only the colors stay.
+function settle(){Object.keys(mindMap).forEach(function(k){if(k[0]!=='c')mindDrop(k);});}
+
+function mark(px,mode){return '<span class="mk" data-mm="'+px+'" data-mode="'+(mode||'')+'" style="width:'+px+'px;height:'+px+'px"></span>';}
+function mount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.render(m,+m.dataset.mm,m.dataset.mode);});}
+function unmount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.destroy(m);});}
+// The stage drawn again for the same turn is brought up to date in place: a node that did not change is
+// left alone, so nothing that is already on screen is loaded or faded in a second time.
+function same(a,b){
+  if(a.nodeType!==b.nodeType||a.nodeName!==b.nodeName)return false;
+  if(a.nodeType!==1)return true;
+  // A mark is drawn into after it is placed, and a card or a slot is the one it is named.
+  return a.id===b.id&&a.dataset.key===b.dataset.key&&a.dataset.mm===b.dataset.mm&&a.dataset.mode===b.dataset.mode;
+}
+function patch(a,b){
+  var x=a.firstChild,y=b.firstChild,nx,ny;
+  while(y){
+    ny=y.nextSibling;
+    if(x&&same(x,y)){
+      nx=x.nextSibling;
+      if(x.nodeType!==1){if(x.data!==y.data)x.data=y.data;}
+      else if(x.dataset.mm==null){
+        [].slice.call(x.attributes).forEach(function(at){if(!y.hasAttribute(at.name))x.removeAttribute(at.name);});
+        [].forEach.call(y.attributes,function(at){if(x.getAttribute(at.name)!==at.value)x.setAttribute(at.name,at.value);});
+        // What Mia drew lives in its slot in a frame of its own; the slot only carries what to show.
+        if(x.id!=='canvasSlot')patch(x,y);
+      }
+      x=nx;
+    }else{
+      a.insertBefore(y,x);
+      if(y.nodeType===1){if(y.dataset.mm!=null)window.MiaMark.render(y,+y.dataset.mm,y.dataset.mode);else mount(y);}
+    }
+    y=ny;
+  }
+  while(x){
+    nx=x.nextSibling;
+    if(x.nodeType===1){
+      if(x.dataset.mm!=null)window.MiaMark.destroy(x);else unmount(x);
+      if(canvas.el&&x.contains(canvas.el))canvasHold();
+    }
+    a.removeChild(x);x=nx;
+  }
+}
+
+// A reply opens with the sentence Mia says out loud; choices she leaves to the person close it.
+// A job Mia hands to a bot is written for the app ("Handoff:", "Model:", "Brief:"); it is not shown.
+function dropHandoffs(text){
+  var out=[],on=false,brief=false;
+  String(text||'').replace(/\r/g,'').split('\n').forEach(function(l){
+    if(/^\s*(?:[-*]\s*)?\**Handoff:/i.test(l)){on=true;brief=false;return;}
+    // "Open:" is for the app too: it opens what the line names.
+    if(/^\s*(?:[-*]\s*)?\**Open:\**\s*\S/i.test(l)){on=false;return;}
+    if(on){
+      var part=/^\s*(?:[-*]\s*)?\**(Model|Brief):/i.exec(l);
+      if(part){if(/brief/i.test(part[1]))brief=true;return;}
+      if(brief&&l.trim()&&!/^\s*(?:[-*]\s*)?\**(?:Card|Option|Next):|^\s*```/i.test(l))return;
+      on=false;
+    }
+    out.push(l);
+  });
+  return out.join('\n');
+}
+function readReply(text){
+  var lines=dropHandoffs(text).split('\n'),options=[];
+  while(lines.length){
+    var last=lines[lines.length-1].trim(),m=/^(?:[-*]\s*)?\**Option:?\**:?\s*(.+)$/i.exec(last);
+    if(m){options.unshift(str(m[1].replace(/\*+/g,''),80));lines.pop();}else if(!last)lines.pop();else break;
+  }
+  // Her closing question is said out loud, so it comes off the page.
+  var end=(lines[lines.length-1]||'').replace(/^[#>\s]+/,'').replace(/[*_`]+/g,'').trim(),ask='';
+  if(lines.length>1&&/\?$/.test(end)&&end.length<=200&&!/^[-|]|^\d+[.)]\s|^(?:card|image|text):/i.test(end)){ask=end;lines.pop();}
+  while(lines.length&&!lines[0].trim())lines.shift();
+  var first=(lines[0]||'').replace(/^[#>\s]+/,'').replace(/\*+/g,'').trim(),sayable=first&&first.length<=200&&!/^[-*|`]|^\d+[.)]\s/.test(first);
+  return {say:sayable?first:'',ask:ask,body:(sayable?lines.slice(1):lines).join('\n').trim(),options:options.filter(Boolean).slice(0,4)};
+}
+// The result comes as cards: a title, a picture, and a line or two. The picture is drawn here from what
+// Mia wrote about the card (a figure, a meter, an icon, a tone); a photo is looked up only when she asks for one.
+var MAX_CARDS=9,pics={};
+var ICONS={check:'M20 6 9 17l-5-5',alert:'M12 3 2 20h20L12 3zM12 10v4M12 17h.01',clock:'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18zM12 7v5l3 2',
+  calendar:'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',mail:'M3 6h18v12H3zM3 7l9 6 9-6',chat:'M4 5h16v11H9l-5 4z',
+  person:'M12 4a4 4 0 1 0 0 8a4 4 0 0 0 0-8zM4 21a8 8 0 0 1 16 0',people:'M9 5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7zM2 20a7 7 0 0 1 14 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18 14a7 7 0 0 1 4 6',
+  money:'M12 2v20M17 6H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6',chart:'M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-7',up:'M3 17l6-6 4 4 8-8M15 7h6v6',down:'M3 7l6 6 4-4 8 8M15 17h6v-6',
+  search:'M11 4a7 7 0 1 0 0 14a7 7 0 0 0 0-14zM20 20l-4-4',file:'M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6',folder:'M3 6h6l2 2h10v11H3z',
+  link:'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',lock:'M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3',
+  key:'M15 4a5 5 0 1 0 0 10a5 5 0 0 0 0-10zM11 12l-8 8M6 17l2 2',shield:'M12 3l8 3v6c0 5-3.5 8-8 9c-4.5-1-8-4-8-9V6z',star:'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z',
+  bolt:'M13 2 4 14h7l-1 8 9-12h-7z',globe:'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18',phone:'M8 2h8v20H8zM11 18h2',
+  code:'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',bug:'M8 9a4 4 0 0 1 8 0v6a4 4 0 0 1-8 0zM4 13h4M16 13h4M5 7l3 2M19 7l-3 2M5 19l3-2M19 19l-3-2M12 11v8',
+  target:'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8zM12 12h.01',flag:'M5 21V4M5 4h13l-3 4.5 3 4.5H5',cart:'M3 4h3l2.5 11h10L21 7H7M9.5 20h.01M17.5 20h.01',
+  building:'M5 21V4h9v17M14 9h5v12M3 21h18M8 8h3M8 12h3M8 16h3',heart:'M12 20s-7-4.5-9-9a4.5 4.5 0 0 1 9-2a4.5 4.5 0 0 1 9 2c-2 4.5-9 9-9 9z',
+  tool:'M15 5a4.5 4.5 0 0 0-5.7 5.7L3 17l4 4 6.3-6.3A4.5 4.5 0 0 0 19 9l-3 3-3-1-1-3z',bell:'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4',home:'M4 11l8-7 8 7v9H4zM10 20v-6h4v6',
+  truck:'M2 6h11v10H2zM13 9h5l3 3v4h-8M6.5 19h.01M17.5 19h.01',box:'M3 8l9-5 9 5v8l-9 5-9-5zM3 8l9 5 9-5M12 13v8'};
+function readCards(body){
+  var cards=[],rest=[],cur=null;
+  String(body||'').split('\n').forEach(function(line){
+    var m=/^\s*(?:[-*]\s*)?\**(Card|Decision|Image|Bot|Page|Text|Icon|Number|Meter|Tone|Chips|Action|Link)\**\s*:\**\s*(.*)$/i.exec(line),k=m?m[1].toLowerCase():'',v=m?m[2].replace(/\*+/g,'').trim():'';
+    if(k==='card'||k==='decision'){cur={title:str(v,k==='card'?80:120),image:'',bot:'',page:'',text:'',icon:'',num:'',cap:'',meter:null,tone:'',chips:[],act:'',links:[],decide:k==='decision'};cards.push(cur);}
+    else if(k==='icon'&&cur){var ic=v.toLowerCase().replace(/[^a-z]/g,'');if(ICONS.hasOwnProperty(ic))cur.icon=ic;}
+    else if(k==='number'&&cur){var np=v.split('|');cur.num=str(np[0],14);cur.cap=str(np[1]||'',40);}
+    else if(k==='meter'&&cur){var pct=parseFloat(v);if(isFinite(pct))cur.meter=Math.max(0,Math.min(100,Math.round(pct)));}
+    else if(k==='tone'&&cur){var tn=/^(good|warn|bad)\b/i.exec(v);cur.tone=tn?tn[1].toLowerCase():'';}
+    else if(k==='link'&&cur){var lk=linkOf(v);if(lk&&cur.links.length<4)cur.links.push(lk);}
+    else if(k==='chips'&&cur)cur.chips=v.split(',').map(function(c){return str(c,28);}).filter(Boolean).slice(0,5);
+    else if(k==='action'&&cur)cur.act=str(v,32);
+    else if(k==='image'&&cur)cur.image=str(v,60);
+    else if(k==='bot'&&cur)cur.bot=str(v,60);
+    else if(k==='page'&&cur)cur.page=str(v,300);
+    else if(k==='text'&&cur)cur.text=str(v,cur.decide?600:400);
+    else rest.push(line);
+  });
+  return {cards:cards.filter(function(c){return c.title;}).slice(0,MAX_CARDS),rest:rest.join('\n').trim()};
+}
+// Mia's canvas: a view she draws herself when cards are not the best way to show it. It lives in a
+// frame that runs no scripts and loads nothing from outside.
+var CANVAS_BASE='<!doctype html><meta charset="utf-8"><style>:root{color-scheme:dark;--accent:#E3A61B;--soft:rgba(255,255,255,.62);--rule:rgba(255,255,255,.16);--panel:rgba(255,255,255,.06)}'+
+  'html{background:#14120f}body{margin:0;padding:18px;color:#fff;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}button,[data-say],[role=button]{cursor:pointer}</style>';
+var canvas={el:null,src:'',at:0,timer:null};
+function readCanvas(text){
+  text=String(text||'');
+  var m=/(^|\n)```canvas[^\n]*\n([\s\S]*?)(\n```[^\n]*(?=\n|$)|$)/i.exec(text);
+  if(!m)return {html:'',rest:text};
+  var html=m[2].slice(0,200000);
+  // While she is still writing it nothing half-made is drawn; the stage says it is being built.
+  if(!m[3])return {html:'',building:html.length,rest:text.slice(0,m.index).trim()};
+  return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
+}
+// A view is something drawn on the stage: a canvas, cards or a deck. Words alone are not one.
+function showsView(text){return /(^|\n)```canvas/i.test(text||'')||readCards(readCanvas(text).rest).cards.length>0;}
+// The view a turn leaves on the stage for the next one: its own, or the one it kept when it only answered.
+function viewOf(r){return !r?'':r.body&&(showsView(r.body)||!showsView(r.keep))?r.body:r.keep||r.body||'';}
+function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.keep||R.draft:R.body||R.keep);}
+// The frame is kept across redraws, so what she drew does not blink each time the stage changes.
+function canvasHold(){
+  var el=canvas.el,hold=$('hold');
+  if(el&&el.isConnected&&hold.moveBefore){try{hold.moveBefore(el,null);}catch(e){}}
+}
+// A button she drew does nothing in the frame itself, so the stage hears the press and takes it
+// to her as the person's next direction, with what was typed into the fields beside it.
+function canvasSaid(b,doc){
+  var say=str(b.getAttribute('data-say'),600),label=str(b.textContent.replace(/\s+/g,' '),120)||str(b.getAttribute('aria-label'),120)||str(b.value,120);
+  if(!say&&!label)return '';
+  var filled=[].map.call(doc.querySelectorAll('input,select,textarea'),function(f,i){
+    if(f.type==='password'||f.type==='hidden'||f.type==='file'||f.type==='button'||f.type==='submit')return '';
+    if((f.type==='checkbox'||f.type==='radio')&&!f.checked)return '';
+    var v=str(f.tagName==='SELECT'&&f.selectedOptions[0]?f.selectedOptions[0].textContent:f.value,300);
+    if(!v)return '';
+    var lab=f.labels&&f.labels[0]?f.labels[0].textContent:'';
+    return (str(f.getAttribute('aria-label')||lab||f.name||f.placeholder||'Field '+(i+1),60).replace(/\s+/g,' '))+': '+v;
+  }).filter(Boolean).slice(0,20);
+  return (say||'I pressed the button "'+label+'" on what you drew. Do what it stands for.')+(filled.length?'\n\nWhat I filled in:\n'+filled.join('\n'):'');
+}
+function canvasWire(){
+  var doc=null;try{doc=canvas.el&&canvas.el.contentDocument;}catch(e){}
+  if(!doc||doc.miaWired)return;doc.miaWired=true;
+  doc.addEventListener('click',function(e){
+    var t=e.target&&e.target.closest?e.target:e.target&&e.target.parentElement;if(!t||!t.closest)return;
+    var a=t.closest('a[href]');
+    if(a){e.preventDefault();if(/^https?:/i.test(a.getAttribute('href')||''))siteOpen(a.href);return;}
+    var b=t.closest('[data-say],button,[role=button],input[type=button],input[type=submit]');if(!b||b.disabled)return;
+    e.preventDefault();
+    var said=canvasSaid(b,doc);if(!said||!open)return;
+    direct(said.slice(0,2000),str(b.getAttribute('data-say'),600)||str(b.textContent.replace(/\s+/g,' '),120));
+  });
+  doc.addEventListener('submit',function(e){e.preventDefault();});
+}
+function canvasPlace(){
+  var slot=$('canvasSlot'),el=canvas.el;
+  if(!slot){if(el)el.remove();return;}
+  if(!el){
+    el=canvas.el=document.createElement('iframe');el.className='canvas-f';
+    // No scripts run in it; the stage may read its words, so a mark drawn over it says what it is on.
+    el.setAttribute('sandbox','allow-same-origin');el.setAttribute('title','What Mia drew');
+    el.addEventListener('load',canvasWire);
+  }
+  var html=slot.dataset.html||'',wait=900-(Date.now()-canvas.at);
+  clearTimeout(canvas.timer);canvas.timer=null;
+  if(html!==canvas.src){
+    if(R&&R.running&&!seeing()&&canvas.src&&wait>0)canvas.timer=setTimeout(function(){canvas.timer=null;if(open)draw();},wait);
+    else{canvas.src=html;canvas.at=Date.now();el.srcdoc=CANVAS_BASE+html;}
+  }
+  if(el.parentNode!==slot){
+    try{if(el.isConnected&&slot.moveBefore)slot.moveBefore(el,null);else slot.appendChild(el);}catch(e){slot.appendChild(el);}
+  }
+}
+function pic(q){
+  if(!q)return '';
+  if(pics[q]===undefined){
+    pics[q]='';
+    call('/api/ai-mode/images?q='+encodeURIComponent(q)).then(function(d){
+      var u=(Array.isArray(d.data.images)?d.data.images:[])[0];
+      pics[q]=typeof u==='string'&&u.indexOf('/api/ai-mode/image?u=')===0?u:null;redraw();
+    },function(){pics[q]=null;redraw();});
+  }
+  return pics[q]||'';
+}
+// Everything Mia puts on the stage is an item: each result card, and the page she is in. A page is one
+// more view of what she found, so it sits with the cards. Picking an item brings it to the front and
+// the others wait on a shelf beside it.
+function siteName(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return '';}}
+function pageOn(){return !R.past&&!!(R.page||(pane()&&site.open));}
+// A card whose title starts with one of the person's bots is about that bot, said so or not.
+function botNamed(title){
+  var t=String(title||'').toLowerCase(),hit='';
+  (window.MiaBots?window.MiaBots.list():[]).forEach(function(b){
+    var n=String(b.name||'').toLowerCase();
+    if(n&&n.length>hit.length&&t.indexOf(n)===0)hit=b.name;
+  });
+  return hit;
+}
+// A card about a bot shows that bot; any other card shows the picture found for it.
+// A card about a site or a profile shows the page itself: the last picture of it from Mia's browser.
+// Pictures are kept by address while the stage is open; a card that names only the site takes any
+// page of that site. Until she has been there the card carries the site's name.
+var shots={},shotKeys=[],MAX_SHOTS=40;
+function shotKey(u){
+  try{var x=new URL(/^https?:\/\//i.test(u)?u:'https://'+u),h=x.hostname.replace(/^www\./,'').toLowerCase(),p=x.pathname.replace(/\/+$/,'');return h?{site:h,page:h+p,whole:!p}:null;}catch(e){return null;}
+}
+function shotKeep(u,image){
+  var k=shotKey(u);if(!k)return;
+  [k.page,k.site].forEach(function(key){
+    if(!shots[key]){shotKeys.push(key);if(shotKeys.length>MAX_SHOTS)delete shots[shotKeys.shift()];}
+    shots[key]=image;
+  });
+}
+function shotOf(u){var k=shotKey(u);return k?shots[k.page]||(k.whole&&shots[k.site])||'':'';}
+// The cards on the stage that still have no picture, and whether an open tab is the page of one of them.
+var shotWants=[];
+function shotWanted(u){
+  var k=shotKey(u);
+  return !!k&&shotWants.some(function(w){return w.page===k.page||(w.whole&&w.site===k.site);});
+}
+// A link a card carries: "words | address", or the address alone, named by its site.
+function linkOf(v){
+  var at=v.lastIndexOf('|'),u=(at<0?v:v.slice(at+1)).trim().replace(/^<|>$/g,''),label=at<0?'':v.slice(0,at).trim();
+  if(!/^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+(?=[\/:?#]|$)\S*$/i.test(u))return null;
+  u=pageUrl(u);
+  return {label:str(label,32)||siteName(u),url:u};
+}
+// A card about a site always offers that site; the links it names follow, each once.
+function cardLinks(c,bot){
+  var a=[],u=bot?'':pageUrl(c.page);
+  if(u&&siteName(u))a.push({label:siteName(u),url:u});
+  (c.links||[]).forEach(function(l){if(!a.some(function(x){return x.url===l.url;}))a.push(l);});
+  return a.slice(0,4);
+}
+function pageUrl(p){return p?(/^https?:\/\//i.test(p)?p:'https://'+p):'';}
+// A drawn picture: the card's figure with what it counts, a ring for a share of a whole, and an icon,
+// on a panel tinted by the card's tone. On the shelf it is the figure or the icon alone.
+function drawHtml(d,small){
+  var icon=d.icon?'<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="'+ICONS[d.icon]+'"/></svg>':'';
+  if(small)return '<span class="draw-s'+(d.tone?' tone-'+d.tone:'')+'">'+(d.num?'<b>'+esc(d.num)+'</b>':icon||'<b>'+d.meter+'%</b>')+'</span>';
+  return '<div class="fig">'+icon+(d.num?'<b>'+esc(d.num)+'</b>':'')+(d.cap?'<span>'+esc(d.cap)+'</span>':'')+'</div>'+
+    (d.meter!=null?'<div class="dial" role="img" aria-label="'+d.meter+' percent"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15"/><circle class="on" cx="18" cy="18" r="15" pathLength="100" stroke-dasharray="'+d.meter+' 100"/></svg><i>'+d.meter+'%</i></div>':'');
+}
+function picHtml(v,small){
+  if(v.bot)return '<img alt="" class="mote" '+moteArt(v.bot)+'>';
+  if(v.src)return '<img alt=""'+(v.mark||'')+' src="'+esc(v.src)+'">';
+  if(v.draw)return drawHtml(v.draw,small);
+  return v.site?'<span class="site-n">'+esc(v.site)+'</span>':'';
+}
+// The picture's place on a card. A card with nothing to show has none, so no card carries an empty panel.
+function picBox(v){
+  if(!(v.bot||v.src||v.draw||v.site||v.wait))return '';
+  var drawn=v.draw&&!v.bot&&!v.src;
+  return '<div class="pic'+(drawn?' draw'+(v.draw.tone?' tone-'+v.draw.tone:''):'')+'">'+picHtml(v)+'</div>';
+}
+// What a card says under its picture: the title, the line or two, what it covers, and its one button.
+function cardWords(v,lead){
+  return '<div class="card-t">'+(lead||'')+'<b>'+esc(v.title)+'</b>'+(v.text?'<p>'+cardText(v.text)+'</p>':'')+
+    (v.chips&&v.chips.length?'<div class="chips">'+v.chips.map(function(c){return '<span>'+esc(c)+'</span>';}).join('')+'</div>':'')+
+    (v.links&&v.links.length?'<div class="links">'+v.links.map(function(l){return '<a class="lnk" href="'+esc(l.url)+'" target="_blank" rel="noopener" title="'+esc(l.url)+'">'+esc(l.label)+'</a>';}).join('')+'</div>':'')+
+    (v.act?'<button class="btn act" data-act="'+esc(v.act+': '+v.title)+'">'+esc(v.act)+'</button>':'')+'</div>';
+}
+function itemView(it){
+  if(it.key!=='page'){
+    var c=it.card,bot=c.bot||botNamed(c.title),shot=bot?'':shotOf(c.page),draw=!bot&&!shot&&(c.icon||c.num||c.meter!=null)?c:null,photo=bot||shot||draw?'':pic(c.image);
+    return {title:c.title,text:c.text,bot:bot,src:bot?'':shot||photo,draw:draw,wait:!!c.image&&!bot&&!shot&&!draw&&pics[c.image]==='',chips:c.chips,act:c.act,links:cardLinks(c,bot),mark:shot?' data-shot':'',site:siteName(pageUrl(c.page)),url:bot?'':pageUrl(c.page)};
+  }
+  var p=R.page||{};
+  return {title:p.title||'The page I am in',text:siteName(p.url)||'Browser',src:p.image||'',mark:' data-page'};
+}
+// A card's text is one plain paragraph; a link written in it is shown as its words, and one cut short is left out.
+function cardText(t){
+  return esc(String(t||'').replace(/\(?\[[^\]]*\]?\s*(\([^)]*)?$/,'').trim()).replace(/\[([^\]]+)\]\s*\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function cardHtml(it,i){
+  var v=itemView(it);
+  return '<article class="card'+(it.key==='page'?' page':'')+(v.bot?' of-bot':'')+'" data-item="'+it.key+'" role="button" tabindex="0" style="--i:'+i+'">'+picBox(v)+cardWords(v)+'</article>';
+}
+function thumbHtml(it){
+  var v=itemView(it);
+  return '<button class="thumb" data-item="'+it.key+'" title="'+esc(v.title)+'"><span class="pic">'+picHtml(v,true)+'</span><b>'+esc(v.title)+'</b></button>';
+}
+function frontHtml(it){
+  var v=itemView(it),x='<button class="front-x" data-item="" aria-label="Back to everything" title="Back to everything"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>';
+  // In the desktop app the page itself takes this place; anywhere else it is a picture of it.
+  if(it.key==='page'&&pane())return '<div class="front live" id="frontPage"></div>';
+  if(it.key==='page')return '<figure class="front shot">'+x+(v.src?'<img alt="The page Mia is in"'+v.mark+' src="'+esc(v.src)+'">':'<p class="hint">Opening the page.</p>')+
+    '<figcaption><b>'+esc(v.title)+'</b><span>'+esc(v.text)+'</span><small>A picture of the page I am in. It follows what I do there.</small></figcaption></figure>';
+  // A card about a site is that site: in the desktop app the page itself is there to use the moment
+  // the card comes to the front. Anywhere else it is a picture that opens the site in a tab.
+  if(siteLive(it.key))return '<article class="front card on-site"><div class="pic" id="frontPage"></div>'+cardWords(v)+'</article>';
+  var pic=v.url&&v.site&&!v.draw?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':picBox(v);
+  return '<article class="front card'+(v.bot?' of-bot':'')+'">'+x+pic+cardWords(v)+'</article>';
+}
+// Decisions stand as a deck: one in front, its neighbours at the edges, gone through by a swipe, an
+// arrow or a dot. Each takes one answer, and the answers go back to Mia together.
+var DECIDE=[['yes','Approve'],['no','Not approve'],['work','Keep working'],['more','Show me more']];
+function isDeck(items){return items.some(function(it){return it.key!=='page'&&it.card.decide;});}
+// A site opened from the decision in front is shown live in that card's own frame; the browser's bar
+// above it goes back, widens it over the stage, and closes it back to the card.
+function deckSite(run,key){return !!pane()&&site.open&&!!site.card&&site.card===key&&site.deckRun===run;}
+function deckHtml(items,picks,locked,run){
+  var n=items.length,done=items.filter(function(it){return picks[it.key];}).length;
+  var arrow=function(by,d){return '<button class="deck-go" data-turn="'+by+'" aria-label="'+(by<0?'The one before':'The next one')+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+d+'"/></svg></button>';};
+  return '<div class="deck" id="deck"><div class="leaves" id="leaves">'+items.map(function(it,i){
+    var v=itemView(it),pick=picks[it.key]||'';
+    return '<article class="leaf card'+(v.bot?' of-bot':'')+(pick?' decided':'')+'" data-key="'+it.key+'">'+(deckSite(run,it.key)?'<div class="pic site-live" id="frontPage"></div>':v.url&&v.site&&v.src&&!v.bot?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':v.bot||v.src||v.draw?picBox(v):'')+cardWords(v,'<small>'+(i+1)+' of '+n+'</small>')+
+      (it.card.decide?'<div class="decide">'+DECIDE.map(function(d){
+        return '<button class="btn'+(pick===d[0]?' primary':'')+'" data-pick="'+d[0]+'" data-of="'+it.key+'" aria-pressed="'+(pick===d[0]?'true':'false')+'"'+(locked?' disabled':'')+'>'+d[1]+'</button>';
+      }).join('')+'</div>':'')+'</article>';
+  }).join('')+'</div><div class="deck-nav">'+arrow(-1,'m14 6-6 6 6 6')+
+    '<span class="dots">'+items.map(function(it,i){return '<button class="dot'+(picks[it.key]?' done':'')+'" data-dot="'+i+'" aria-label="'+(i+1)+' of '+n+'"></button>';}).join('')+'</span>'+arrow(1,'m10 6 6 6-6 6')+'</div>'+
+    (locked?(done?'<p class="deck-sent">'+(done===1?'Your answer is':'Your '+done+' answers are')+' with Mia.</p>':'')
+      :done?'<div class="deck-send"><button class="btn primary big" data-decided="1">Send '+(done===1?'my answer':'my '+done+' answers')+' to Mia</button>'+(done<n?'<span>'+(n-done)+' still open</span>':'')+'</div>':'')+'</div>';
+}
+// The one in front is kept on the run, so a redraw or a step back opens the deck where it was.
+function deckMark(){
+  var el=$('leaves');if(!el)return;
+  var run=seeing()||R,at=run?run.leaf||0:0;
+  [].forEach.call(el.children,function(c,i){c.classList.toggle('on',i===at);});
+  [].forEach.call(root.querySelectorAll('.deck .dot'),function(d,i){d.classList.toggle('on',i===at);});
+  // A site open in a card goes with that card: turning to another one closes it.
+  if(site.deckRun&&(site.deckRun!==run||!el.children[at]||el.children[at].dataset.key!==site.card)){deckSiteOff();setTimeout(draw,0);}
+  else if(site.deckRun&&pane())sitePlace();
+}
+function deckSiteOff(){if(site.deckRun){site.deckRun=null;site.card='';site.open=false;}}
+function deckTo(i,smooth){
+  var el=$('leaves'),run=seeing()||R;if(!el||!run)return;
+  i=Math.max(0,Math.min(el.children.length-1,i));run.leaf=i;
+  // Measured on the screen: a leaf's own offset is counted from whatever box holds the stage.
+  var c=el.children[i].getBoundingClientRect(),b=el.getBoundingClientRect();
+  el.scrollTo({left:el.scrollLeft+(c.left+c.width/2)-(b.left+b.width/2),behavior:smooth?'smooth':'auto'});
+  deckMark();
+}
+function deckPlace(){
+  var el=$('leaves'),run=seeing()||R;if(!el||el._placed)return;
+  el._placed=true;deckTo(run?run.leaf||0:0,false);
+}
+function deckScrolled(el){
+  var run=seeing()||R,b=el.getBoundingClientRect(),mid=b.left+b.width/2,at=0,best=Infinity;if(!run)return;
+  [].forEach.call(el.children,function(c,i){var r=c.getBoundingClientRect(),d=Math.abs(r.left+r.width/2-mid);if(d<best){best=d;at=i;}});
+  if(run.leaf!==at){run.leaf=at;deckMark();}
+}
+// An answer marks its decision and turns to the next one still open; the same answer again takes it back.
+function deckItems(run){return run===R?stageItems:readCards(readCanvas(run.body||'').rest).cards.map(function(c,i){return {key:'c'+i,card:c};});}
+function deckPick(key,pick){
+  // A deck on an earlier view is answered there, once; the one in front waits while Mia works.
+  var run=seeing()||R;if(!run||(R&&R.running)||(run!==R&&(run.decided||!run.past||run.plain)))return;
+  if(run.decided){run.decided=false;run.picks={};}
+  run.picks=run.picks||{};
+  if(run.picks[key]===pick)delete run.picks[key];else run.picks[key]=pick;
+  var all=deckItems(run),at=run.leaf||0,next=-1,i;
+  for(i=1;i<=all.length&&run.picks[key];i++){var j=(at+i)%all.length;if(all[j].card.decide&&!run.picks[all[j].key]){next=j;break;}}
+  draw();if(next>=0)deckTo(next,true);
+}
+// The answers go to Mia in one direction. The deck stays up, answered, while she acts on them.
+function deckSend(){
+  var run=seeing()||R;if(!run||(R&&R.running)||(run!==R&&(run.decided||!run.past||run.plain)))return;
+  var picks=run.picks||{},leaf=run.leaf||0,names={};DECIDE.forEach(function(d){names[d[0]]=d[1];});
+  var lines=deckItems(run).filter(function(it){return it.card&&it.card.decide&&picks[it.key];}).map(function(it,i){return (i+1)+'. '+it.card.title+': '+names[picks[it.key]];});
+  if(!lines.length)return;
+  deckSiteOff();
+  direct('My answers to the decisions you showed me:\n'+lines.join('\n')+'\nAct on them. Carry out what I approved. Drop what I did not approve. Where I said keep working, go on with it and come back when it is ready. '+
+    'Where I asked for more, show me more on that one. Leave the ones I did not answer open.',lines.length===1?lines[0].slice(3):'My '+lines.length+' answers: '+lines.map(function(l){return l.slice(3);}).join('; '));
+  if(run.past)run.decided=true;else{R.picks=picks;R.decided=true;R.leaf=leaf;}
+  draw();
+}
+// focus(key, picked): bring one item to the front, or none. picked is the person's own choice, which
+// Mia's work does not undo for the rest of the run.
+function focus(key,picked){
+  var old=seeing();
+  if(old){old.focus=key||'';draw();return;}
+  if(!R)return;
+  R.focus=key||'';if(picked)R.picked=true;
+  if(pane()){
+    var url=R.focus!=='page'&&innerWidth>=760?siteOf(R.focus):'';
+    site.card=url?R.focus:'';
+    if(url){site.open=true;site.wide=false;siteShow(url);}
+    else if(R.focus==='page'){site.open=true;pageShow();}
+    else if(R.focus!=='page')site.open=false;
+  }
+  draw();
+}
+// The web address a card stands for, and whether its page is the one live at the front.
+var stageItems=[],stageNow=null;
+function siteOf(key){
+  var it=stageItems.filter(function(i){return i.key===key;})[0],v=it&&it.key!=='page'?itemView(it):null;
+  return v&&v.url&&v.site?v.url:'';
+}
+function siteLive(key){return !R.past&&!!pane()&&site.open&&!!site.card&&site.card===key&&R.focus===key;}
+function newRun(text){
+  return {said:text,running:true,sent:false,line:'On it.',draft:'',say:'',ask:'',body:'',options:[],next:'',files:[],touched:[],
+    asks:[],bots:[],dispatch:'',over:{},note:'',spoken:'',keep:'',page:null,pageBase:Math.max(0,pageAt),focus:'',picked:false};
+}
+function narrating(){var d=dropHandoffs(R.draft).trim();return d&&d.length<=200&&d.indexOf('\n')<0&&!/^[-|#\d]/.test(d);}
+function miaLine(){
+  if(R.note)return R.note;
+  var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
+  if(ask)return 'I need your OK before I go on.';
+  ask=crewAsks.filter(function(a){return a.status==='pending';})[0];
+  if(ask)return ask.by+' needs your OK before it goes on.';
+  if(R.running&&narrating())return dropHandoffs(R.draft).trim().replace(/[*_`]+/g,'');
+  // The last view stays up while she makes the next one, so her line says what she is on.
+  if(R.running&&R.keep&&R.draft.indexOf('\n')>0)return /```canvas/i.test(R.draft)?'Building your new view\u2026':'Writing this up\u2026';
+  // With the sound or her voice off her question has to be read.
+  return !R.running&&R.ask&&(muted||quiet)?R.ask:R.line;
+}
+// Her view being made: one calm panel that says where she is, never the half-written page.
+// The motion is timed off the clock, so a redraw does not start it over.
+function buildingHtml(n){
+  var step=n<1500?'Laying out the structure':n<6000?'Filling in the details':'Adding the finishing touches';
+  return '<div class="canvas building" style="--t:-'+(Date.now()%2400)+'ms" role="status"><div class="b-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>'+
+    '<div class="b-say"><b>Building your view</b><span>'+step+'\u2026</span><small>I\'ve got this. It shows here the moment it is ready.</small></div></div>';
+}
+function resultHtml(){
+  // While she writes, the closing lines meant for the app (her options, her next step, her name) stay out.
+  var text=R.running?readReply(R.draft.replace(/\n\s*(?:Next:[^\n]*|\[[^\]\n]{1,40}\])\s*(?=\n|$)/g,'')).body:R.body;
+  // One short line on its own is her narration, shown beside her mark, not a result.
+  if(R.running&&narrating())text='';
+  // The view from before stays on the stage until the new one is whole; a reply with nothing to show keeps it.
+  var kept=!!R.keep&&(R.running||!text),words='';
+  // An answer in words alone does not take the view away: it is read above the view it is about.
+  if(!kept&&R.keep&&text&&!showsView(text)&&showsView(R.keep)){
+    // Short, it is read in the strip above the stage; a long one is laid out here, above the view.
+    if(!spoken(text))words='<div class="panel result answer"><div class="md">'+format(text)+'</div></div>';
+    kept=true;
+  }
+  if(kept)text=R.keep;
+  // A new view of her own starts clean: answers carried over belonged to the view before.
+  else if(R.carried&&!R.running){R.carried=false;if(!R.decided){R.picks={};R.leaf=0;}}
+  // What a bot brought back takes the stage while the person looks at it.
+  var shown=shownBot(),from='';
+  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>'+(shown.chat?'your chat with it':'brought this back')+'</span><button class="btn" data-big="1">'+(big?'Smaller':'Bigger')+'</button><button class="btn" data-hide="1">Close</button></div>';}
+  // Its tile opens the whole chat with it, read as it stands; nothing in it is drawn as a card.
+  if(shown&&shown.chat)return from+'<div class="panel result"><div class="md">'+format(shown.talk==null?'Getting that conversation\u2026':shown.talk||'That conversation has nothing in it yet.')+'</div></div>';
+  var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
+  // With a canvas the page waits behind the Browser button unless the person brought it forward.
+  shotWants=read.cards.map(function(c){return c.page&&!c.bot&&!botNamed(c.title)&&!shotOf(c.page)?shotKey(c.page):null;}).filter(Boolean);
+  shotWants.forEach(function(w){w.url='https://'+w.page;});
+  if(!R.past)stageItems=items.slice();
+  // Answers sent are shown on the deck they were given on, which no longer takes any.
+  var deck=isDeck(items)?deckHtml(items,R.decided&&!kept&&!R.past?{}:R.picks||{},R.past?!!R.decided||!!R.plain||!!(stageNow&&stageNow.running):R.running||(!!R.decided&&kept),R):'';
+  // A card whose own page is live at the front is that page; it is not listed a second time.
+  if(pageOn()&&!site.deckRun&&!siteLive(R.focus)&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
+  if(deck)items=items.filter(function(it){return it.key==='page';});
+  var front=items.filter(function(it){return it.key===R.focus;})[0];
+  return from+words+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
+    :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(deck&&items.length?'<div class="cards">'+cardHtml(items[0],0)+'</div>':'')+(deck||(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':'')))+
+    (read.rest?'<div class="panel result'+(R.running&&!shown&&!kept?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
+}
+function askHtml(a){
+  if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
+  return '<div class="panel ask open"><span class="lbl">'+(a.by?esc(a.by)+' needs you':'Needs you')+'</span><b>Do you approve?</b>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+(a.summary?'<pre>'+esc(a.summary)+'</pre>':'')+
+    '<div class="acts"><button class="btn primary" data-ask="'+esc(a.id)+'" data-ok="1">Yes</button><button class="btn" data-ask="'+esc(a.id)+'" data-ok="0">No</button></div></div>';
+}
+// A new bot Mia drafted. The draft and the creation are the app's (the card in Mia's chat there);
+// here it is only drawn, and what the person types goes back to the app's draft.
+var botCard=null;
+function botCardHtml(){
+  var v=botCard&&botCard.view();
+  if(!v||v.phase==='closed')return '';
+  if(v.phase==='interpreting')return '<div class="panel ask newbot"><span class="lbl">New bot</span><p>Drafting your bot…</p></div>';
+  if(v.phase==='failed')return '<div class="panel ask newbot"><span class="lbl">New bot</span><p>'+esc(v.error||'The bot could not be drafted. Nothing was created.')+'</p></div>';
+  if(v.phase==='created'&&v.created)return '<div class="panel ask newbot"><span class="lbl">New bot</span><b>'+esc(v.created.name)+' is ready</b>'+
+    '<p>It has its own chat'+(v.created.handedOff?', and it was asked to propose the automation you wanted. Confirm the steps there.':'.')+'</p>'+
+    '<div class="acts"><button class="btn primary" data-newbot="open">Open '+esc(v.created.name)+'’s chat</button></div></div>';
+  var busy=v.phase==='activating';
+  return '<div class="panel ask open newbot"><span class="lbl">New bot</span><b>Review the draft</b>'+
+    '<label>Name<input id="newBotName" maxlength="40" value="'+esc(v.name)+'"'+(busy?' disabled':'')+'></label>'+
+    '<label>Instructions<textarea id="newBotBrief" rows="7"'+(busy?' disabled':'')+'>'+esc(v.instructions)+'</textarea></label>'+
+    (v.automation?'<p>Once it exists it is asked to set up: '+esc(v.automation)+'</p>':'')+
+    (v.error?'<p class="err">'+esc(v.error)+'</p>':'')+
+    '<div class="acts"><button class="btn primary" data-newbot="accept"'+(busy?' disabled':'')+'>'+(busy?'Creating…':'Create bot')+'</button>'+
+    (busy?'':'<button class="btn" data-newbot="dismiss">Not now</button>')+'</div></div>';
+}
+function botCardAct(what){
+  var v=botCard&&botCard.view();if(!v)return;
+  if(what==='open'&&v.created)readChat({id:v.created.conversationId,label:v.created.name});
+  else if(what==='accept'){botCardEdit();botCard.accept();}
+  else if(what==='dismiss'){botCard.dismiss();botCard=null;}
+  draw();
+}
+function botCardEdit(){
+  var n=$('newBotName'),b=$('newBotBrief');
+  if(botCard&&n&&b)botCard.edit(n.value,b.value);
+}
+// The next thing said closes a draft nobody accepted, as it does in Mia's chat in the app.
+function botCardNext(){
+  var v=botCard&&botCard.view();if(!v||v.phase==='activating')return;
+  if(v.phase==='review'||v.phase==='interpreting')botCard.dismiss();
+  botCard=null;
+}
+// Mia's reply asked for a new bot. In Flow Tandem the app is on screen, so the app shows its
+// own card in her chat; in Flow the card comes to the stage.
+function botSetupAsked(ev){
+  var h=appHost(),own=function(){
+    if(!h.botSetup||!conv)return;
+    var card=h.botSetup(conv,ev,redraw);if(card){botCard=card;redraw();}
+  };
+  if(tandem&&h.botSetupInApp)Promise.resolve(h.botSetupInApp(ev)).then(function(shown){if(!shown)own();},own);
+  else own();
+}
+function choiceHtml(){
+  if(R.running||(!R.options.length&&!R.next))return '';
+  // Her own choices come first; a suggested next step shows only when she left none.
+  return '<div class="panel ask open">'+(R.options.length?'<span class="lbl">Needs your judgment</span><div class="opts">'+R.options.map(function(o,i){return '<button class="btn" data-opt="'+i+'">'+esc(o)+'</button>';}).join('')+'</div>':'')+
+    (R.next&&!R.options.length?'<span class="lbl">Next</span><div class="opts"><button class="btn" data-next="1">'+esc(R.next)+'</button></div>':'')+'</div>';
+}
+// Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
+// bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
+// Mia puts a bot's chat across the whole stage with an "Open:" line (stageOpen); the other bots draw
+// small. The button on that chat gives the stage its usual width back.
+var big=false;
+// mateShow(mate,asChat,wide): the chat with a bot, or what it brought back, takes the stage.
+function mateShow(mate,asChat,wide){
+  // A bot from an earlier visit can be opened before anything was said this time.
+  backToNow();
+  if(!R){R=newRun('');R.running=false;R.sent=true;R.line=asChat?'Here is your chat with '+mate.name+'.':'Here is what '+mate.name+' brought back.';s=2;}
+  var was=!wide&&mate.open&&!!mate.chat===asChat;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.chat=asChat;if(mate.reply)mate.seen=true;R.top=true;big=!!wide;draw();
+  if(mate.open&&asChat){
+    mate.talk=null;
+    chatText({id:mate.conversationId,label:mate.name}).then(function(lines){
+      mate.talk=lines.join('\n\n---\n\n');
+      if(open&&mate.open&&mate.chat){draw();$('cv').scrollTop=$('cv').scrollHeight;}
+    },function(){mate.talk='That conversation could not be opened.';if(open)draw();});
+  }
+}
+function shownBot(){return seeing()?null:crew.filter(function(b){return b.open&&(b.chat||b.reply);})[0]||null;}
+function botLine(b){return b.running?b.line:b.failed?'Could not finish':'Done';}
+function botsHtml(){
+  var mine=R?R.bots:[],named=crew.concat(mine),own=(window.MiaBots?window.MiaBots.list():[]).filter(function(b){
+    return b.working&&!named.some(function(w){return w.name===b.name;});
+  }).slice(0,8);
+  if(!named.length&&!own.length)return '';
+  function tile(kind){return function(b,i){
+    return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-'+kind+'="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(botLine(b))+'</span></button>';
+  };}
+  // The bots stand at the right edge of the screen, out of the way of what is being shown.
+  return '<div class="rail'+(big&&shownBot()?' small':'')+'" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+mine.map(tile('bot')).join('')+own.map(function(b){
+    return '<div class="bot busy"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step">Working</span></div>';
+  }).join('')+'</div>';
+}
+// What a background worker wrote, opened from its tile.
+function miniHtml(){
+  return R.bots.filter(function(b){return b.open;}).map(function(b){
+    return '<div class="mini'+(b.running?' busy':'')+'"><img class="perch" alt="" '+moteArt(b.name)+'><div class="mini-win"><div class="mini-h"><b>'+esc(b.name)+'</b><span class="step">'+esc(b.running?b.line:'Done')+'</span></div>'+
+      (b.reply?'<div class="md small">'+format(b.reply)+'</div>':'<p class="hint">Nothing to show yet.</p>')+'</div></div>';
+  }).join('');
+}
+// A bot that finished waits for the person: look at what it made, or leave it with Mia.
+function doneHtml(){
+  return crew.map(function(b,i){
+    if(b.running||!b.reply||b.seen)return '';
+    return '<div class="panel ask open"><span class="lbl">Finished</span><b>'+esc(b.name)+' has finished. Want to see it?</b>'+(b.report?'<p>'+esc(b.report)+'</p>':'')+
+      '<div class="acts"><button class="btn primary" data-show="'+i+'">Show me</button><button class="btn" data-manage="'+i+'">You manage it</button></div></div>';
+  }).join('');
+}
+function filesHtml(){
+  var made=R.files.map(function(f){return '<a class="file" href="'+esc(f.url)+'" target="_blank" rel="noopener">'+esc(f.name)+'</a>';});
+  var seen={},touched=R.touched.filter(function(n){if(seen[n])return false;seen[n]=1;return true;}).slice(-8).map(function(n){return '<span class="file">'+esc(n)+'</span>';});
+  if(!made.length&&!touched.length)return '';
+  return '<span class="lbl">Files</span><div class="files">'+made.concat(touched).join('')+'</div>';
+}
+// The strip above the stage: what the person said last and what Mia said last. It stays in place
+// while the stage under it scrolls, changes or is built again, so the talk never waits on the view.
+var convoH=0;
+function plainOf(t){return String(t||'').replace(/```[\s\S]*?```/g,' ').replace(/^\s*[-*]\s+/gm,'').replace(/[*_`#>|]+/g,'').replace(/\s+/g,' ').trim();}
+// An answer in words short enough to be read in the strip.
+function spoken(text){var t=plainOf(text);return t.length<=600?t:'';}
+function convoOf(seen){
+  var run=seen||R;if(!run||(!seen&&s===1))return null;
+  var now=R,mia='';R=run;
+  try{
+    var words=!run.running&&!run.plain&&run.body&&!showsView(run.body)&&showsView(run.keep)?spoken(run.body):'';
+    mia=words||miaLine();
+  }finally{R=now;}
+  return {by:run.chat?(run.root?'Thread':'Chat'):run.plain?'Chat':run.own?'Mia, on her own':seen?'You said earlier':'You said',said:run.said||'',mia:mia,busy:!!run.running,
+    log:past.length+(now&&now.said?1:0)>1};
+}
+// Words move letter by letter; a long line moves word by word so it stays light.
+function pieces(text){
+  var by=text.length>180?'w':'c';
+  return text.split(/(\s+)/).filter(Boolean).map(function(w){return /^\s+$/.test(w)?null:by==='w'?[w]:Array.from(w);});
+}
+function lettersHtml(text,kept){
+  var ps=pieces(text),total=0,n=0;ps.forEach(function(p){if(p)total+=p.length;});
+  var fresh=Math.max(1,total-kept),run=Math.min(520,fresh*16),gone=Math.min(140,total*6);
+  return ps.map(function(p){
+    if(!p)return ' ';
+    return '<span class="w">'+p.map(function(ch){
+      var i=n++,isNew=i>=kept;
+      return '<span class="l'+(isNew?' in':'')+'" style="--x:'+(((i*37)%13-6)*1.3).toFixed(1)+'px;--y:'+((i*53)%11-5)+'px;--d:'+Math.round(isNew?(i-kept)/fresh*run:0)+'ms;--o:'+Math.round(i/Math.max(1,total)*gone)+'ms">'+esc(ch)+'</span>';
+    }).join('')+'</span>';
+  }).join('');
+}
+function unitsOf(text){var n=0;pieces(text).forEach(function(p){if(p)n+=p.length;});return n;}
+// A line that changes is taken apart and the new one is built in its place; a line that only
+// grows keeps what is there and builds the rest. Nothing around it is drawn again.
+function morph(el,text){
+  text=text||'';
+  if(el._t===text)return;
+  el._t=text;
+  var put=function(kept){
+    el._timer=null;el._shown=el._t;el.classList.remove('out');
+    el.innerHTML=el._t?'<span class="sr">'+esc(el._t)+'</span><span aria-hidden="true">'+lettersHtml(el._t,kept)+'</span>':'';
+    if(convoSize()){canvasPlace();deckPlace();if(pane())sitePlace();}
+  };
+  if(el._timer)return;
+  var old=el._shown||'',calm=host.classList.contains('calm')||(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches);
+  if(calm)return put(Infinity);
+  if(!old)return put(0);
+  if(text.indexOf(old)===0&&(text.length>180)===(old.length>180))return put(unitsOf(old));
+  el.classList.add('out');el._timer=setTimeout(function(){put(0);},360);
+}
+function convoSize(){
+  var el=$('convo'),h=el.hidden?0:el.offsetHeight;
+  if(h===convoH)return false;
+  convoH=h;host.style.setProperty('--convo',h+'px');return true;
+}
+function convoDraw(){
+  var el=$('convo'),c=convoOf(seeing());
+  if(!c){
+    if(!el.hidden){el.hidden=true;unmount(el);el.innerHTML='';el._mode='';}
+    convoSize();return;
+  }
+  if(!el.firstChild)el.innerHTML='<div class="said"><small id="saidBy"></small><p class="morph" id="saidP"></p>'+
+    '<button class="said-log" data-log="1" aria-label="The conversation so far" title="The conversation so far" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6zM6 3v18M3.5 7.5h3M3.5 12h3M3.5 16.5h3M10 8h5M10 12h5"/></svg></button></div>'+
+    '<div class="mia" id="miaRow"><span id="miaMk"></span><p class="morph" id="miaLine" role="status"></p></div>';
+  el.hidden=false;
+  var mode=c.busy?'activity':'static',mk=$('miaMk');
+  if(el._mode!==mode){el._mode=mode;unmount(mk);mk.innerHTML=mark(22,mode);mount(mk);}
+  $('saidBy').textContent=c.by;el.querySelector('.said').hidden=!c.said;el.querySelector('.said-log').hidden=!c.log;
+  $('miaRow').hidden=!c.mia;
+  morph($('saidP'),c.said);morph($('miaLine'),c.mia);
+  convoSize();
+}
+// The stage for one run: the one going on now, or an earlier one the person stepped back to.
+function stageHtml(seen){
+  var rail=botsHtml(),now=R;stageNow=now;
+  if(seen)R=seen;
+  try{
+    var side=seen?filesHtml():crewAsks.concat(R.asks).map(askHtml).join('')+botCardHtml()+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
+    var main=R.chat?chatHtml(R):R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
+    // What was said last is in the strip above; the stage is only the work.
+    return '<div class="wrap still'+(quiet?' center':'')+'">'+
+      (quiet?'':'<div class="work'+(side?'':' solo')+(big&&shownBot()?' big':'')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
+  }finally{R=now;}
+}
+// Stepping through earlier views: left is the past, right comes back up to now. Nothing is sent to Mia.
+// A view is one page however many turns were spent on it: an answer in words joins the page of the view
+// it is about, and the page shows the newest of those turns above the view.
+function lastOf(i){
+  var v=viewOf(past[i]),j=i,k;
+  for(k=i+1;k<past.length;k++)if(past[k].body&&viewOf(past[k])===v)j=k;
+  return R&&R.sent&&!R.running&&R.body&&viewOf(R)===v?past.length:j;
+}
+function stops(){var a=[];past.forEach(function(r,i){if(r.body&&lastOf(i)===i)a.push(i);});return a;}
+function step(d){
+  var a=stops(),at=peek||view<0?a.length:a.indexOf(view);
+  if(at<0)at=a.length;
+  at=Math.max(0,Math.min(a.length,at+d));
+  peek=null;view=at===a.length?-1:a[at];
+  draw();$('cv').scrollTop=0;
+}
+function backToNow(){if(!seeing())return false;peek=null;view=-1;return true;}
+function stepsDraw(){
+  var a=stops(),at=view<0?a.length:a.indexOf(view),old=!!seeing();
+  $('steps').hidden=!a.length&&!peek;
+  $('stepBack').disabled=!peek&&at<=0;$('stepNext').disabled=!old;
+  $('stepBack').hidden=$('stepNext').hidden=!a.length;
+  $('stepAt').textContent=peek?(peek.root?'A thread you pulled':'A chat you pulled'):old?(at+1)+' of '+(a.length+1):'Now';
+  $('stepNow').hidden=!old;
+}
+// The drawer: what the person asked and what Mia reported, turn by turn. No steps, no tools.
+function told(r){
+  if(r.running)return 'Working on it\u2026';
+  var said=[r.say,r.ask].filter(Boolean).join(' ');
+  if(said)return said;
+  var drawn=readCanvas(r.body),read=readCards(drawn.rest);
+  return str(read.rest.replace(/[*_`#>|]+/g,'').replace(/\s+/g,' '),220)||(drawn.html?'I drew a view for this.':read.cards.length?'I laid it out as cards.':r.line||'Done.');
+}
+function logDraw(){
+  var turns=past.concat(R&&R.said?[R]:[]),tab=$('logTab'),box=$('log');
+  if(!turns.length)drawerOn=false;
+  tab.hidden=!turns.length||drawerOn;host.classList.toggle('log-on',drawerOn);tab.setAttribute('aria-expanded',drawerOn?'true':'false');
+  box.hidden=!drawerOn;
+  if(!drawerOn){box._h='';return;}
+  var seen=seeing();
+  var h='<header><b>You and Mia</b><button class="new" data-new="1">New chat</button><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l" id="logL">'+turns.map(function(r,i){
+    var to=r===R?-1:r.body?lastOf(i):null;if(to>=past.length)to=-1;
+    return '<div class="turn'+(r===(seen||R)?' on':'')+'"'+(to===null?'':' data-view="'+to+'" role="button" tabindex="0"')+'><small>'+(r.own?'Mia, on her own':'You')+'</small><p>'+esc(r.said)+'</p><small>Mia</small><p>'+esc(told(r))+'</p></div>';
+  }).join('')+'</div>';
+  if(box._h===h)return;
+  var fresh=!box._h,list=$('logL'),top=list?list.scrollTop:0;
+  box._h=h;box.innerHTML=h;list=$('logL');
+  // It opens on the newest turn; after that it stays where the person left it.
+  list.scrollTop=fresh?list.scrollHeight:top;
+}
+// The drawer at the right edge: the person's chats in the app, as the app lists them. Picking one
+// reads it on the stage; nothing is sent to it.
+var chatsOn=false,chatRows=[];
+function chatsDraw(){
+  var tab=$('chatsTab'),box=$('chats');
+  tab.hidden=chatsOn;tab.setAttribute('aria-expanded',chatsOn?'true':'false');box.hidden=!chatsOn;
+  if(!chatsOn){box._h='';return;}
+  try{chatRows=appHost().chats()||[];}catch(e){chatRows=[];}
+  var h='<header><b>Your chats</b><button data-x="1" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header><div class="log-l">'+
+    (chatRows.length?chatRows.map(function(r,i){
+      return '<div class="turn'+(peek&&peek.chatId===r.id?' on':'')+'" data-chat="'+i+'" role="button" tabindex="0"><p>'+esc(r.label)+'</p><small>'+esc(r.sub||'')+'</small></div>';
+    }).join(''):'<div class="turn"><p>No chats yet.</p></div>')+'</div>';
+  if(box._h===h)return;
+  box._h=h;box.innerHTML=h;
+}
+// Searching from the bar: Mia's earlier views, the person's chats and their artifacts. Picking one
+// shows it on the stage and sends nothing; the last row hands the typed words to Mia.
+// The bar does one of two things: it takes a direction for Mia, or it searches. The small sign at its
+// left shows which; Tab in the box, or a click on the sign, changes it. Hands-free starts on search.
+function findMode(){return findOn&&!chatOn();}
+function findSet(on){
+  findOn=!!on;found=[];
+  $('find').classList.toggle('find',findOn);barDraw();
+  findDraw();if(!earState)$('box').placeholder=boxHint();
+}
+function findRun(){
+  var q=$('box').value.trim(),low=q.toLowerCase(),rows=[];
+  if(findMode()&&q){
+    past.forEach(function(r,i){if(r.body&&(r.said+' '+r.say).toLowerCase().indexOf(low)>=0)rows.push({kind:'view',label:r.said,sub:'A view Mia made',i:i});});
+    rows=rows.slice(-4).reverse();
+    try{rows=rows.concat((appHost().search(q)||[]).slice(0,10));}catch(e){}
+    rows.push({kind:'tell',label:q,sub:'Tell Mia'});
+  }
+  found=rows;findDraw();
+}
+function findDraw(){
+  var box=$('finds');box.hidden=!found.length;
+  box.innerHTML=found.map(function(r,i){
+    return '<button data-find="'+i+'"'+(i?'':' class="on"')+'><small>'+esc(r.kind==='tell'?'Tell Mia':r.kind==='view'?'View':r.kind==='chat'?'Chat':'Artifact')+'</small><b>'+esc(r.label)+'</b>'+(r.kind==='tell'?'':'<span>'+esc(r.sub||'')+'</span>')+'</button>';
+  }).join('');
+}
+function findPick(r){
+  if(!r)return;
+  $('box').value='';findSet(talkOn);
+  if(r.kind==='tell'){direct(r.label.slice(0,2000));return;}
+  if(r.kind==='view'){peek=null;view=r.i;draw();$('cv').scrollTop=0;return;}
+  if(r.kind==='artifact'){
+    if(!r.url||!siteOpen(r.url)){peek=newRun(r.label);peek.running=false;peek.past=peek.plain=true;peek.line='Artifacts open in the Mia desktop app.';view=-1;draw();}
+    return;
+  }
+  readChat(r);
+}
+// A chat is read here as it is: who said what, nothing else, and nothing is sent to it.
+// A chat's messages as the app keeps them, newest last: a company chat through the app's own
+// reader, any other from the conversation itself. Nothing is sent or marked read.
+function chatText(r){
+  return chatLines(r).then(function(lines){
+    return lines.map(function(l){return '**'+String(l.who||'Someone').replace(/[*_`]/g,'')+'**\n\n'+l.text;});
+  });
+}
+// The same messages one by one, each with its own id and the message it answers in a thread.
+function chatLines(r){
+  if(r.hub)return Promise.resolve(appHost().chatLines(r)).then(function(lines){
+    return (lines||[]).slice(-60).map(function(l){return {who:l.who,text:String(l.text).slice(0,6000),id:l.id||'',root:l.root||''};});
+  });
+  return call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
+    return (Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
+      var meta=(ev&&ev.metadata)||{},text=ev&&ev.content&&typeof ev.content.text==='string'?ev.content.text.trim():'';
+      if(!text||ev.deletedAt||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return null;
+      // A job Mia handed over reads as hers, without the working notes she adds for the bot.
+      var brief=text.search(/\s*\[From Mia, in [^\]\n]{1,20}\]/),handed=brief>=0;
+      if(handed)text=text.slice(0,brief);
+      if(!text)return null;
+      return {who:handed?'Mia':ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label:'Someone',text:text.slice(0,6000),id:ev.id||'',root:ev.parentEventId||''};
+    }).filter(Boolean).slice(-60);
+  });
+}
+// A chat that was pulled is on the stage with the bar under it as its message box: what is written
+// there is sent to that chat, or into the thread that is open, the way the app's own composer sends it.
+var chatTimer=null;
+function chatOn(){return peek&&peek.chat?peek:null;}
+function chatLoad(p,end){
+  return chatLines(p.chat).then(function(lines){
+    if(peek!==p)return;
+    var grew=lines.length!==p.lines.length;
+    p.lines=lines;p.body=lines.map(function(l){return l.who+': '+l.text;}).join('\n\n');
+    if(!p.note)p.line=lines.length?'Here is that conversation. What you write below is sent to it.':'That conversation has nothing in it yet. What you write below is sent to it.';
+    if(open){draw();if(end||grew)$('cv').scrollTop=$('cv').scrollHeight;}
+  },function(){if(peek===p&&!p.lines.length){p.line='That conversation could not be opened.';if(open)draw();}});
+}
+function readChat(r){
+  var p=peek=newRun(r.label);p.chat=r;p.chatId=r.id;p.lines=[];p.root='';p.running=false;p.past=p.plain=true;p.line='Getting that conversation…';view=-1;draw();
+  chatLoad(p,true);
+  // What others write shows up while the chat is on the stage.
+  clearInterval(chatTimer);chatTimer=setInterval(function(){var c=open&&chatOn();if(c)chatLoad(c);else{clearInterval(chatTimer);chatTimer=null;}},5000);
+}
+function chatHtml(p){
+  var replies={},top=[],root=null;
+  p.lines.forEach(function(l){if(l.root)replies[l.root]=(replies[l.root]||0)+1;else top.push(l);if(p.root&&l.id===p.root)root=l;});
+  var row=function(l,inThread){
+    var n=replies[l.id]||0;
+    return '<div class="msg"><b>'+esc(l.who||'Someone')+'</b><div class="md">'+format(l.text)+'</div>'+
+      (inThread||!l.id?'':'<button class="thread" data-thread="'+esc(l.id)+'">'+(n?n+(n===1?' reply':' replies'):'Reply')+'</button>')+'</div>';
+  };
+  if(p.root&&!root)p.root='';
+  var rows=p.root?[row(root,true)].concat(p.lines.filter(function(l){return l.root===p.root;}).map(function(l){return row(l,true);})):top.map(function(l){return row(l,false);});
+  return '<div class="panel result talk">'+(p.root?'<button class="thread back" data-thread="">\u2190 Back to '+esc(p.said)+'</button>':'')+rows.join('')+'</div>';
+}
+function chatSay(){
+  var p=chatOn(),box=$('box'),t=box.value.trim();if(!p||!t||p.sending)return;
+  var send=appHost().chatSend;
+  if(!send){p.note=p.line='Messages are sent from the Mia desktop app.';draw();return;}
+  box.value='';p.sending=true;p.note='';
+  Promise.resolve(send(p.chat,t.slice(0,6000),p.root||'')).then(function(ok){return ok;},function(){return false;}).then(function(ok){
+    p.sending=false;
+    if(peek!==p)return;
+    if(!ok){if(!box.value)box.value=t;p.note=p.line='That was not sent. Try again.';if(open)draw();return;}
+    chatLoad(p,true);
+  });
+}
+// The bar's sign: a pulled chat turns the bar into its message box, and a click on the sign leaves it.
+function barDraw(){
+  var p=chatOn(),b=$('find'),tip=p?'Writing to '+p.said+'. Click to go back to Mia':findOn?'Searching your views, chats and artifacts. Press Tab to type to Mia':'Typing to Mia. Press Tab to search';
+  $('form').classList.toggle('chat',!!p);b.classList.toggle('chat',!!p);b.title=tip;b.setAttribute('aria-label',tip);
+  if(p){found=[];$('finds').hidden=true;}
+}
+function draw(){
+  clearTimeout(drawTimer);drawTimer=null;
+  var cv=$('cv'),h='',top=cv.scrollTop,atEnd=cv.scrollHeight-cv.scrollTop-cv.clientHeight<60;
+  // What she drew takes the place of the page she read it from.
+  if(s!==1&&R&&!R.picked&&R.focus==='page'&&hasCanvas()){R.focus='';if(pane())site.open=false;}
+  var seen=seeing();
+  convoDraw();
+  if(seen)h=stageHtml(seen);
+  else if(s===1)h='<div class="wrap center"><span class="in" style="display:block">'+mark(96,'')+'</span><h1 class="hello in d1">Welcome to Flow.</h1><p class="line in d2">You set the direction.</p><p class="line in d3">I\'ll handle the execution.</p></div>'+botsHtml();
+  else h=stageHtml(null);
+  // The same stage is not drawn again: every redraw would reload the frame and start the fades over.
+  // A stage that only grows (the same run, more of it) is rebuilt without its entrance motion.
+  var key=seen||R||s;
+  // A new direction that keeps the view from before is the same stage going on, not a new one.
+  var on=cv._k===key||(key===R&&!!cv._k&&typeof cv._k==='object'&&!!R.keep&&R.keep===viewOf(cv._k));
+  if(cv._h!==h){
+    cv.classList.toggle('again',!!cv._h&&on);
+    var lv=on?$('leaves'):null,lx=lv?lv.scrollLeft:-1;
+    // While Mia writes, only what changed is touched: her mark, the pictures and the cards stay as they are.
+    if(cv._h&&on){var t=document.createElement('template');t.innerHTML=h;patch(cv,t.content);}
+    else{unmount(cv);canvasHold();cv.innerHTML=h;mount(cv);}
+    // The same deck drawn again stands where it stood, so a picture arriving does not move it.
+    lv=$('leaves');if(lv&&lx>=0){lv._placed=true;lv.scrollLeft=lx;deckMark();}
+    cv._h=h;cv._k=key;
+  }
+  canvasPlace();stepsDraw();logDraw();chatsDraw();deckPlace();barDraw();
+  // The finished work is read from its top; while it grows the view follows the newest line.
+  if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
+  var live=s===2&&R&&R.running;
+  $('stop').hidden=!live;$('drive').hidden=s!==2;
+  $('pen').hidden=s!==2;if(s!==2&&ink.on)inkSet(false);
+  if(pane())sitePlace();
+  if(!earState)$('box').placeholder=boxHint();
+}
+// Signals arrive in bursts while Mia writes; the stage redraws at most a few times a second.
+function redraw(){if(!drawTimer)drawTimer=setTimeout(function(){if(open)draw();},120);}
+function say(t){if(!t||t===R.spoken)return;R.spoken=t;speak(t);}
+
+// What the run sends while it is going: steps, the lines Mia says between them, the reply being written.
+function onActivity(a){
+  if(!R||!a||typeof a!=='object')return;
+  // The bots Mia put on the work are named after her reply is saved; they still count.
+  if(a.aiMode==='open'){appOpens(a.targets);return;}
+  if(a.aiMode==='handoff'){(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);redraw();return;}
+  // A last signal can land after the reply it belongs to; that run is over.
+  if(a.dispatchId&&R.over[a.dispatchId])return;
+  if(a.dispatchId&&!R.dispatch)R.dispatch=a.dispatchId;
+  if(a.aiMode==='said'){R.line=str(a.text,200);R.told=true;R.toldAt=Date.now();say(R.line);}
+  else if(a.aiMode==='writing')R.draft=String(a.text||'').slice(0,20000);
+  else if(a.aiMode==='worker'){followWorker(a.worker);redraw();return;}
+  else if(a.phase==='start'){
+    var files=(Array.isArray(a.files)?a.files:[]).map(function(f){return str(f&&f.name,60);}).filter(Boolean).slice(0,3);
+    R.touched=R.touched.concat(files);R.draft='';
+    // A step she did not announce is said for her, in a few words.
+    if(!R.told&&Date.now()-(R.toldAt||0)>7000){R.line=ownLine(str(a.label,60));say(R.line);}
+    if(R.told)R.toldAt=Date.now();
+    R.told=false;
+    if(a.detail)mindAdd('w',str(a.detail,26));
+  }else if(a.phase!=='complete')return;
+  R.running=true;redraw();
+}
+// A step is named for the app; what is said out loud is how a person would put it.
+var OWN=['I\'ll look into it.','Let me check something.','I\'m still on it.','One moment, I\'m working on this.'],ownAt=0;
+function ownLine(label){
+  R.toldAt=Date.now();
+  if(/search/i.test(label))return 'I\'ll search for that.';
+  if(/brows|page|site|web/i.test(label))return 'I\'ll open the browser for you.';
+  if(/bot|hand|deleg/i.test(label))return 'I\'m putting a bot on this.';
+  if(/writ|sav|creat|edit/i.test(label))return 'I\'m writing that down for you.';
+  if(/read|file|open/i.test(label))return 'Let me read through this.';
+  return OWN[ownAt++%OWN.length];
+}
+function ended(){
+  R.running=false;R.top=true;settle();
+  if(own&&!ownTimer)ownTimer=setTimeout(ownReview,4000);
+  // The work is done: everything she made is laid out together, the page among it.
+  if(!R.picked){R.focus='';if(pane()&&!site.deckRun)site.open=false;}
+}
+// What the run leaves in the chat: an approval it needs, and the reply.
+function onEvent(ev){
+  if(!ev||typeof ev!=='object')return;
+  if(+ev.sequence>seq)seq=+ev.sequence;
+  if(!R)return;
+  var meta=ev.metadata&&typeof ev.metadata==='object'?ev.metadata:{},content=ev.content&&typeof ev.content==='object'?ev.content:{};
+  if(meta.askBeforeDo&&meta.askBeforeDo.id){
+    var q=meta.askBeforeDo,old=R.asks.filter(function(a){return a.id===q.id;})[0];
+    if(old){if(old.status==='pending')old.status=q.status;}
+    else{R.asks.push({id:q.id,line:str(q.line,300),summary:str(q.summary,600),status:q.status||'pending'});if(q.status==='pending')speak(tandem?'I need your OK: '+str(q.line,160)+'. Say yes or no.':'I need your OK before I go on.');}
+    redraw();return;
+  }
+  if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||!R.sent)return;
+  var text=typeof content.text==='string'?content.text:'';
+  if(!text)return;
+  var read=readReply(text);
+  if(meta.dispatchId)R.over[meta.dispatchId]=true;
+  if(meta.botSetupRequest&&meta.botSetupRequest.status==='pending')botSetupAsked(ev);
+  R.say=read.say;R.ask=read.ask;R.body=read.body;R.options=read.options;R.draft='';
+  R.next=str(meta.nextStep,120);
+  R.line=read.say||(read.options.length||read.ask?'This part needs your judgment.':'Done.');
+  R.files=R.files.concat((Array.isArray(content.attachments)?content.attachments:[]).filter(function(f){return f&&f.id;}).map(function(f){
+    return {name:str(f.filename,80)||'File',url:chat(conv,'/attachments/'+encodeURIComponent(f.id))+'?workspace='+encodeURIComponent(workspace())};
+  }));
+  // In Flow she says a line and shows the rest; in Flow Tandem she says all of it.
+  if(tandem){suggest=null;say(read.say);aloud(read.body);say(read.ask);}else{say(R.line);say(R.ask);}
+  redraw();
+  // A line said mid-run is saved like a reply; the run is over only when nothing of it is still going.
+  var my=R;call(chat(conv,'/dispatches/active')).then(function(r){
+    if(my!==R)return;var going=Array.isArray(r.data.dispatches)?r.data.dispatches:[];
+    if(!going.length){ended();draw();}
+  },function(){if(my===R){ended();draw();}});
+}
+function listen(id,onEv,onAct){
+  if(typeof WebSocket!=='function')return null;
+  var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/conversations/ws?workspace='+encodeURIComponent(workspace()));
+  ws.onopen=function(){ws.send(JSON.stringify({type:'subscribe',conversationId:id,afterSequence:id===conv?seq:0}));};
+  ws.onmessage=function(m){
+    var p;try{p=JSON.parse(m.data);}catch(e){return;}
+    if(p.type==='conversation.event')onEv(p.event);
+    if(p.type==='conversation.activity')onAct(p.activity);
+    if(p.type==='history'&&(id!==conv||seqKnown))(p.events||[]).forEach(onEv);
+  };
+  return ws;
+}
+// Each bot Mia put on the work does it in its own chat; the stage follows it there, and keeps
+// following while the person gives Mia the next thing.
+var crewAsks=[];
+function botAsk(bot,q){
+  var old=crewAsks.filter(function(a){return a.id===q.id;})[0];
+  if(old){if(old.status==='pending')old.status=q.status||old.status;}
+  else{
+    if(q.status&&q.status!=='pending')return;
+    if(crewAsks.length>=12)crewAsks.shift();
+    crewAsks.push({id:q.id,by:bot.name,line:str(q.line,300),summary:str(q.summary,600),status:'pending'});
+    speak(tandem?bot.name+' needs your OK: '+str(q.line,160)+'. Say yes or no.':bot.name+' needs your OK before it goes on.');
+  }
+  redraw();
+}
+// What a bot's chat says that matters to Mia, read the same way for a bot she briefed and for one the
+// person drives: its question for an OK, or a reply it wrote since she began to listen.
+function botEvent(ev,since){
+  var meta=(ev&&ev.metadata)||{};
+  if(!ev)return null;
+  if(meta.askBeforeDo&&meta.askBeforeDo.id)return {ask:meta.askBeforeDo};
+  if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<since)return null;
+  var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+  return text?{text:text,next:str(meta.nextStep,160).replace(/[.!?\s]+$/,'')}:null;
+}
+// Every bot and chat the app can open, as the app lists them.
+function appRooms(){try{var h=appHost();return (h.rooms&&h.rooms())||[];}catch(e){return [];}}
+function followBot(b){
+  if(!b||!b.conversationId)return;
+  var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
+  if(!bot){if(crew.length>=8)crew.shift();bot={name:str(b.name,40)||'Bot',conversationId:b.conversationId};crew.push(bot);}
+  // A new job for a bot already on the stage starts it over.
+  bot.running=true;bot.line='Starting';bot.reply='';bot.report='';bot.open=false;bot.seen=false;bot.at=Date.now()-2000;
+  if(botSocks[b.conversationId])return;
+  botSocks[b.conversationId]=listen(b.conversationId,function(ev){
+    var got=open?botEvent(ev,bot.at):null,text=got&&got.text;
+    // A bot that needs an OK asks in its own chat; the person is here, so the card comes to the stage.
+    if(got&&got.ask){botAsk(bot,got.ask);return;}
+    if(!text)return;
+    bot.reply=text.slice(0,20000);bot.running=false;
+    // Its report is the first paragraph it wrote, cut to what fits a card.
+    bot.report=str(text.replace(/[*_`#>]+/g,'').split(/\n\s*\n|\n(?=\s*Card:)/i)[0].replace(/\s+/g,' '),420);
+    if(!bot.seen&&!ownReview())speak(bot.name+(tandem?' has finished. Do you want me to go over it?':' has finished. Want to see it?'));
+    redraw();
+  },function(a){
+    if(!open||!a)return;
+    if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
+  });
+}
+// Mia looks at a finished bot's work by herself: she says the bot is back, checks what it brought
+// against the job, and comes back only with what needs the person. She waits while the person is
+// writing, talking, looking at an earlier view, part way through a deck, or owes her an answer, and until then the
+// panel offers the same by hand. The person steps in by saying anything, or stops her.
+var own=true,ownTimer=null;try{own=localStorage.getItem('miaAiModeOwn')!=='0';}catch(e){}
+function ownShow(){var b=$('own');b.textContent=own?'Mia reviews on her own':'Mia asks before reviewing';b.setAttribute('aria-pressed',own?'true':'false');}
+function ownSet(){own=!own;try{localStorage.setItem('miaAiModeOwn',own?'1':'0');}catch(e){}ownShow();if(own)ownReview();}
+function ownReview(){
+  clearTimeout(ownTimer);ownTimer=null;
+  if(!own||!open)return false;
+  var back=crew.filter(function(b){return !b.running&&b.reply&&!b.seen&&!b.failed;});
+  if(!back.length)return false;
+  // In Flow Tandem nothing is on the stage to wait for: she waits only while the person talks or she works.
+  var held=tandem?earState==='on'||earState==='wait'||!!(R&&R.running):seeing()||ink.on||earState==='on'||earState==='wait'||$('box').value.trim()||(R&&(R.running||R.ask||(!R.decided&&R.picks&&Object.keys(R.picks).length)));
+  if(held){ownTimer=setTimeout(ownReview,4000);return false;}
+  var names=back.map(function(b){return b.name;}),who=names.length>1?names.slice(0,-1).join(', ')+' and '+names[names.length-1]:names[0];
+  back.forEach(function(b){b.seen=true;});
+  direct('[On your own] '+who+(names.length>1?' are':' is')+' back and I have not asked you anything yet. Review what '+(names.length>1?'they':'it')+' brought back against the job you gave and what I am after, work with the bot first if something needs checking, then show me only what needs me.',
+    'Mia is reviewing what '+who+' brought back.');
+  R.own=true;R.line=who+(names.length>1?' are':' is')+' back. I am reviewing it for you.';say(R.line);draw();
+  return true;
+}
+// A background worker Mia started for this job. It is drawn as a bot but has no chat of its own:
+// the run says when it starts, what step it is on and when it ends, and it is gone with the run.
+function followWorker(w){
+  if(!w||!w.key||!R)return;
+  var bot=R.bots.filter(function(x){return x.key===w.key;})[0];
+  if(!bot){if(R.bots.length>=8)return;bot={key:String(w.key),name:str(w.name,40)||'Worker',running:true,line:'Starting',reply:'',open:false};R.bots.push(bot);}
+  if(w.state==='step'){bot.running=true;bot.line=str(w.line,40)||'Working';}
+  else if(w.state==='done'){bot.running=false;bot.failed=w.failed===true;}
+}
+// "New chat" in the drawer: the chat so far stays with the person's other chats, and the stage
+// starts over on a new one of the same kind.
+function newChat(){
+  if(R&&R.running)halt('');
+  var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
+  hush();inkSet(false);seedId++;
+  s=1;R=null;seq=0;past=[];view=-1;peek=null;drawerOn=false;found=[];mindSet({});
+  draw();openChat(true).catch(function(){});$('box').focus();
+}
+function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];crewAsks=[];botCard=null;}
+// Mia's chat for this visit: made once, then every direction goes into it.
+function openChat(fresh){
+  if(conv)return Promise.resolve(conv);
+  var company=team(),more=fresh?{fresh:true}:{};
+  function plain(){return call('/api/conversations/ai-mode',more);}
+  // A company that cannot be confirmed right now still gets AI mode, working as in Solo.
+  if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',Object.assign({teamWorkspace:company},more),token);})
+    .then(function(r){return r.status===403?plain():r;},plain)
+    :plain()).then(function(r){
+    var id=r.data.conversation&&r.data.conversation.id;
+    if(!id)throw new Error(r.status===401?'signin':'closed');
+    conv=id;seq=0;seqKnown=false;
+    // The chat is kept between visits: what was asked and made before comes back with it.
+    return call(chat(id,'/events?latest=true&limit=100')).then(function(e){
+      if(conv!==id||e.status!==200)return;
+      restore(Array.isArray(e.data.events)?e.data.events:[]);seqKnown=true;
+    },function(){}).then(function(){
+      opening=null;
+      if(conv!==id)return id;
+      sock=listen(id,onEvent,onActivity);
+      if(sock)sock.onclose=function(){if(open&&conv===id)setTimeout(function(){if(open&&conv===id){sock=listen(id,onEvent,onActivity);if(sock)sock.onclose=this.onclose;}}.bind(this),1500);};
+      crewRestore(id);
+      if(open)draw();
+      return id;
+    });
+  },function(e){opening=null;throw e;});
+  return opening;
+}
+function restore(events){
+  var runs=[],cur=null,keep='';
+  events.slice().sort(function(a,b){return a.sequence-b.sequence;}).forEach(function(ev){
+    if(+ev.sequence>seq)seq=+ev.sequence;
+    var meta=ev.metadata&&typeof ev.metadata==='object'?ev.metadata:{},text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
+    if(!text||ev.deletedAt)return;
+    if(ev.senderType==='user'){
+      cur=newRun(str(meta.aiModeSaid,2000)||text.split('\n\n[Marked on the screen')[0].trim());
+      cur.running=false;cur.sent=cur.past=true;cur.line='';cur.own=text.indexOf('[On your own]')===0;runs.push(cur);return;
+    }
+    if(!cur||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return;
+    var read=readReply(text);
+    cur.say=read.say;cur.ask=read.ask;cur.body=read.body;cur.line=read.say||'Done.';cur.done=true;
+  });
+  if(past.length)return;
+  past=runs.filter(function(r){return r.done;}).slice(-30);
+  past.forEach(function(r){r.keep=keep;keep=viewOf(r);});
+}
+// The bots Mia put on a job in the last day, still working or finished: they stand at the right again.
+function crewRestore(id){
+  call('/api/ai-mode/handoffs?conversation='+encodeURIComponent(id)).then(function(r){
+    if(!open||conv!==id)return;
+    (Array.isArray(r.data.bots)?r.data.bots:[]).forEach(function(b){
+      if(!b||crew.some(function(x){return x.conversationId===b.conversationId;}))return;
+      followBot(b);
+      var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
+      if(!bot)return;
+      bot.at=(+b.at||Date.now())-2000;
+      if(b.state!=='working'){bot.running=false;bot.seen=true;bot.failed=b.state==='stopped';bot.report=str(b.report,420);bot.reply=bot.report;}
+    });
+    draw();
+  },function(){});
+}
+// A run that is over goes behind the stage with the view it made.
+function shelve(r){
+  if(!r||!r.sent||!r.said)return;
+  r.running=false;r.asks=[];r.options=[];r.next='';r.bots=[];r.page=null;r.focus='';r.note='';r.draft='';r.past=true;r.line=r.say||r.line;
+  past.push(r);if(past.length>30)past.shift();
+}
+function fail(my,e){
+  if(my!==R)return;
+  R.running=false;R.note=e&&e.message==='signin'?'Sign in to Mia first, then say it again.':'That did not go through. Say it again.';settle();draw();
+}
+// The person's words go to Mia as a direction. Said while she is working, they steer the same run.
+// The pen: the person draws on the stage, and each mark tells Mia the words it was drawn on.
+var ink={on:false,marks:[],line:null};
+function inkPath(p){return 'M'+p.map(function(q){return q[0].toFixed(1)+' '+q[1].toFixed(1);}).join('L');}
+function inkDraw(){
+  var top=$('cv').scrollTop,all=ink.line?ink.marks.concat([ink.line]):ink.marks;
+  $('inkG').setAttribute('transform','translate(0 '+(-top)+')');
+  $('inkG').innerHTML=all.map(function(m,i){
+    var a=m.p[0];
+    return '<path d="'+inkPath(m.p)+'"/><circle cx="'+a[0].toFixed(1)+'" cy="'+a[1].toFixed(1)+'" r="10"/><text x="'+a[0].toFixed(1)+'" y="'+(a[1]+4).toFixed(1)+'">'+(i+1)+'</text>';
+  }).join('');
+}
+function inkSet(on){
+  ink.on=!!on;ink.line=null;if(!on)ink.marks=[];
+  $('ink').hidden=!on;$('pen').classList.toggle('on',ink.on);$('pen').setAttribute('aria-pressed',ink.on?'true':'false');
+  inkDraw();if(!earState)$('box').placeholder=boxHint();
+}
+// The words whose middle lies inside the box, read in page order from one document.
+function inkWords(doc,rootEl,box,dx,dy,out){
+  var walk=doc.createTreeWalker(rootEl,NodeFilter.SHOW_TEXT),n,range=doc.createRange(),inside=function(r){
+    var x=r.left+r.width/2+dx,y=r.top+r.height/2+dy;return r.width>0&&x>=box.l&&x<=box.r&&y>=box.t&&y<=box.b;
+  };
+  while((n=walk.nextNode())){
+    var text=n.nodeValue;if(!text.trim())continue;
+    range.selectNodeContents(n);var whole=range.getBoundingClientRect();
+    if(whole.right+dx<box.l||whole.left+dx>box.r||whole.bottom+dy<box.t||whole.top+dy>box.b)continue;
+    var re=/\S+/g,w;
+    while((w=re.exec(text))){
+      range.setStart(n,w.index);range.setEnd(n,w.index+w[0].length);
+      if([].some.call(range.getClientRects(),inside))out.push(w[0]);
+    }
+  }
+}
+function inkRead(m){
+  var cv=$('cv'),o=$('ink').getBoundingClientRect(),top=cv.scrollTop,xs=m.p.map(function(q){return q[0];}),ys=m.p.map(function(q){return q[1]-top;});
+  var box={l:Math.min.apply(0,xs)+o.left-6,r:Math.max.apply(0,xs)+o.left+6,t:Math.min.apply(0,ys)+o.top-6,b:Math.max.apply(0,ys)+o.top+6};
+  // A line under or through words is as good as a ring around them.
+  if(box.b-box.t<28)box.t-=20;
+  var out=[];
+  try{inkWords(document,cv,box,0,0,out);}catch(e){}
+  var f=canvas.el;
+  if(f&&f.isConnected){try{var fr=f.getBoundingClientRect(),d=f.contentDocument;if(d&&d.body)inkWords(d,d.body,box,fr.left,fr.top,out);}catch(e){}}
+  if(out.length)return '"'+out.join(' ').slice(0,300)+'"';
+  var hit=[].filter.call(cv.querySelectorAll('article[data-item] .pic'),function(el){
+    var r=el.getBoundingClientRect();return r.right>box.l&&r.left<box.r&&r.bottom>box.t&&r.top<box.b;
+  })[0],title=hit&&hit.closest('article').querySelector('b');
+  return title?'the picture on "'+title.textContent.trim().slice(0,120)+'"':'a part with no words';
+}
+function inkNote(){
+  if(!ink.marks.length)return '';
+  return '\n\n[Marked on the screen by the person, in the order drawn:\n'+ink.marks.map(function(m,i){return (i+1)+'. '+m.on;}).join('\n')+']';
+}
+function inkWire(){
+  var el=$('ink'),at=function(e){var o=el.getBoundingClientRect();return [e.clientX-o.left,e.clientY-o.top+$('cv').scrollTop];};
+  $('pen').onclick=function(){inkSet(!ink.on);$('box').focus();};
+  el.addEventListener('pointerdown',function(e){
+    if(e.button||ink.marks.length>=9)return;
+    e.preventDefault();try{el.setPointerCapture(e.pointerId);}catch(x){}
+    ink.line={p:[at(e)]};inkDraw();
+  });
+  el.addEventListener('pointermove',function(e){
+    if(!ink.line)return;
+    var p=at(e),last=ink.line.p[ink.line.p.length-1];
+    if(Math.abs(p[0]-last[0])+Math.abs(p[1]-last[1])<3)return;
+    ink.line.p.push(p);inkDraw();
+  });
+  var end=function(){
+    var m=ink.line;if(!m)return;
+    ink.line=null;m.on=inkRead(m);ink.marks.push(m);inkDraw();
+    if(!earState)$('box').placeholder=boxHint();$('box').focus();
+  };
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);
+  el.addEventListener('wheel',function(e){$('cv').scrollTop+=e.deltaY;},{passive:true});
+  $('cv').addEventListener('scroll',function(){if(ink.on)inkDraw();});
+}
+function direct(t,shown){
+  startAudio();
+  suggest=null;botCardNext();
+  var marked=inkNote()||openNote();
+  if(marked){shown=shown||t;t+=marked;}
+  if(ink.on)inkSet(false);
+  var steering=s===2&&R&&R.running&&R.sent,away=past[view]||null;
+  var before=R&&R.sent?{said:str(R.said,400),ask:str(R.ask,200)}:null;
+  if(steering){R.said=shown||t;R.line='Got it.';R.note='';}
+  else{
+    crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});
+    // The view on the stage stays there while Mia works on the next thing.
+    var was=away||R||past[past.length-1],keep=viewOf(was);
+    // A page the person opened or chose to keep open is theirs: it stays up through the next run.
+    var mine=!!(R&&R.picked&&site.open);
+    shelve(R);if(site.card){site.card='';site.open=false;site.deckRun=null;}R=newRun(shown||t);R.keep=keep;
+    // Answers given on a deck that was not sent yet stay on it while the person asks about it.
+    if(was&&was.picks&&!was.decided&&showsView(keep)){R.picks=was.picks;R.leaf=was.leaf||0;R.carried=true;}
+    R.at=Date.now()-2000;seed(shown||t);
+    if(mine){R.picked=true;R.focus='page';}
+    // Said from an earlier view, that view comes with the person: it stays on the stage and her answer is read above it.
+    away=null;
+  }
+  s=2;peek=null;view=away?past.indexOf(away):-1;draw();if(!steering&&view<0)$('cv').scrollTop=0;
+  var my=R;
+  var send=function(text){
+    return openChat().then(function(id){
+      var pick=modelPick(),ev={type:'message',content:{text:text},clientIdempotencyKey:'ai-mode-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)};
+      // What the person saw themselves say, so it reads the same when this chat is opened again.
+      ev.metadata={aiModeSaid:str(shown||t,2000)};
+      if(pick)ev.metadata.chatModelSelection=pick;
+      ev.metadata.aiModeRooms=roomNames();if(tandem)ev.metadata.aiModeTandem=true;
+      return call(chat(id,'/events'),ev);
+    });
+  };
+  send(t).then(function(r){
+    // The chat is gone when AI mode was opened in another window. Start a new one and say what came before.
+    if(r.status!==404||my!==R)return r;
+    var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}
+    return send(before?'Earlier I asked you: "'+before.said+'".'+(before.ask?' You asked me: "'+before.ask+'". My answer: ':' That is behind us. What I want now: ')+t:t);
+  }).then(function(r){
+    if(my!==R)return;
+    if(r.status!==200&&r.status!==201)throw new Error(r.status===401?'signin':'closed');
+    R.sent=true;
+    var ds=r.data.dispatch&&Array.isArray(r.data.dispatch.dispatches)?r.data.dispatch.dispatches:[];
+    if(ds[0]&&ds[0].id)R.dispatch=ds[0].id;
+  }).catch(function(e){fail(my,e);});
+}
+function halt(reason){
+  if(!R||!conv)return Promise.resolve();
+  var my=R,at=conv;
+  return call(chat(at,'/dispatches/active')).then(function(r){
+    var ids=(Array.isArray(r.data.dispatches)?r.data.dispatches:[]).map(function(d){return d&&d.id;}).filter(Boolean);
+    if(!ids.length&&my.dispatch)ids=[my.dispatch];
+    return Promise.all(ids.map(function(id){return call(chat(at,'/dispatches/'+encodeURIComponent(id)+'/stop'),reason?{reason:reason,page:''}:{});}));
+  }).then(function(){
+    if(my!==R)return;
+    ended();R.body=R.body||R.draft;R.draft='';R.line=reason?'You have the wheel. I stopped where I was.':'Stopped.';draw();
+  },function(){});
+}
+function answer(id,ok){
+  var a=crewAsks.concat(R?R.asks:[]).filter(function(x){return x.id===id;})[0];if(!a)return;
+  a.status=ok?'approved':'declined';draw();
+  call('/api/ask-before-do/'+encodeURIComponent(id),{approved:ok}).then(function(r){if(r.status>=400){a.status='gone';draw();}},function(){a.status='gone';draw();});
+}
+// Flow Tandem: the same Mia, the same chat and the same voice, with the normal app on screen in place
+// of the stage. The stage stays built but out of sight and out of the way, Mia keeps working, and the
+// app draws a small card for her. "Let me drive" on the stage comes here.
+function tandemTell(){var st=tandemState();tandemSubs.forEach(function(f){try{f(st);}catch(e){}});}
+function tandemState(){
+  return {on:tandem,since:tandemSince,line:tandemLine,note:earNote,hearing:earState,working:!!(R&&R.running),talking:busy,
+    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices};
+}
+function tandemStart(){
+  if(tandem)return;
+  var fresh=!open;
+  tandem=true;tandemSince=Date.now();tandemLine='';earNote='';
+  if(fresh)enter();
+  host.classList.add('tandem');sitePlace();
+  try{if(root.activeElement)root.activeElement.blur();}catch(e){}
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
+  // Tandem is a call, so the mic is open for it even when hands-free is off in Flow.
+  tandemTalk=!talkOn&&!!earParts();if(tandemTalk)talkStart();
+  if(!fresh){hush();speak('I am with you while you work. Just talk.');}
+  watchStart();tandemTell();
+}
+// Back to the stage, with the same conversation.
+function tandemStage(){
+  if(!tandem)return;
+  tandem=false;host.classList.remove('tandem');
+  watchStop();
+  if(tandemTalk&&!talkKept())talkStop();tandemTalk=false;
+  if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
+  sitePlace();draw();setTimeout(function(){if(open&&!tandem)$('box').focus();},200);
+  tandemTell();
+}
+// The card's mic button: one click mutes the mic or turns it back on.
+function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMute();tandemTell();}
+// In Flow Tandem the person drives bots too, in the app. Mia listens in every bot's chat, so a bot the
+// person briefed is announced like one she briefed, and its question for an OK is asked out loud. A bot
+// Mia put on the work is followed by followBot, and this stays silent for it.
+var watchSocks={},watchTimer=null,suggest=null;
+function watchBots(){
+  if(!tandem)return;
+  appRooms().forEach(function(row){
+    var id=row&&row.kind==='bot'?row.conversationId:'';
+    if(!id||id===conv||watchSocks[id]||Object.keys(watchSocks).length>=24)return;
+    var bot={name:str(row.label,40)||'Bot'},since=Date.now()-2000;
+    watchSocks[id]=listen(id,function(ev){
+      var got=tandem&&!botSocks[id]?botEvent(ev,since):null;
+      if(!got)return;
+      if(got.ask){botAsk(bot,got.ask);return;}
+      // The next step the bot suggests, the one the app offers in its message box, is said too.
+      var step=got.next;
+      suggest=step?{bot:bot.name,step:step,at:Date.now()}:null;
+      speak(bot.name+' has finished.'+(step?' It suggests next: '+step+'. Should it go ahead?':''));
+    },function(){});
+  });
+}
+function watchStart(){watchBots();clearInterval(watchTimer);watchTimer=setInterval(watchBots,30000);}
+function watchStop(){clearInterval(watchTimer);watchTimer=null;Object.keys(watchSocks).forEach(function(k){try{if(watchSocks[k])watchSocks[k].close();}catch(e){}});watchSocks={};}
+// Mia moves what the person sees herself: each "Open:" line of her reply comes here from the run. A name
+// is one of the person's bots or chats, anything else with a dot or a scheme is a web address. In Flow
+// Tandem the app opens it (appOpen); in Flow it comes to the stage (stageOpen). What could not be opened
+// is told to her with the next thing the person says.
+var openMissed=[];
+function openTarget(target){
+  var want=String(target||'').trim(),small=/\s*\(small\)$/i.test(want);
+  want=want.replace(/\s*\(small\)$/i,'');
+  var low=want.toLowerCase(),row=want?appRooms().filter(function(r){return String(r.label).toLowerCase()===low;})[0]:null;
+  return {want:want,row:row||null,small:small,page:!row&&(/^https?:\/\/\S+$/i.test(want)||/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(want))};
+}
+function appOpen(t){
+  var h=appHost();
+  try{
+    if(t.row&&h.open)return h.open(t.row)!==false;
+    if(t.page)return !!(h.openPage&&h.openPage(t.want));
+  }catch(e){}
+  return false;
+}
+// On the stage a bot's chat is drawn across it, or at its usual width with "(small)"; another chat is
+// pulled the way a pick from the chats list is; a page opens in the stage's browser.
+function stageOpen(t){
+  if(t.page)return siteOpen(/^https?:/i.test(t.want)?t.want:'https://'+t.want);
+  if(!t.row)return false;
+  if(t.row.kind!=='bot'){readChat(t.row);return true;}
+  var mate=crew.filter(function(b){return b.name.toLowerCase()===t.want.toLowerCase();})[0];
+  if(mate){mateShow(mate,true,!t.small);return true;}
+  if(t.row.conversationId){readChat({id:t.row.conversationId,label:t.row.label});return true;}
+  // A bot with no chat yet: the app makes its chat, the one it would make from the bots list.
+  var chat=appHost().botChat;if(!chat)return false;
+  Promise.resolve().then(function(){return chat(t.row);}).then(function(id){if(!id)throw 0;if(open&&!tandem)readChat({id:id,label:t.row.label});},
+    function(){if(openMissed.length<6)openMissed.push(str(t.want,120));});
+  return true;
+}
+function appOpens(list){
+  (Array.isArray(list)?list:[]).slice(0,tandem?3:1).forEach(function(x){
+    var t=openTarget(x);
+    if(!(t.want&&(tandem?appOpen(t):stageOpen(t)))&&openMissed.length<6)openMissed.push(str(x,120));
+  });
+}
+function openNote(){
+  if(!openMissed.length)return '';
+  var n='\n\n[Could not open: '+openMissed.join('; ')+'. The person has no bot or chat with that exact name, or it is not a web address.]';
+  openMissed=[];return n;
+}
+// The names the app can open, sent with each Tandem turn so Mia asks for one that exists.
+function roomNames(){
+  return appRooms().map(function(r){return str(r&&r.label,60);}).filter(Boolean).slice(0,80);
+}
+var YES=/^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|approved?|s[i\u00ed]|dale|adelante|claro|hazlo)(?:\W+(?:please|mia|go ahead|do it|send it|por favor))*\W*$/i,
+  NO=/^\W*(?:no|nope|don'?t|do not|not now|cancel|decline|mejor no|no lo hagas)(?:\W+(?:thanks|thank you|mia|please|gracias))*\W*$/i;
+function spokenAnswer(t){
+  if(!tandem)return false;
+  var a=crewAsks.concat(R?R.asks:[]).filter(function(x){return x.status==='pending';})[0],ok=YES.test(t)?true:NO.test(t)?false:null;
+  if(ok===null)return false;
+  if(a){answer(a.id,ok);speak(ok?'OK, approved.':'OK, I said no.');return true;}
+  // No approval is waiting: the yes or no is for the next step a bot just suggested, and Mia hands it over.
+  var sug=suggest&&Date.now()-suggest.at<180000?suggest:null;suggest=null;
+  if(!sug)return false;
+  if(!ok){speak('OK, I will leave it.');return true;}
+  direct('Yes. Have '+sug.bot+' do the next step it suggested: '+sug.step,'Yes, go ahead.');return true;
+}
+// The whole answer is said in Flow Tandem, a few sentences at a time, the way it would be on a call.
+function aloud(text){
+  var t=plainOf(String(text||'').replace(/^\s*(?:card|image|text|option|icon|figure|meter|tone|action):.*$/gim,' ')).slice(0,1600),parts=t.match(/[^.!?]+[.!?]*\s*/g)||[],line='';
+  parts.forEach(function(p){if(line&&(line+p).length>560){speak(line.trim());line='';}line+=p;});
+  if(line.trim())speak(line.trim());
+}
+// A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
+// native view, so it only exists in the desktop app; in a plain browser tab links open as they always did.
+var web=window.miaDesktop&&window.miaDesktop.browser,webOff=null,ZOOMS=[1,1.25,1.5,0.75];
+var site={open:false,wide:false,moving:false,docked:false,x:null,y:0,zoom:0,card:''};
+function pane(){var n=window.miaNativeBrowser;return web&&n&&n.stage?n:null;}
+function siteBox(){
+  var W=innerWidth,H=innerHeight,top=60+convoH,bottom=H-92;
+  if(site.wide||W<760)return {x:12,y:top,w:W-24,h:bottom-top};
+  var w=Math.min(760,W*0.58),h=Math.max(280,Math.min(bottom-top-70,H*0.62));
+  // It opens where the work is drawn: the left column, under Mia's line.
+  if(site.x===null){site.x=Math.max(16,(W-Math.min(W-32,1120))/2);site.y=210;}
+  site.x=Math.max(8,Math.min(W-w-8,site.x));site.y=Math.max(top,Math.min(bottom-h,site.y));
+  return {x:site.x,y:site.y,w:w,h:h};
+}
+// The page follows the window; while the window is being moved only its see-through frame shows.
+function sitePlace(){
+  var n=pane();if(!n)return;
+  var el=$('site'),show=site.open&&open&&!tandem;
+  // A card's page belongs to its card: away from it (another step, a new direction) it waits out of sight.
+  if(site.card&&!site.wide&&!root.getElementById('frontPage'))show=false;
+  // At the front of the stage the window sits in the item's place and follows it as the stage scrolls.
+  var dock=show&&!site.wide&&innerWidth>=760?root.getElementById('frontPage'):null,b=null;
+  site.docked=!!dock;
+  if(dock){
+    var d=dock.getBoundingClientRect(),top=Math.max(60+convoH,d.top),bottom=Math.min(innerHeight-92,d.bottom);
+    if(bottom-top<140)show=false;else b={x:d.left,y:top,w:d.width,h:bottom-top};
+  }
+  el.hidden=!show;
+  if(!show){n.stage(open&&!tandem?false:null);return;}
+  b=b||siteBox();el.classList.toggle('docked',site.docked);el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
+  el.classList.toggle('moving',site.moving);
+  $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
+  siteTabs();
+  var r=$('sitePage').getBoundingClientRect();
+  n.stage(site.moving?false:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)});
+}
+function tools(fold){
+  var m=$('more');$('tools').hidden=fold;m.textContent=fold?'\u2039':'\u203a';m.setAttribute('aria-expanded',fold?'false':'true');
+  m.setAttribute('aria-label',fold?'Show the controls':'Hide the controls');
+  if(fold){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');modelShow(false);phoneShow(false);}
+}
+// The model Mia works with here. Her own pick stays unless the person chooses one of the models
+// they have connected. Flow offers four, in this order, under their short names.
+var MODELS=[[/sonnet-5-5/i,'Sonnet 5.5'],[/opus-5-5/i,'Opus 5.5'],[/6\.1-terra/i,'Terra 6.1'],[/6\.1-sol/i,'Sol 6.1']];
+function modelList(){
+  var h=window.miaAiModeHost,all=[],out=[];
+  try{all=h&&h.models?h.models()||[]:[];}catch(e){}
+  MODELS.forEach(function(m){all.forEach(function(e){if(e&&m[0].test(e.model||''))out.push({provider:e.provider,providerLabel:e.providerLabel,model:e.model,name:m[1]});});});
+  return out;
+}
+function modelKept(){try{return localStorage.getItem('miaAiModeModel')||'';}catch(e){return '';}}
+function modelPick(){
+  // With no pick made here, Mia works with the model chosen for her in the app.
+  var k=modelKept(),h=appHost(),m=k&&modelList().filter(function(e){return e.provider+'|'+e.model===k;})[0];
+  if(m)return {provider:m.provider,model:m.model,reasoningEffort:'high',speed:'normal',fast:false};
+  try{return h.model?h.model()||null:null;}catch(e){return null;}
+}
+function modelShow(on){
+  $('modelBar').hidden=!on;$('modelBtn').setAttribute('aria-expanded',on?'true':'false');
+  if(!on)return;
+  $('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);
+  var k=modelKept();
+  var list=modelList(),twice=function(e){return list.filter(function(x){return x.name===e.name;}).length>1;};
+  $('model').innerHTML='<option value="">Same as in the app</option>'+(list.length?list.map(function(e){
+    var v=e.provider+'|'+e.model;
+    return '<option value="'+esc(v)+'"'+(v===k?' selected':'')+'>'+esc(e.name+(twice(e)?' \u00b7 '+e.providerLabel:''))+'</option>';
+  }).join(''):'<option disabled>Connect Claude or ChatGPT in Mia to choose one</option>');
+}
+// A phone the person paired uses AI mode on this computer through the Hub.
+// The computer shows a code; the person types it on the phone once.
+var phone={code:'',until:0,list:[],note:'',busy:false,tick:null};
+function phoneShow(on){
+  $('phoneBar').hidden=!on;$('phoneBtn').setAttribute('aria-expanded',on?'true':'false');
+  if(on){$('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');$('modelBar').hidden=true;$('modelBtn').setAttribute('aria-expanded','false');phoneLoad();}
+  else{phone.code='';clearInterval(phone.tick);phone.tick=null;}
+}
+function phoneWhy(e){
+  var st=e&&e.status,code=e&&e.code;
+  if(st===401)return 'Sign in to Mia on this computer first.';
+  if(code==='remote_not_available')return 'This needs a company in Mia. Join or create one first.';
+  if(code==='remote_device_limit')return 'This computer already has ten phones. Remove one first.';
+  if(st===429)return 'Too many codes are waiting. Try again in a few minutes.';
+  if(st===404)return 'Phones are not ready on Mia\'s side yet.';
+  return 'Could not reach Mia. Check the connection and try again.';
+}
+function phoneDraw(){
+  var left=Math.max(0,Math.ceil((phone.until-Date.now())/1000));
+  if(phone.code&&!left){phone.code='';clearInterval(phone.tick);phone.tick=null;}
+  $('phoneCode').hidden=!phone.code;$('phoneCode').textContent=phone.code;
+  $('phoneNote').textContent=phone.note||(phone.code?'Type this code in Mia on your phone. It works once, for '+(left>60?Math.ceil(left/60)+' more minutes.':left+' more seconds.')
+    :phone.list.length?'These phones can use Flow mode on this computer while Mia is open here.'
+    :'Open Mia on your phone, then get a code here to connect it.');
+  $('phonePair').disabled=phone.busy;$('phonePair').textContent=phone.code?'New code':'Connect a phone';
+  $('phoneList').innerHTML=phone.list.map(function(d){
+    return '<li><span>'+esc(d.name||'Phone')+'</span><small>'+(d.online?'Connected':'Not open')+'</small><button class="btn ghost" data-phone="'+esc(d.id)+'">Remove</button></li>';
+  }).join('');
+}
+function phoneLoad(){
+  var h=window.MiaRemoteHost;if(!h||$('phoneBar').hidden)return;
+  h.phones().then(function(list){
+    // The code has done its job once the phone it was for shows up.
+    if(phone.code&&list.length>phone.list.length)phone.code='';
+    phone.list=list;phone.note='';phoneDraw();
+  },function(e){phone.list=[];phone.note=phoneWhy(e);phoneDraw();});
+}
+function phoneWire(){
+  var h=window.MiaRemoteHost;if(!h)return;
+  $('phoneBtn').hidden=false;
+  $('phoneBtn').onclick=function(){phoneShow($('phoneBar').hidden);};
+  $('phonePair').onclick=function(){
+    if(phone.busy)return;
+    phone.busy=true;phone.note='';phoneDraw();
+    h.pair().then(function(made){
+      phone.code=h.show(made.code);phone.until=made.expiresAt;
+      clearInterval(phone.tick);phone.tick=setInterval(phoneDraw,1000);
+    },function(e){phone.code='';phone.note=phoneWhy(e);}).then(function(){phone.busy=false;phoneDraw();});
+  };
+  $('phoneList').onclick=function(e){
+    var b=e.target&&e.target.closest&&e.target.closest('[data-phone]');
+    if(!b)return;
+    b.disabled=true;
+    h.remove(b.dataset.phone).then(phoneLoad,function(e){phone.note=phoneWhy(e);phoneDraw();});
+  };
+  window.addEventListener('mia-remote-link',phoneLoad);
+}
+function siteState(st){
+  var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],tab=tabs.filter(function(t){return t.active;})[0];
+  // The page Mia is working in comes to the stage by itself.
+  if(open&&!tandem&&R&&R.running){
+    var hers=tabs.filter(function(t){return t.botActivity;})[0];
+    if(hers){
+      if(!site.open&&!R.picked&&!hasCanvas()){site.open=true;R.focus='page';draw();}
+      if(site.open&&!R.picked&&!hers.active)web.command({action:'select',id:hers.id,follow:true}).catch(function(){});
+    }
+  }
+  if(!site.open||!tab)return;
+  if(site.url!==tab.url){site.url=tab.url||'';if(!$('siteTabs').hidden)sitePlace();}
+  var u=$('siteUrl');if(root.activeElement!==u)u.value=tab.url||'';
+  $('siteBack').disabled=!tab.canGoBack;$('siteForward').disabled=!tab.canGoForward;
+  $('siteBar').classList.toggle('loading',!!tab.loading);
+}
+function siteDo(action,more){
+  var c={action:action},k;for(k in more||{})c[k]=more[k];
+  return web.command(c).then(function(st){if(st&&st.tabs)siteState(st);},function(){});
+}
+// Filling the stage, the browser shows the other pages of the card it was opened from down its left
+// side, as the stage manager shows the other items: the company's site, a person's profile, the report.
+// Each is a tab of its own in the browser, so going from one to another keeps where each one was.
+function siteLinks(){
+  var run=site.deckRun||R;if(!site.card||!run)return [];
+  var it=deckItems(run).filter(function(i){return i.key===site.card;})[0],c=it&&it.card;
+  return c?cardLinks(c,c.bot||botNamed(c.title)):[];
+}
+function samePage(a,b){var x=shotKey(a||''),y=shotKey(b||'');return !!x&&!!y&&x.page===y.page;}
+function siteTabs(){
+  var el=$('siteTabs'),links=site.wide&&innerWidth>=760?siteLinks():[],h='';
+  if(links.length>1){
+    // The tab in front is the page the browser is on; a page gone elsewhere leaves the one last chosen lit.
+    var at=links.filter(function(l){return samePage(l.url,site.url);})[0]||links.filter(function(l){return l.url===site.tab;})[0];
+    h=links.map(function(l){
+      var shot=shotOf(l.url),on=l===at;
+      return '<button class="thumb site-tab'+(on?' on':'')+'" role="tab" aria-selected="'+(on?'true':'false')+'" data-tab="'+esc(l.url)+'" title="'+esc(l.url)+'"><span class="pic">'+
+        (shot?'<img alt="" data-shot src="'+esc(shot)+'">':'<span class="site-n">'+esc(siteName(l.url))+'</span>')+'</span><b>'+esc(l.label)+'</b></button>';
+    }).join('');
+  }
+  if(el._h!==h){el._h=h;el.innerHTML=h;}
+  el.hidden=!h;
+}
+// A card can carry two pages of one site, so a tab is found by its page, not by its site alone.
+function siteTab(url){
+  site.tab=url;siteTabs();
+  web.command({action:'state'}).then(function(st){
+    var tab=(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return samePage(t.url,url);})[0];
+    if(tab)return siteDo('select',{id:tab.id});
+    return siteDo('new').then(function(){return siteDo('navigate',{value:url});});
+  }).catch(function(){});
+}
+// The card of the page Mia is in opens the tab she is in, whichever tab the person left in front.
+function pageShow(){
+  var url=R&&R.page&&R.page.url;
+  web.command({action:'state'}).then(function(st){
+    var tab=url?(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return t.url===url||samePage(t.url,url);})[0]:null;
+    if(tab)return siteDo('select',{id:tab.id});
+    if(st&&st.tabs)siteState(st);
+  }).catch(function(){});
+}
+// siteShow(url): the tab already on that site comes forward; without one the site opens in a new tab.
+function siteShow(url){
+  web.command({action:'state'}).then(function(st){
+    var tab=(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return siteName(t.url)===siteName(url);})[0];
+    if(tab)return siteDo('select',{id:tab.id});
+    return siteDo('new').then(function(){return siteDo('navigate',{value:url});});
+  }).catch(function(){});
+}
+function siteOpen(url){
+  if(!pane())return false;
+  site.open=true;site.card='';site.deckRun=null;
+  if(R&&s===2){R.focus='page';R.picked=true;draw();}else sitePlace();
+  // A link opens in a tab of its own, so the page the person left in the browser stays.
+  if(url)siteDo('new').then(function(){return siteDo('navigate',{value:url});});else siteDo('state');
+  return true;
+}
+function siteClose(){
+  site.open=false;
+  if(R&&s===2){R.picked=true;if(R.focus==='page'||R.focus===site.card)R.focus='';site.card='';site.deckRun=null;draw();}else sitePlace();
+}
+// The page as a picture. The desktop app holds the page; it hands a picture of the one Mia is in to
+// this computer's Mia, and every stage shows that picture, so a stage in a plain browser tab sees the
+// page too. Only a tab Mia is working in is pictured, and only while a stage is showing it.
+var pageAt=-1,pageTimer=null;
+function pagePoll(){
+  pageTimer=null;if(!open)return;
+  var my=R;
+  // The first look only notes how old the newest picture is, so a page from before this visit stays out.
+  var first=pageAt<0;
+  (first||(s===2&&R)?call('/api/ai-mode/page?since='+Math.max(0,pageAt)):Promise.resolve(null)).then(function(r){
+    var p=r&&r.data.page;
+    if(first){if(r&&r.status<400)pageAt=p&&+p.at>0?+p.at:0;return;}
+    if(!p||my!==R||typeof p.image!=='string'||p.image.indexOf('data:image/jpeg;base64,')!==0||!(+p.at>pageAt))return;
+    pageAt=+p.at;shotKeep(p.url,p.image);
+    if(pageAt<=R.pageBase)return;
+    var was=R.page,im=$('cv').querySelectorAll('img[data-page]');
+    R.page={url:str(p.url,300),title:str(p.title,120),image:p.image};
+    // The first picture brings the page to the front while she works; later ones only change the picture.
+    if(!was&&R.running&&!R.picked&&!R.focus)R.focus='page';
+    if(was&&im.length&&was.url===R.page.url&&was.title===R.page.title){im.forEach(function(i){i.src=p.image;});if($('cv').querySelector('.site-n'))redraw();}else redraw();
+  },function(){}).then(function(){if(open&&!pageTimer)pageTimer=setTimeout(pagePoll,1500);});
+}
+(function(){
+  if(!web||!web.onState||!web.command)return;
+  var tab=null,acting=false,seen=0,want=false,busy=false,space='solo',all=[],tried={},looking=false;
+  function state(st){
+    // The browser only hands out pictures for the workspace it is showing.
+    if(st&&typeof st.workspace==='string'&&st.workspace)space=st.workspace;
+    var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],hers=tabs.filter(function(t){return t.botActivity;})[0];
+    all=tabs;
+    if(hers){tab=hers;acting=true;return;}
+    if(acting){acting=false;seen=Date.now();}
+    if(tab)tab=tabs.filter(function(t){return t.id===tab.id;})[0]||null;
+  }
+  web.onState(state);
+  // The browser tells of changes only; what it shows now is asked for once.
+  web.command({action:'state'}).then(state,function(){});
+  // A card's site that is open in the browser, whoever opened it, gives the card its picture.
+  setInterval(function(){
+    if(looking||!open||!shotWants.length)return;
+    var now=Date.now(),hit=all.filter(function(t){return !t.private&&!t.loading&&t.url&&shotWanted(t.url)&&!(now-tried[t.id]<15000);}).slice(0,4);
+    // A site nobody has open, or whose open tab gave no picture, is loaded out of sight, one at a
+    // time, and pictured; no tab is opened.
+    var w=shotWants.filter(function(x){return !(now-tried['u'+x.page]<60000)&&!all.some(function(t){return !t.private&&!tried[t.id]&&t.url&&shotKey(t.url)&&shotKey(t.url).page===x.page;});})[0];
+    if(w){
+      looking=true;tried['u'+w.page]=now;
+      web.command({action:'pagePicture',url:w.url,width:640,workspace:space}).then(function(r){
+        if(r&&r.picture&&r.picture.dataUrl){shotKeep(w.url,r.picture.dataUrl);redraw();}
+      },function(){}).then(function(){looking=false;});
+      return;
+    }
+    if(!hit.length)return;
+    looking=true;hit.forEach(function(t){tried[t.id]=now;});
+    web.command({action:'spaceFrames',ids:hit.map(function(t){return t.id;}),width:640,workspace:space}).then(function(r){
+      var got=false;
+      (r&&Array.isArray(r.frames)?r.frames:[]).forEach(function(f){
+        var t=hit.filter(function(x){return x.id===f.id;})[0];
+        if(t&&f.dataUrl){shotKeep(t.url,f.dataUrl);got=true;}
+      });
+      if(got)redraw();
+    },function(){}).then(function(){looking=false;});
+  },2000);
+  setInterval(function(){
+    // A little after her last step the page has settled and the pictures stop.
+    if(busy||!tab||(!acting&&Date.now()-seen>20000))return;
+    busy=true;
+    var t=tab;
+    (want?web.command({action:'spaceFrames',ids:[t.id],width:640,workspace:space}).then(function(r){
+      var f=r&&Array.isArray(r.frames)?r.frames[0]:null;
+      return f&&f.dataUrl?{url:t.url||'',title:t.title||'',image:f.dataUrl}:{};
+    },function(){return {};}):Promise.resolve({}))
+      .then(function(body){return call('/api/ai-mode/page',body);})
+      .then(function(r){want=r.data.wanted===true;},function(){want=false;})
+      .then(function(){busy=false;});
+  },1500);
+})();
+function siteWire(){
+  $('web').onclick=function(){if(site.open)siteClose();else siteOpen('');};
+  $('cv').addEventListener('scroll',function(){if(site.open&&site.docked)sitePlace();},{passive:true});
+  $('cv').addEventListener('scroll',function(e){if(e.target&&e.target.id==='leaves')deckScrolled(e.target);},true);
+  $('siteBack').onclick=function(){siteDo('back');};$('siteForward').onclick=function(){siteDo('forward');};
+  $('siteReload').onclick=function(){siteDo('reload');};$('siteClose').onclick=siteClose;
+  $('siteWide').onclick=function(){site.wide=!site.wide;sitePlace();};
+  $('siteTabs').onclick=function(e){var b=e.target.closest('[data-tab]');if(b)siteTab(b.dataset.tab);};
+  $('siteZoom').onclick=function(){
+    site.zoom=(site.zoom+1)%ZOOMS.length;this.title='Page size: '+Math.round(ZOOMS[site.zoom]*100)+'%';
+    siteDo('zoom',{factor:ZOOMS[site.zoom]});
+  };
+  $('siteForm').onsubmit=function(e){e.preventDefault();var v=$('siteUrl').value.trim();if(v){$('siteUrl').blur();siteDo('navigate',{value:v});}};
+  $('siteUrl').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Escape')this.blur();});
+  $('siteUrl').addEventListener('focus',function(){this.select();});
+  var bar=$('siteBar'),from=null;
+  bar.addEventListener('pointerdown',function(e){
+    if(site.wide||site.docked||e.button||e.target.closest('button,input'))return;
+    from={x:e.clientX-site.x,y:e.clientY-site.y,cx:e.clientX,cy:e.clientY};bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener('pointermove',function(e){
+    if(!from)return;
+    if(!site.moving&&Math.abs(e.clientX-from.cx)+Math.abs(e.clientY-from.cy)<4)return;
+    site.moving=true;site.x=e.clientX-from.x;site.y=e.clientY-from.y;sitePlace();
+  });
+  function drop(){if(!from)return;from=null;site.moving=false;sitePlace();}
+  bar.addEventListener('pointerup',drop);bar.addEventListener('pointercancel',drop);
+  window.addEventListener('resize',function(){if(open)sitePlace();});
+}
+// Mia's lines are read in the voice the person picked. With no voice connected she says nothing out loud:
+// the words are on the screen, and the person is offered to connect one.
+var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
+// Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
+// The stage's sound button does not silence her in Flow Tandem: there the card has her voice button.
+function hushed(){return quiet||(muted&&!tandem);}
+function speak(t){
+  if(!t)return;
+  // With no voice to say it, Flow Tandem's card still shows the line.
+  if(tandem&&(quiet||!voices))tandemLine=String(t).slice(0,300);
+  if(hushed()||earState==='on')return;
+  lines.push(String(t).slice(0,600));if(lines.length>(tandem?8:2))lines.shift();
+  if(!busy)sayNext();
+}
+function sayNext(){
+  var t=lines.shift(),my=speakId;
+  if(!t||hushed()||!open){busy=false;return;}
+  busy=true;
+  function done(){if(my===speakId)sayNext();}
+  if(voices&&ac){
+    fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:voice})})
+      .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
+      .then(function(b){return ac.decodeAudioData(b);})
+      .then(function(buf){
+        if(my!==speakId||hushed()||!open)return;
+        if(tandem)tandemLine=t.slice(0,300);
+        var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.onended=done;src.start();speaking=src;
+      }).catch(function(){if(my===speakId){lines=[];busy=false;voiceCheck();}});
+    return;
+  }
+  lines=[];busy=false;
+}
+// The welcome is said once: by the intro's ending the first time, with what Flow is; on entering
+// after that it is the greeting alone.
+var introSpoke=false;
+function welcome(){
+  if(introSpoke){introSpoke=false;return;}
+  speak(tandem?'I am with you while you work. Just talk.':'Welcome to Flow.');
+}
+// The intro plays before AI mode is open, so its welcome is said here, in the same voice.
+// Returns a way to stop it, for a person who stays in Mia.
+function introSay(t){
+  var off=false,ctx=null,AC=window.AudioContext||window.webkitAudioContext;
+  if(muted||quiet)return function(){};
+  introSpoke=true;
+  call('/api/ai-mode/voices').then(function(r){
+    if(off)return;
+    if(!(+r.data.voices)||!AC)return;
+    return fetch('/api/ai-mode/speech',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-MiaOS-Workspace':workspace()},body:JSON.stringify({text:t,voice:0})})
+      .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
+      .then(function(b){ctx=new AC();return ctx.decodeAudioData(b);})
+      .then(function(buf){
+        if(off)return;
+        var src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);src.start();
+      });
+  }).catch(function(){});
+  return function(){
+    off=true;introSpoke=false;
+    try{if(ctx)ctx.close();}catch(e){}
+  };
+}
+// Mia's voice comes from the person's ElevenLabs account, connected in Connected apps. When there is
+// none, entering Flow offers to connect it here, in three steps, or to skip; skipping is remembered.
+// The key goes straight from the field to Connected apps and is not kept on the page.
+var VOICE_KEYS='https://elevenlabs.io/app/settings/api-keys';
+var ask='',askNote='',askWhy='';
+function voiceSkipped(){try{return localStorage.getItem('miaAiModeVoiceSkip')||'';}catch(e){return '';}}
+// What the server says about her voice: how many voices, and why none when a key is saved.
+function voiceCheck(){
+  return call('/api/ai-mode/voices').then(function(r){
+    voices=+r.data.voices||0;voice=0;askWhy=voices?'':str(r.data.problem,20);
+    $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices;
+    // A saved key that stopped working is said once more even after a skip.
+    if(voices){if(ask!=='done')ask='';}
+    else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask=window.MiaRemotePhone?'phone':'offer';
+    voiceAskDraw();
+  },function(){});
+}
+function voiceAskDraw(){
+  var box=$('voiceAsk'),h='';
+  if(ask==='phone')h='<b>Give Mia a voice</b><p>Connect ElevenLabs in Mia on your computer, then reopen Flow here.</p><div class="va-row"><button class="btn ghost" data-va="skip">Got it</button></div>';
+  else if(ask==='offer')h=askWhy
+    ?'<b>Mia\'s voice is not working</b><p>'+(askWhy==='key'?'ElevenLabs did not accept the key that is saved.':'ElevenLabs is not answering with the key that is saved.')+' Until it does, Mia stays silent.</p><div class="va-row"><button class="btn primary" data-va="setup">Fix it</button><button class="btn ghost" data-va="skip">Skip</button></div>'
+    :'<b>Give Mia a voice</b><p>For a better experience, connect your ElevenLabs account and Mia will talk to you.</p><div class="va-row"><button class="btn primary" data-va="setup">Set up</button><button class="btn ghost" data-va="skip">Skip</button></div>';
+  else if(ask==='setup'||ask==='saving')h='<b>Connect ElevenLabs</b>'+
+    '<ol><li>Open <a href="'+VOICE_KEYS+'" target="_blank" rel="noopener noreferrer">your ElevenLabs API keys</a> and create a key.</li>'+
+    '<li>Copy the key itself. It starts with <code>sk_</code> and is shown only once, when you create it.</li>'+
+    '<li>Paste it here.</li></ol>'+
+    '<input id="voiceKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk_…" aria-label="Your ElevenLabs key"'+(ask==='saving'?' disabled':'')+'>'+
+    '<p class="va-note" role="alert"'+(askNote?'':' hidden')+'>'+esc(askNote)+'</p>'+
+    '<div class="va-row"><button class="btn primary" data-va="save"'+(ask==='saving'?' disabled':'')+'>'+(ask==='saving'?'Connecting…':'Connect')+'</button><button class="btn ghost" data-va="back"'+(ask==='saving'?' disabled':'')+'>Back</button></div>';
+  else if(ask==='done')h='<b>Mia has her voice</b><p>You can change or mute it in the menu.</p>';
+  // What is typed stays in the field when only the note under it changes.
+  var typed=$('voiceKey')?$('voiceKey').value:'';
+  box.innerHTML=h;box.hidden=!h;
+  if($('voiceKey')&&ask==='setup'){$('voiceKey').value=typed;$('voiceKey').focus();}
+}
+function voiceAskDo(act){
+  if(act==='setup'){ask='setup';askNote='';}
+  else if(act==='back'){ask='offer';askNote='';}
+  else if(act==='skip'){ask='';try{localStorage.setItem('miaAiModeVoiceSkip',askWhy||'none');}catch(e){}}
+  else if(act==='save')return voiceSave();
+  voiceAskDraw();
+}
+function voiceSave(){
+  var key=$('voiceKey')?$('voiceKey').value.trim():'';
+  if(ask!=='setup')return;
+  if(!key){askNote='Paste your key first.';return voiceAskDraw();}
+  if(key.indexOf('sk_')!==0){askNote='That is not the key itself. The key starts with sk_ and is shown only once, when you create it. If you no longer have it, create a new one.';return voiceAskDraw();}
+  ask='saving';askNote='';voiceAskDraw();
+  call('/api/mcp-apps/elevenlabs/key',{key:key}).then(function(r){
+    if(r.status!==200)throw new Error(str(r.data.message,200)||'save');
+    return call('/api/ai-mode/voices');
+  }).then(function(r){
+    if(ask!=='saving')return;
+    voices=+r.data.voices||0;askWhy=voices?'':str(r.data.problem,20);
+    if(!voices){ask='setup';askNote=askWhy==='key'?'ElevenLabs did not accept that key. Check that you copied all of it, or create a new one.':'The key is saved, but ElevenLabs is not answering right now. Try again in a moment.';return voiceAskDraw();}
+    ask='done';$('voice').hidden=voices<2;$('voiceSet').hidden=true;voiceAskDraw();
+    try{localStorage.removeItem('miaAiModeVoiceSkip');}catch(e){}
+    if(open)speak('Welcome to Flow.');
+    setTimeout(function(){if(ask==='done'){ask='';if(host)voiceAskDraw();}},4000);
+  },function(e){
+    if(ask!=='saving')return;
+    ask='setup';askNote=e&&e.message&&e.message!=='save'?e.message:'The key could not be saved. Try again.';voiceAskDraw();
+  });
+}
+// Mia's voice has a switch of its own: off, she still works and writes, and the other sounds stay.
+// It is kept for the next visit. The person's mic is muted by its own button.
+var quiet=false;try{quiet=localStorage.getItem('miaAiModeQuiet')==='1';}catch(e){}
+function quietShow(){
+  var b=$('quiet'),e=$('earsVoice'),say=quiet?'Turn Mia\'s voice back on':'Mute Mia\'s voice';
+  b.textContent=quiet?'Mia\'s voice off':'Mia\'s voice on';b.setAttribute('aria-pressed',quiet?'true':'false');
+  e.classList.toggle('on',quiet);e.setAttribute('aria-pressed',quiet?'true':'false');e.title=say;e.setAttribute('aria-label',say);
+}
+function quietSet(){
+  quiet=!quiet;try{localStorage.setItem('miaAiModeQuiet',quiet?'1':'0');}catch(e){}
+  if(quiet)hush();quietShow();if(R)redraw();
+}
+function hush(){
+  speakId++;lines=[];busy=false;
+  try{if(speaking){speaking.onended=null;speaking.stop();speaking=null;}}catch(e){}
+}
+// Speaking to Mia: one press starts the mic, the next sends what was said to her as a direction.
+// The words are written down on this computer by the same recorder the chat box uses.
+// Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
+var ear=null,earState='',earNote='';
+function boxHint(){var c=chatOn();if(c)return c.root?'Reply in thread':'Message '+c.said;return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):findMode()?'Search your views, chats and artifacts':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function earParts(){
+  var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
+  return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
+}
+function earShow(state,note){
+  earState=state;earNote=note||'';
+  var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=!talkOn&&state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
+  // Hands-free says where it is at the top right; the bar below is then for searching.
+  if(talkOn){$('earsSay').textContent=note||(state==='on'?'I am listening\u2026':state==='wait'?'Writing it down\u2026':talkMuted?'Mic is muted':'Just talk');$('box').placeholder=boxHint();}
+  else $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
+  if(master)master.gain.setTargetAtTime(muted||tandem||state==='on'?0:1,ac.currentTime,state==='on'?0.25:0.8);
+  hold(slow&&!!state);
+}
+// The speech model writes sounds it hears as notes, "(keyboard clicking)"; those are not the person's words.
+function heard(t){return String(t||'').replace(/\([^)]*\)|\[[^\]]*\]|\*[^*]*\*/g,' ').replace(/\s+/g,' ').trim();}
+function earStop(note){
+  if(ear)ear.cancel();
+  if(host)earShow('',note);
+}
+function earToggle(){
+  var parts=earParts();if(!parts||earState==='wait')return;
+  if(earState==='on'){
+    earShow('wait');
+    return ear.stop().then(function(t){
+      t=heard(t);
+      if(earState!=='wait')return;
+      earShow('',t?'':'I did not catch that. Press the mic and try again.');
+      // In a pulled chat the words land in its box, to be read before they are sent.
+      if(t&&open&&chatOn()){$('box').value=($('box').value+' '+t).trim();$('box').focus();}
+      else if(t&&open)direct(t.slice(0,2000));
+    },function(){earStop('I could not write down what you said. Type it here.');});
+  }
+  if(!ear)ear=parts.D.createRecorder({media:parts.media,MediaRecorder:window.MediaRecorder,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe});
+  hush();earShow('wait','Getting the mic ready\u2026');
+  window.MiaSpeech.ready({
+    confirm:function(text){return window.confirm(text);},
+    onDownloading:function(){earShow('wait','Downloading the speech model\u2026 (one time, about 142 MB)');}
+  }).then(function(ok){
+    if(!ok||!open||earState!=='wait')return earStop();
+    return ear.start().then(function(){if(open&&earState==='wait'){hush();earShow('on');}else earStop();});
+  }).catch(function(error){
+    var denied=error&&(error.name==='NotAllowedError'||error.name==='SecurityError');
+    earStop(denied?'The microphone is blocked. Allow Mia to use it in your computer\'s settings.':'The mic could not start. Type it here.');
+  });
+}
+// Hands-free: the mic stays open and each thing the person says goes to Mia when they stop talking,
+// with no button. Talking over her voice stops it, and "stop" by itself stops the work.
+var talk=null,talkOn=false;
+function talkShow(){
+  var b=$('talk');b.textContent=talkOn?'Hands-free on':'Hands-free off';b.setAttribute('aria-pressed',talkOn?'true':'false');
+  // Hands-free, the mic in the bar mutes and unmutes with one click.
+  var mic=$('mic'),say=!talkOn?'Speak to Mia':talkMuted?'Turn the mic back on':'Mute the mic';
+  mic.hidden=!earParts();mic.classList.toggle('off',talkOn&&talkMuted);mic.title=say;mic.setAttribute('aria-label',say);
+  $('ears').hidden=!talkOn;host.classList.toggle('ears-on',talkOn);
+  $('earsMute').classList.toggle('on',talkMuted);$('earsMute').setAttribute('aria-pressed',talkMuted?'true':'false');
+  $('earsMute').title=talkMuted?'Turn the mic back on':'Mute the mic';$('earsMute').setAttribute('aria-label',$('earsMute').title);
+  findSet(findOn);
+}
+// Muting lets go of the mic; hands-free stays on and picks up again when it is turned back on.
+function talkMute(){
+  if(!talkOn||!talk)return;
+  talkMuted=!talkMuted;
+  // Back from standing by, her voice comes back with the mic.
+  if(!talkMuted&&stoodBy){stoodBy=false;if(quiet)quietSet();}
+  if(talkMuted)talk.stop();
+  else Promise.resolve().then(function(){return talk.start();}).catch(function(){talkStop('The mic could not start. Type it here.');});
+  talkShow();earShow('');
+}
+// "Stand by", said by itself: the mic lets go and Mia stops talking, until the mic is turned back on.
+var stoodBy=false;
+function standBy(){
+  if(!talkOn||talkMuted)return;
+  stoodBy=!quiet;if(!quiet)quietSet();else hush();
+  talkMute();earShow('','Standing by. Turn the mic on when you want me.');
+}
+function talkStop(note){
+  talkOn=false;talkMuted=false;stoodBy=false;findOn=false;if(talk)talk.stop();
+  if(host){talkShow();earShow('',note);}
+}
+// Hands-free hears the room too. The speech model writes a few stock lines over noise, and a word or two
+// said while Mia works is not a new direction: neither is sent, so the turn she is on is not cut off.
+var PHANTOM=/^\W*(thank you|thanks for watching|thank you for watching|you|bye|hmm+|mm+|uh+|um+|ah+|gracias|subt[i\u00ed]tulos\b.*)\W*$/i;
+function chatter(t){
+  if(PHANTOM.test(t))return 1;
+  return R&&R.running&&t.split(/\s+/).length<3?2:0;
+}
+function talkStart(){
+  var parts=earParts();if(!parts||talkOn)return;
+  earStop();talkOn=true;talkMuted=false;findOn=true;talkShow();
+  if(!talk)talk=parts.D.createListener({media:parts.media,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe,
+    loud:function(){return busy;},
+    onStart:function(){hush();earShow('on','I am listening\u2026');},
+    onWriting:function(){earShow('wait');},
+    onDrop:function(){earShow('');},
+    onError:function(){earShow('','I could not write down what you said. Say it again.');},
+    onText:function(t){
+      earShow('');t=heard(t);
+      if(!t||!open)return;
+      if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
+      if(/^\W*(mia\W+)?(stand\W?by|en espera)(\W+mia)?\W*$/i.test(t)){standBy();return;}
+      if(spokenAnswer(t))return;
+      var noise=chatter(t);
+      if(noise){if(noise>1)earShow('','I heard \u201c'+str(t,40)+'\u201d and kept working. Say a full sentence to redirect me, or \u201cstop\u201d.');return;}
+      direct(t.slice(0,2000));
+    }});
+  window.MiaSpeech.ready({
+    confirm:function(text){return window.confirm(text);},
+    onDownloading:function(){earShow('wait','Downloading the speech model\u2026 (one time, about 142 MB)');}
+  }).then(function(ok){
+    if(!ok||!open||!talkOn)return talkStop();
+    earShow('');
+    return talk.start();
+  }).catch(function(error){
+    var denied=error&&(error.name==='NotAllowedError'||error.name==='SecurityError');
+    talkStop(denied?'The microphone is blocked. Allow Mia to use it in your computer\'s settings.':'The mic could not start. Type it here.');
+  });
+}
+function talkKept(){try{return localStorage.getItem('miaAiModeTalk')==='1';}catch(e){return false;}}
+function talkToggle(){
+  var on=!talkOn;
+  try{localStorage.setItem('miaAiModeTalk',on?'1':'0');}catch(e){}
+  if(on)talkStart();else talkStop();
+}
+// Sound: wind is shaped noise; each drop is a short rising tone, placed left or right where it lands.
+var ac=null,master=null,muted=false;
+function noise(){var b=ac.createBuffer(1,ac.sampleRate*3,ac.sampleRate),d=b.getChannelData(0);for(var i=0;i<d.length;i++)d[i]=Math.random()*2-1;var n=ac.createBufferSource();n.buffer=b;n.loop=true;n.start();return n;}
+function startAudio(){
+  if(ac){if(ac.state==='suspended')ac.resume();return;}
+  var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+  ac=new AC();master=ac.createGain();master.gain.value=0;master.connect(ac.destination);
+  // Every change of loudness eases from where it is, so the wind never starts or stops at once.
+  master.gain.setTargetAtTime(muted||tandem?0:1,ac.currentTime,1);
+  var wf=ac.createBiquadFilter();wf.type='bandpass';wf.frequency.value=300;wf.Q.value=0.8;
+  var wg=ac.createGain();wg.gain.value=0.04;noise().connect(wf);wf.connect(wg);wg.connect(master);
+  // A gust swells and settles to a floor that is still heard, and the next one starts before the last has gone.
+  (function gust(){var t=ac.currentTime,up=2.5+Math.random()*2,down=3+Math.random()*3;
+    wg.gain.setTargetAtTime(0.05+Math.random()*0.05,t,up/3);wg.gain.setTargetAtTime(0.028,t+up,down/3);
+    wf.frequency.setTargetAtTime(380+Math.random()*320,t,up/3);wf.frequency.setTargetAtTime(280,t+up,down/3);
+    setTimeout(gust,(up+down+1+Math.random()*4)*1000);})();
+}
+function plink(px,sc){
+  if(!ac||muted||tandem||!open)return;var t=ac.currentTime,g=ac.createGain(),o=ac.createOscillator(),base=520+Math.random()*380;
+  o.type='sine';o.frequency.setValueAtTime(base,t);o.frequency.exponentialRampToValueAtTime(base*2.1,t+0.05);
+  g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.07*sc,t+0.006);g.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
+  o.connect(g);
+  if(ac.createStereoPanner){var pn=ac.createStereoPanner();pn.pan.value=px*2-1;g.connect(pn);pn.connect(master);}else g.connect(master);
+  o.start(t);o.stop(t+0.13);
+}
+
+// Rain: each drop falls as a short streak, then rings spread where it lands. Depth sets size and height.
+// A computer that draws without a graphics card spends a whole core on a moving stage,
+// and a remote desktop then cannot carry the person's voice as well. There the stage holds
+// still while the mic is open or the words are being written down, and moves again after.
+function drawsSlowly(){
+  try{
+    var g=document.createElement('canvas').getContext('webgl');if(!g)return true;
+    var e=g.getExtension('WEBGL_debug_renderer_info');
+    return !!e&&/swiftshader|llvmpipe|software/i.test(g.getParameter(e.UNMASKED_RENDERER_WEBGL));
+  }catch(_e){return false;}
+}
+var c=null,x=null,drops=[],last=0,still=window.matchMedia('(prefers-reduced-motion: reduce)').matches,slow=drawsSlowly(),held=false,due=false;
+function next(){if(due||still||held||!open)return;due=true;requestAnimationFrame(frame);}
+function hold(on){
+  on=!!on;if(on===held)return;
+  held=on;host.classList.toggle('calm',held);next();
+}
+function frame(t){
+  due=false;if(!open)return;
+  if(c.width!==c.clientWidth||c.height!==c.clientHeight){c.width=c.clientWidth;c.height=c.clientHeight;}
+  var W=c.width,H=c.height;x.clearRect(0,0,W,H);
+  if(t-last>1950+Math.random()*2700){drops.push({x:Math.random(),d:Math.random(),t:t});last=t;}
+  drops=drops.filter(function(p){return t-p.t<3600;});
+  drops.forEach(function(p){
+    var age=t-p.t,sc=0.25+0.75*p.d,px=p.x*W,py=H*(0.12+0.86*Math.pow(p.d,1.4));
+    if(age<400){var f=age/400;x.strokeStyle='rgba(255,236,200,'+(0.22*sc)+')';x.lineWidth=1;x.beginPath();x.moveTo(px,py-(1-f)*110*sc-18*sc);x.lineTo(px,py-(1-f)*110*sc);x.stroke();return;}
+    if(!p.hit){p.hit=true;plink(p.x,sc);}
+    var k=(age-400)/3200;
+    for(var r=0;r<2;r++){var kk=k-r*0.18;if(kk<=0)continue;var rad=sc*(5+kk*70);x.strokeStyle='rgba(255,236,200,'+((1-kk)*0.26*sc)+')';x.lineWidth=1;x.beginPath();x.ellipse(px,py,rad,rad*0.3,0,0,Math.PI*2);x.stroke();}
+  });
+  next();
+}
+
+function build(){
+  host=document.createElement('div');host.id='aiMode';host.hidden=true;
+  root=host.attachShadow({mode:'open'});root.innerHTML=MARKUP;
+  document.body.appendChild(host);
+  c=$('rain');x=c.getContext('2d');
+  window.MiaMark.render($('hudMark'),20,'');
+  $('leave').onclick=leave;
+  $('form').onsubmit=function(e){
+    e.preventDefault();
+    if(chatOn()){chatSay();return;}
+    if(findMode()){if(found.length)findPick(found[0]);return;}
+    var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));
+  };
+  $('box').addEventListener('input',function(){if(findMode())findRun();});
+  $('box').addEventListener('keydown',function(e){
+    if(e.key!=='Tab'||e.shiftKey||e.altKey||e.ctrlKey||e.metaKey||ink.on||chatOn())return;
+    e.preventDefault();findSet(!findOn);if(findOn)findRun();
+  });
+  $('find').onclick=function(){if(chatOn()){peek=null;view=-1;draw();$('box').focus();return;}findSet(!findOn);if(findOn)findRun();$('box').focus();};
+  $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
+  $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
+  $('convo').onclick=function(e){if(e.target.closest('[data-log]')){drawerOn=true;logDraw();return;}};
+  $('logTab').onclick=function(){drawerOn=!drawerOn;logDraw();};
+  $('chatsTab').onclick=function(){chatsOn=true;chatsDraw();};
+  $('what').onclick=function(){var tip=$('whatTip');tip.hidden=!tip.hidden;this.setAttribute('aria-expanded',String(!tip.hidden));};
+  $('chats').onclick=function(e){
+    if(e.target.closest('[data-x]')){chatsOn=false;chatsDraw();return;}
+    var row=e.target.closest('[data-chat]');
+    if(row&&chatRows[+row.dataset.chat])readChat(chatRows[+row.dataset.chat]);
+  };
+  $('log').onclick=function(e){
+    if(e.target.closest('[data-x]')){drawerOn=false;logDraw();return;}
+    if(e.target.closest('[data-new]')){newChat();return;}
+    var turn=e.target.closest('[data-view]');
+    if(turn){peek=null;view=+turn.dataset.view;draw();$('cv').scrollTop=0;}
+  };
+  $('earsMute').onclick=talkMute;$('earsVoice').onclick=quietSet;$('quiet').onclick=quietSet;quietShow();
+  $('voiceSet').onclick=function(){ask='setup';askNote='';voiceAskDraw();};
+  $('voiceAsk').addEventListener('click',function(e){var b=e.target.closest('[data-va]');if(b&&!b.disabled)voiceAskDo(b.dataset.va);});
+  $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
+  $('stop').onclick=function(){hush();halt('');};
+  $('mic').onclick=function(){if(talkOn)talkMute();else earToggle();};$('talk').onclick=talkToggle;inkWire();
+  $('drive').onclick=tandemStart;
+  $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
+  siteWire();
+  // How blurry the background is stays as the person left it on this computer.
+  var k=100;try{k=+localStorage.getItem('miaAiModeBlur')||100;}catch(e){}
+  function blur(v){$('mind').style.setProperty('--k',v/100);}
+  $('blur').value=k;blur(k);
+  $('blur').oninput=function(){blur(+this.value);try{localStorage.setItem('miaAiModeBlur',this.value);}catch(e){}};
+  // The controls stay folded behind one mark until the person asks for them.
+  $('more').onclick=function(){tools(!$('tools').hidden);};
+  $('blurBtn').onclick=function(){var bar=$('blurBar');bar.hidden=!bar.hidden;this.setAttribute('aria-expanded',bar.hidden?'false':'true');if(!bar.hidden){phoneShow(false);modelShow(false);}};
+  $('modelBtn').onclick=function(){modelShow($('modelBar').hidden);};
+  $('model').onchange=function(){try{localStorage.setItem('miaAiModeModel',this.value);}catch(e){}};
+  phoneWire();
+  // Full screen: the stage takes the whole screen, and gives it back on leaving.
+  var page=document.documentElement;
+  $('full').hidden=!page.requestFullscreen;
+  $('full').onclick=function(){
+    if(document.fullscreenElement){document.exitFullscreen();fullOwn=false;}
+    else page.requestFullscreen().then(function(){fullOwn=true;},function(){});
+  };
+  document.addEventListener('fullscreenchange',function(){$('full').textContent=document.fullscreenElement?'Exit full screen':'Full screen';if(!document.fullscreenElement)fullOwn=false;});
+  // A click on the empty stage beside a chat that was pulled, or beside a bot's chat, closes it.
+  $('stage').addEventListener('click',function(e){
+    var t=e.target;if((!peek&&!shownBot())||!t||!t.closest)return;
+    // Only the bare stage counts: the gaps between what is drawn, never a card, a picture or a control.
+    var empty=t.id==='stage'||t.id==='rain'||t.id==='cv'||(t.parentNode&&t.parentNode.id==='cv')||/(^| )(work|main|side)( |$)/.test(String(t.className||''));
+    if(!empty||String(window.getSelection&&window.getSelection()||''))return;
+    if(peek){peek=null;view=-1;}else{crew.forEach(function(x){x.open=false;});big=false;}
+    draw();
+  });
+  // The fields of a new bot's draft are typed in on the stage; the keys stay in them.
+  $('cv').addEventListener('input',function(e){if(e.target&&e.target.closest&&e.target.closest('.newbot'))botCardEdit();});
+  $('cv').addEventListener('keydown',function(e){if(e.target&&e.target.closest&&e.target.closest('.newbot input,.newbot textarea'))e.stopPropagation();});
+  $('cv').addEventListener('click',function(e){
+    // A decision at the edge of the deck is turned to, not answered or followed.
+    var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
+    if(leaf&&!leaf.classList.contains('on')){e.preventDefault();deckTo([].indexOf.call(leaf.parentNode.children,leaf),true);return;}
+    // The picture or a link of the decision in front opens that page live in the card's own frame.
+    var vis=e.target&&e.target.closest&&e.target.closest('.leaf.on a.visit,.leaf.on a.lnk');
+    if(vis&&pane()){
+      e.preventDefault();var href=vis.href;
+      site.card=vis.closest('.leaf').dataset.key;site.deckRun=seeing()||R;site.open=true;site.wide=false;
+      if(vis.classList.contains('visit'))siteShow(href);else siteDo('new').then(function(){return siteDo('navigate',{value:href});});
+      draw();return;
+    }
+    // A link in her reply or on a card opens on the stage, in the desktop app.
+    var a=e.target&&e.target.closest&&e.target.closest('a[href]');
+    if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
+    // A card's own button is a direction to Mia about that card, not a pick of the card.
+    var act=e.target&&e.target.closest&&e.target.closest('[data-act]');
+    if(act){direct(act.dataset.act);return;}
+    var it=(R||seeing())&&e.target&&e.target.closest&&e.target.closest('[data-item]');
+    if(it){focus(it.dataset.item,true);return;}
+    var b=e.target&&e.target.closest&&e.target.closest('button');if(!b)return;
+    if(b.dataset.thread!==undefined&&chatOn()){chatOn().root=b.dataset.thread;draw();$('cv').scrollTop=$('cv').scrollHeight;$('box').focus();return;}
+    if(b.dataset.turn||b.dataset.dot){var run=seeing()||R;deckTo(b.dataset.dot?+b.dataset.dot:(run&&run.leaf||0)+(+b.dataset.turn),true);return;}
+    if(b.dataset.pick){deckPick(b.dataset.of,b.dataset.pick);return;}
+    if(b.dataset.decided){deckSend();return;}
+    if(b.dataset.crew||b.dataset.show){
+      var mate=crew[+(b.dataset.crew||b.dataset.show)];
+      // The tile opens the chat with that bot; "Show me" opens what it brought back.
+      var asChat=!!b.dataset.crew;
+      if(mate&&(asChat||mate.reply))mateShow(mate,asChat,false);
+      return;
+    }
+    if(!R||seeing())return;
+    if(b.dataset.ask)answer(b.dataset.ask,b.dataset.ok==='1');
+    else if(b.dataset.newbot)botCardAct(b.dataset.newbot);
+    else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
+    else if(b.dataset.next)direct(R.next);
+    else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
+    else if(b.dataset.big){big=!big;draw();}
+    else if(b.dataset.hide){crew.forEach(function(x){x.open=false;});big=false;draw();}
+    else if(b.dataset.manage){
+      var left=crew[+b.dataset.manage];
+      if(left){left.seen=true;direct('Look at what '+left.name+' brought back and take it from here. Tell me only what needs me.','You manage '+left.name+'.');}
+    }
+  });
+  $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.35);};
+  // Keys typed on the stage stay on the stage; Esc brings the app back.
+  // Esc puts the item at the front back with the others first.
+  // A phone's keyboard covers the bottom of the page; the box rides above it.
+  var vv=window.visualViewport;
+  if(vv){
+    var keys=function(){host.style.setProperty('--keys',(vv.scale===1?Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop)):0)+'px');};
+    vv.addEventListener('resize',keys);vv.addEventListener('scroll',keys);
+  }
+  host.addEventListener('keydown',function(e){
+    e.stopPropagation();
+    var it=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('article[data-item]');
+    var turn=(e.key==='Enter'||e.key===' ')&&e.target&&e.target.closest&&e.target.closest('.turn[data-view],.turn[data-chat]');
+    if(it){e.preventDefault();focus(it.dataset.item,true);}
+    else if(turn){e.preventDefault();turn.click();}
+    // Left and right step through the earlier views when nothing is being typed.
+    else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!$('box').value&&!ink.on&&!(e.target&&e.target.closest&&e.target.closest('.site'))&&stops().length){e.preventDefault();step(e.key==='ArrowLeft'?-1:1);}
+    else if(e.key==='Escape'&&!tandem){if(ink.on)inkSet(false);else if((findOn&&(!talkOn||$('box').value))||found.length){$('box').value='';findSet(talkOn);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
+  });
+}
+function enter(){
+  if(open)return;
+  if(!host)build();
+  open=true;s=1;R=null;conv='';seq=0;past=[];view=-1;peek=null;drawerOn=false;findOn=false;found=[];mindSet({});
+  host.classList.toggle('tandem',tandem);
+  host.hidden=false;hold(false);draw();
+  site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
+  $('mic').hidden=!earParts();$('talk').hidden=!earParts();talkShow();
+  if(talkKept())talkStart();
+  if(pane()&&!webOff)webOff=web.onState(siteState);
+  if(!pageTimer)pagePoll();
+  requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
+  startAudio();if(master)master.gain.setTargetAtTime(muted||tandem?0:1,ac.currentTime,1);
+  ask='';askNote='';voiceAskDraw();
+  voiceCheck().then(function(){if(open&&s===1)welcome();});
+  if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
+  setTimeout(function(){if(open&&!tandem)$('box').focus();},400);
+  openChat().catch(function(){});
+}
+// Leaving ends the run: nothing keeps working on a stage nobody is watching.
+function leave(){
+  if(!open)return;
+  if(R&&R.running)halt('');
+  open=false;clearTimeout(drawTimer);drawTimer=null;inkSet(false);hush();earStop();talkStop();seedId++;
+  if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
+  var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
+  host.classList.remove('tandem');tandem=false;tandemTalk=false;watchStop();tandemTell();
+  site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
+  $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
+  setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';$('cv')._h='';mindSet({});}},1600);
+}
+document.addEventListener('click',function(e){
+  var b=e.target&&e.target.closest&&e.target.closest('[data-ai-mode-enter]');
+  if(!b)return;
+  e.preventDefault();
+  if(introDue())intro();else enter();
+});
+// The intro shows what AI mode is. Mia plays it by itself the first time on
+// this computer, and Settings can play it again.
+function introDue(){
+  var seen=true;try{seen=localStorage.getItem('miaAiModeIntroSeen')==='1';}catch(err){}
+  return !seen&&!open&&!!window.MiaAiModeIntro;
+}
+function intro(){
+  if(open||!window.MiaAiModeIntro)return;
+  window.MiaAiModeIntro.play({sound:!muted,say:introSay}).then(function(r){
+    try{localStorage.setItem('miaAiModeIntroSeen','1');}catch(err){}
+    if(r==='try')enter();
+  });
+}
+window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();},
+  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,on:function(f){tandemSubs.push(f);}}};
+})();

@@ -30,6 +30,9 @@ test('hermesDebugEventText still drops gateway.ready/session.info even under ver
   assert.match(body, /'thinking\.delta',/);
   assert.match(body, /'reasoning\.delta',/);
   assert.match(body, /'session\.info',/);
+  // A tool call is one plain line; its command, code and output never reach the chat.
+  assert.match(body, /if \(eventType\.startsWith\('tool\.'\)\) return toolActivityLine\(eventType, event\);/);
+  assert.ok(body.indexOf("startsWith('tool.')") < body.indexOf('Arguments:'));
 });
 
 test('verbose gateway output surfaces the live thinking/reasoning stream, coalesced instead of one event per token', async () => {

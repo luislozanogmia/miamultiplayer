@@ -273,7 +273,7 @@ test('composer stages one bounded file through the native attachment endpoint', 
   assert.match(source, /function prepareChatAttachment\(file, roomId\)/);
   assert.match(source, /nativeConversationPath\(roomId, '\/attachments'\)/);
   assert.match(source, /contentBase64: dataBase64/);
-  assert.match(source, /content\.attachments = \[preparedAttachment\.attachment\]/);
+  assert.match(source, /content\.attachments = preparedAttachment\.attachments \|\| \[preparedAttachment\.attachment\];/);
   assert.match(source, /file\.size > limit \* 1024 \* 1024/);
 });
 

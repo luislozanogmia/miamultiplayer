@@ -12,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 
 const SHARED_DIR = 'shared';
+// What the bot has learned, in its shared folder (see botMemorySection).
+const MEMORY_FILE = 'memory.md';
 const STATE_FILE = '.mia-shared-folder.json';
 const MAX_FILES = 2000;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -152,4 +154,4 @@ function createSharedFolder(workFolder) {
   return { root, scan, list, read, write, remove, state, saveState };
 }
 
-module.exports = { SHARED_DIR, MAX_FILE_BYTES, SharedFolderError, cleanPath, createSharedFolder, sha256 };
+module.exports = { SHARED_DIR, MEMORY_FILE, MAX_FILE_BYTES, SharedFolderError, cleanPath, createSharedFolder, sha256 };

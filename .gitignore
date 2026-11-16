@@ -33,3 +33,6 @@ backend/hermes/
 
 # Linux distribution artifacts
 linux/distro/
+
+# Built phone page
+/dist/

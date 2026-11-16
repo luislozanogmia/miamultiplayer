@@ -55,7 +55,7 @@ function harness() {
     localBrowserNavigate: value => navigations.push(value),
     // The bar also searches chats and automations; none exist here.
     chatSearchDirectory: { loaded: true }, chatSearchDirectorySnapshot: () => ({ humans: [], agents: [] }),
-    artifactsPage: { items: [], open: false }, loadArtifacts() {}, cachedHubTeams: () => [],
+    artifactsPage: { items: [], open: false }, loadArtifacts() {}, appsPage: { local: [], links: [], catalog: [], open: false }, loadApps() {}, cachedHubTeams: () => [],
     hubWorkspace: () => false, chatWs: { rooms: { dms: [] }, nativeConversations: [] }, nativeConversationToRoom: room => room, automationsBoardRows: () => [],
   });
   vm.runInContext(logic + wiring, context);

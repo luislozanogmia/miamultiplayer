@@ -28,7 +28,7 @@
       + (app.status === 'signing_in' ? '<div class="mcp-app-hint">Finish signing in in your browser.</div>' : '')
       + '<div class="mcp-app-error" role="alert">' + (app.signInFailed ? 'The sign-in didn’t finish. Try again.' : '') + '</div>'
       + '<div class="mcp-app-foot">' + (app.auth === 'oauth' ? signIn : '')
-      + '<button type="button" class="mcp-app-remove" data-mcp-remove="' + esc(app.id) + '" aria-label="' + esc('Remove ' + app.name) + '">Remove</button></div></div>';
+      + (app.offered ? '' : '<button type="button" class="mcp-app-remove" data-mcp-remove="' + esc(app.id) + '" aria-label="' + esc('Remove ' + app.name) + '">Remove</button>') + '</div></div>';
   }
 
   function render(apps){

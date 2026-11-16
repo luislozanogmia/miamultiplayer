@@ -44,6 +44,8 @@ function publicDispatch(dispatch) {
 }
 
 const TEAM_WORKSPACE_PATTERN = /^hub_[a-f0-9]{32}$/;
+// The mark on the chat that carries a person's AI mode run with Mia.
+const { AI_MODE_SOURCE, isAiModeConversation } = require('./ai-mode');
 
 // A bot's main Solo chat: not a "New conversation" and not a team's chat.
 function canonicalBotConversationCandidates(conversations) {
@@ -314,6 +316,43 @@ function createConversationService({ repository, authorization, realtime = null,
         metadata: member.metadata || {},
       });
     }
+    ensureConversationMembers(conversation);
+    return conversation;
+  }
+
+
+  // AI mode has no chat on screen, so its run with Mia lives in a chat of its
+  // own: one per person and place (Solo, or a company). It is kept and listed
+  // with the person's other chats, so what was said there can be read later.
+  // "New chat" there starts another one; the earlier ones stay in the list,
+  // and coming back opens the newest.
+  function openAiModeConversation({ companyId, principal, createdAt, teamWorkspace, fresh = false } = {}) {
+    const normalizedCompanyId = required(companyId, 'companyId');
+    const owner = {
+      principalId: required(principal && principal.principalId, 'principalId'),
+      principalType: required(principal && principal.principalType, 'principalType'),
+      joinedAt: createdAt,
+    };
+    const place = teamWorkspace || '';
+    const kept = fresh ? null : repository.listConversations({ companyId: normalizedCompanyId, includeDeleted: false, limit: 1000 })
+      .filter((earlier) => isAiModeConversation(earlier) && earlier.createdBy === owner.principalId
+        && ((earlier.metadata || {}).teamWorkspace || '') === place)
+      .sort((one, other) => String(other.createdAt).localeCompare(String(one.createdAt)))[0];
+    // One kept from before this had a name of its own takes the name now.
+    if (kept && kept.name !== 'Flow mode') {
+      repository.updateConversation({ companyId: normalizedCompanyId, id: kept.id, name: 'Flow mode', updatedAt: kept.updatedAt || kept.createdAt });
+      kept.name = 'Flow mode';
+    }
+    const conversation = kept || repository.createConversation({
+      companyId: normalizedCompanyId,
+      type: 'agent',
+      name: 'Flow mode',
+      createdBy: owner.principalId,
+      createdAt,
+      metadata: { agentId: 'gateway', departments: [], conversationMode: 'fresh', source: AI_MODE_SOURCE, ...(teamWorkspace ? { teamWorkspace } : {}) },
+      owner,
+    });
+    ensureGatewayMember(conversation);
     ensureConversationMembers(conversation);
     return conversation;
   }
@@ -672,6 +711,7 @@ function createConversationService({ repository, authorization, realtime = null,
   return {
     createConversation,
     createFreshBotConversation,
+    openAiModeConversation,
     listConversations,
     getConversation,
     deleteConversation,

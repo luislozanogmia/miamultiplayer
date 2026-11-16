@@ -41,7 +41,32 @@ test('dropped files go through the same checks: the good ones attach, the rest a
   assert.match(many.env.state.error, /up to 10 files at once/);
 });
 
-test('the rest send one message each through the same upload, and a failure stays to retry', async () => {
+test('a bot chat gets every file in one message, a company one file a message', async () => {
+  const fn = slice('  function prepareChatAttachments(files, roomId, onProgress){', '  function chatAttentionStorageKey(){');
+  const run = (failOn) => {
+    const progress = [];
+    const prepare = new Function('prepareChatAttachment', fn + 'return prepareChatAttachments;')(
+      (f) => f.name === failOn ? Promise.reject(new Error('Upload failed.')) : Promise.resolve({ attachment: { id: 'att_' + f.name } }));
+    return prepare([{ name: 'a.png' }, { name: 'b.png' }, { name: 'c.png' }], 'room', (number, total) => progress.push(number + '/' + total))
+      .then((prepared) => ({ prepared, progress }));
+  };
+  const ok = await run(null);
+  assert.deepEqual(ok.prepared.attachments.map((item) => item.id), ['att_a.png', 'att_b.png', 'att_c.png'], 'in the order picked');
+  assert.equal(ok.prepared.attachment.id, 'att_a.png');
+  assert.deepEqual(ok.progress, ['1/3', '2/3', '3/3']);
+  await assert.rejects(run('b.png'), /Upload failed\./, 'one failed upload sends nothing, the files stay staged');
+  assert.match(source, /var together = extras\.length > 0 && !inHubRoom\(roomId\);/);
+  assert.match(source, /content\.attachments = preparedAttachment\.attachments \|\| \[preparedAttachment\.attachment\];/);
+  assert.match(source, /if\(extras\.length && !together\) return sendMoreChatAttachments\(extras, roomId, 2, extras\.length \+ 1\);/);
+});
+
+test('a pasted image joins the files already waiting', () => {
+  const paste = slice("    input.addEventListener('paste', function(e){", '    // Files dragged onto the composer');
+  assert.match(paste, /if\(pasted\.length && stageChatAttachments\(pasted\)\) syncDraftState\(\);/);
+  assert.doesNotMatch(paste, /stageChatAttachment\(|break;/, 'no paste replaces what is staged or stops at the first image');
+});
+
+test('in a company the rest send one message each through the same upload, and a failure stays to retry', async () => {
   const fn = slice('      function sendMoreChatAttachments(items, roomId, number, total){', '      // Group tags reach many people at once');
   const run = async (failAt) => {
     const sent = [], env = { chatAttachment: {} };
@@ -69,7 +94,6 @@ test('the composer takes drops and the + picker takes several files', () => {
   assert.match(html, /id="ccFileInput" class="cc-file-input" multiple accept=/);
   assert.match(source, /composer\.addEventListener\('drop', function\(e\)\{[\s\S]*?if\(stageChatAttachments\(e\.dataTransfer\.files\)\) syncDraftState\(\);/);
   assert.match(source, /fileInput\.addEventListener\('change', function\(\)\{\s*if\(stageChatAttachments\(fileInput\.files\)\) syncDraftState\(\);/);
-  assert.match(source, /if\(extras\.length\) return sendMoreChatAttachments\(extras, roomId, 2, extras\.length \+ 1\);/);
 });
 
 // A link or text dragged from the Mia browser has no file: it lands in the

@@ -91,3 +91,18 @@ test('an oauth app shows where its sign-in stands; other apps are untouched by i
   assert.equal(apps.publicMcpApp(oauth, true, { signedIn: true, state: 'error' }).signInFailed, undefined);
   assert.equal(apps.publicMcpApp(apps.cleanMcpApp({ name: 'Wiki', url: 'https://mcp.example.test/mcp' }), true, { state: 'error' }).status, 'ready');
 });
+
+test('ElevenLabs is offered to everyone, and a saved key can be read back for Mia\u2019s voice only by name', () => {
+  const offered = apps.builtInMcpApp('elevenlabs');
+  assert.deepEqual([offered.name, offered.auth, offered.runner, offered.package, offered.keyEnv], ['ElevenLabs', 'key', 'uvx', 'elevenlabs-mcp', 'ELEVENLABS_API_KEY']);
+  assert.equal(apps.builtInMcpApp('nope'), null);
+  assert.equal(apps.publicMcpApp(offered, false).status, 'needs_key');
+  // Its server gets the key by name, never by value.
+  assert.match(apps.hermesMcpServerLines([offered]).join('\n'), /ELEVENLABS_API_KEY: "\$\{MIA_MCP_ELEVENLABS_KEY\}"/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-mcp-key-'));
+  const env = path.join(dir, '.env');
+  assert.equal(apps.readProfileKey(env, apps.keyEnvName('elevenlabs')), '');
+  apps.setProfileKey(env, apps.keyEnvName('elevenlabs'), 'a-test-value');
+  assert.equal(apps.readProfileKey(env, apps.keyEnvName('elevenlabs')), 'a-test-value');
+  assert.equal(apps.readProfileKey(env, 'MIA_MCP_OTHER_KEY'), '');
+});

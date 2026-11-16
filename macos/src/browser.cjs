@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
-const { WebContentsView, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
+const { WebContentsView, BrowserWindow, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
@@ -1641,6 +1641,45 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       .sort((a, b) => (b.botUsedAt || 0) - (a.botUsedAt || 0))[0] || null;
   }
 
+  // Mia sees every tab, but changes a page only where the work is hers.
+  // Reading, screenshots and scrolling stay open to her everywhere.
+  const MIA_CHANGES = new Set(["navigate", "click", "fill", "eval", "key", "back", "forward", "reload", "stop"]);
+  const MIA_EDITS = new Set(["click", "fill", "eval", "key"]);
+  const BOT_ON_PAGE_MS = 10 * 60 * 1000;
+  const miaTaskTabs = new Map(); // session -> ids of tabs the person confirmed for it
+  function requireMiaMayChange(tab, method, params, session) {
+    if (!MIA_CHANGES.has(method) && !(method === "vacuum" && params.url) && method !== "tab_close") return;
+    const label = `Tab ${tab.id} ("${String(tab.title || tab.url || "New tab").slice(0, 80)}")`;
+    // 1. A bot's tab is the bot's.
+    const owner = tabController(tab);
+    if (owner.kind === "bot") {
+      throw protocolError("TAB_OWNED", `${label} belongs to the bot ${groups.get(tab.groupId)?.name || owner.botId}. You can read it, but only that bot works in it. `
+        + "Tell the person; they can give the tab group back to Mia from the group's menu.");
+    }
+    if (method === "tab_close") return;
+    // 2. The same page in a bot's tab, while that bot is on it.
+    const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
+    const taken = MIA_EDITS.has(method) && /^https?:/i.test(tab.url || "") && [...tabs.values()].find(other => other !== tab
+      && tabController(other).kind === "bot" && key(other.url) === key(tab.url)
+      && (botWorkPending(other) || Date.now() - (other.botWorkAt || 0) < BOT_ON_PAGE_MS));
+    if (taken) {
+      throw protocolError("BOT_HAS_PAGE", `The bot ${groups.get(taken.groupId)?.name || "in another tab"} has this same page open in its own tab and is working on it. `
+        + "Do not change it here. Tell the person the bot is already on it and ask what they want.");
+    }
+    // 3. A tab Mia did not open for this conversation needs a look first.
+    // An empty tab has nothing of the person's on it.
+    if (!/^(https?|file):/i.test(tab.url || "")) return;
+    if (tab.miaSession === session || miaTaskTabs.get(session)?.has(tab.id)) return;
+    if (params.for_this_request === true) {
+      if (!miaTaskTabs.has(session)) miaTaskTabs.set(session, new Set());
+      miaTaskTabs.get(session).add(tab.id);
+      return;
+    }
+    throw protocolError("TAB_NOT_IN_TASK", `${label} was already open; you did not open it for this conversation. Read it first. `
+      + "If what the person asked is clearly about this page, repeat the call with \"for_this_request\": true. "
+      + "If the page is about something else, or you are unsure, ask the person before changing anything. To work on a new page, open your own tab with ghost_tab_open.");
+  }
+
   function protocolTabResult(tab) {
     return {
       tab_id: tab.id,
@@ -1659,6 +1698,50 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     if (wait === "networkidle") await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  let picturing = Promise.resolve();
+  function pagePicture(address, width) {
+    const url = typeof address === "string" ? address.trim() : "";
+    if (!/^https?:\/\/\S+$/i.test(url) || url.length > 4096) return { error: "Only web pages can be pictured." };
+    // One page at a time, so a row of cards never loads a row of sites at once.
+    const next = picturing.then(async () => {
+      // The page is drawn off screen: it is never part of the window, so nobody sees it.
+      const page = new BrowserWindow({ show: false, width: 1280, height: 800, webPreferences: {
+        session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
+        webSecurity: true, allowRunningInsecureContent: false, offscreen: true,
+      } });
+      const wc = page.webContents;
+      let timer, drawn = null;
+      // A link that turns out to be a file is dropped, never saved or asked about.
+      const noDownload = (event, _item, contents) => { if (contents === wc) event.preventDefault(); };
+      try {
+        profile.on("will-download", noDownload);
+        wc.on("paint", (_event, _dirty, image) => { drawn = image; });
+        wc.setAudioMuted(true);
+        wc.setWindowOpenHandler(() => ({ action: "deny" }));
+        const image = await Promise.race([
+          (async () => {
+            await wc.loadURL(url);
+            // A moment for the page to draw what it loaded.
+            await new Promise(resolve => setTimeout(resolve, 1200));
+            return drawn && !drawn.isEmpty() ? drawn : wc.capturePage();
+          })(),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 20000); }),
+        ]);
+        if (!image || image.isEmpty()) return { picture: null };
+        const small = image.resize({ width: Math.min(width, image.getSize().width), quality: "good" });
+        return { picture: { url, dataUrl: `data:image/jpeg;base64,${small.toJPEG(55).toString("base64")}` } };
+      } catch (_) {
+        return { picture: null };
+      } finally {
+        clearTimeout(timer);
+        profile.removeListener("will-download", noDownload);
+        try { if (!page.isDestroyed()) page.destroy(); } catch (_) { /* already gone */ }
+      }
+    });
+    picturing = next.catch(() => {});
+    return next;
   }
 
   async function captureHiddenPage(tab) {
@@ -2490,6 +2573,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // doesn't touch the bot's other tabs, so they don't need to be idle.
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
+      else tab.miaSession = actorSession;
       touch(tab);
       if (params.url) navigate(tab, params.url);
       await waitForProtocolPage(tab, params.wait || "load", params.signal);
@@ -2509,6 +2593,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (method === "tab_close") {
       const tab = protocolTab(params.tab_id);
       if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", `Tab ${tab.id} is not one of your tabs.`);
+      if (!actor && params[actorCapability] !== true) requireMiaMayChange(tab, method, params, actorSession);
       closeTab(tab.id);
       return { closed: true, tab_id: tab.id };
     }
@@ -2549,6 +2634,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       const target = normalizeLocalFileTarget(filePath, workspaceRoot, { anyRoot });
       const tab = actor ? newTab(undefined, { activate: false }) : newTab();
       if (actor) placeInBotGroup(tab, actor);
+      else tab.miaSession = actorSession;
       openLocalFile(tab, target, { anyRoot });
       // A Ghost command is an app-owned browser entry point, so surface the
       // native browser panel even when the user was still in chat.
@@ -2570,9 +2656,12 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (actor) {
       tab = botProtocolTab(actor, method, params.tab_id);
     } else {
-      if (!tabs.size) newTab();
+      if (!tabs.size) newTab().miaSession = actorSession;
       tab = protocolTab(params.tab_id);
+      // A worker bound to its tab is already held to that one tab.
+      if (params[actorCapability] !== true) requireMiaMayChange(tab, method, params, actorSession);
     }
+    delete params.for_this_request;
     touch(tab);
     // A bot's own navigation loads the page it wants; anything else needs
     // the page the tab was on, so a sleeping tab loads first.
@@ -3858,6 +3947,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
           } catch (_) { return null; }
         })).then(frames => ({ frames: frames.filter(Boolean) }));
       }
+      // A picture of a web page that is not open in any tab, for a card about
+      // that site. The page loads out of sight in a view of its own, with the
+      // browser's sign-ins, and is gone once pictured: no tab, no history.
+      if (command.action === "pagePicture") return pagePicture(command.url, boundedInteger(command.width, 640, 120, 640));
       if (command.action === "spacePointers") {
         const pointers = {};
         const fallback = active()?.view.getBounds();
@@ -4010,6 +4103,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         tab.personPressedAt = Date.now() + PERSON_LOAD_MS;
         if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
         else navigate(tab, command.value);
+      }
+      // The size a page is drawn at, from half to three times its own.
+      if (command.action === "zoom" && Number.isFinite(command.factor)) {
+        tab.view.webContents.setZoomFactor(Math.min(3, Math.max(0.5, command.factor)));
       }
       if (command.action === "select" && tabs.has(command.id)) {
         activateTab(command.id); layout(); persistTabs();

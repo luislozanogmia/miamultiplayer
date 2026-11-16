@@ -134,8 +134,9 @@ test('everywhere search groups results and leads with what you are doing', () =>
   };
   const keys = groups => groups.map(group => group.key);
   assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: null })), ['browser', 'chat', 'automations'], 'mixed tabs: browser, chat, automation');
-  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'chat' })), ['chat', 'browser', 'automations']);
-  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'automations' })), ['automations', 'browser', 'chat']);
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'browser' })), ['browser', 'chat', 'automations']);
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'chat' })), ['chat', 'automations', 'browser'], 'away from the browser, the web goes last');
+  assert.deepEqual(keys(omnibox.everywhere('lin', sources, { view: 'automations' })), ['automations', 'chat', 'browser']);
   const chat = omnibox.everywhere('lin', sources, { view: 'chat' })[0];
   assert.deepEqual(chat.parts.map(part => part.label), ['People', 'Chat history']);
   assert.equal(chat.parts[0].rows[0].target.name, 'Lina');
@@ -202,4 +203,36 @@ test('artifacts are searched, and lead while the Artifacts page is open', () => 
   const groups = omnibox.everywhere('quote', sources, { view: 'artifacts' });
   assert.deepEqual(groups.map(group => group.key), ['artifacts', 'chat']);
   assert.deepEqual(groups[0].parts[0].rows[0], { kind: 'artifact', target: sources.artifacts[0] });
+});
+
+test('Apps, Artifacts, Chats and Automations are found by name, and the browser is not one of them', () => {
+  const places = [{ id: 'apps', name: 'Apps' }, { id: 'artifacts', name: 'Artifacts' }, { id: 'chats', name: 'Chats' }, { id: 'automations', name: 'Automations' }];
+  const browser = [{ kind: 'search', query: 'x' }];
+  const found = (query, view) => omnibox.everywhere(query, { browser, places }, { view });
+  for (const [query, id] of [['apps', 'apps'], ['artif', 'artifacts'], ['chat', 'chats'], ['automations', 'automations']]) {
+    const groups = found(query, 'apps');
+    assert.deepEqual(groups.map(group => group.key), ['places', 'browser'], query);
+    assert.equal(groups[0].title, 'Go to');
+    assert.deepEqual(groups[0].parts[0].rows, [{ kind: 'place', target: places.find(place => place.id === id) }]);
+  }
+  assert.deepEqual(found('a', 'chat').map(group => group.key), ['browser'], 'one letter does not list every place');
+  assert.deepEqual(found('ap', 'chat')[0].parts[0].rows.map(row => row.target.id), ['apps']);
+  const withChat = omnibox.everywhere('apps', { browser, places, chats: [{ roomId: 'r1', name: 'apps ideas' }] }, { view: 'chat' });
+  assert.deepEqual(withChat.map(group => group.key), ['places', 'chat', 'browser'], 'the place leads, so Enter opens it');
+  assert.deepEqual(found('browser', 'chat').map(group => group.key), ['browser'], 'no place is called Browser');
+  assert.deepEqual(found('apps', 'browser').map(group => group.key), ['browser', 'places'], 'in the browser, Enter still goes to the web');
+  assert.deepEqual(found('apps', null).map(group => group.key), ['browser', 'places']);
+});
+
+test('your apps are searched, and lead while the Apps page is open', () => {
+  const sources = {
+    browser: [{ kind: 'search', query: 'quote' }],
+    chats: [{ roomId: 'r1', name: 'quote chat' }],
+    apps: [{ source: 'local', id: 'p1', name: 'Quote builder', sub: 'On this computer' }, { source: 'team', id: 'p2', name: 'Payroll' }],
+  };
+  const onApps = omnibox.everywhere('quote', sources, { view: 'apps' });
+  assert.deepEqual(onApps.map(group => group.key), ['apps', 'chat', 'browser']);
+  assert.equal(onApps[0].title, 'Apps');
+  assert.deepEqual(onApps[0].parts[0].rows, [{ kind: 'app', target: sources.apps[0] }]);
+  assert.deepEqual(omnibox.everywhere('quote', sources, { view: 'chat' }).map(group => group.key), ['chat', 'apps', 'browser']);
 });

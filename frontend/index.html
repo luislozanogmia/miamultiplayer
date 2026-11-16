@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261112-ideas-1" />
+<link rel="stylesheet" href="styles.css?v=20261116-flow-tandem-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -493,6 +493,19 @@
                 <div class="sidebar-placeholder-group"><span class="mia-placeholder" style="width:42%"></span><span class="mia-placeholder" style="width:70%"></span><span class="mia-placeholder" style="width:60%"></span></div>
               </div>
             </div>
+            <button type="button" class="ai-mode-entry" id="aiModeEntry" data-ai-mode-enter data-tip="The ultimate interface, where the human intent becomes AI execution" aria-label="Flow mode. The ultimate interface, where the human intent becomes AI execution">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2"/></svg>
+              <span class="ai-mode-entry-text">Flow mode</span><span class="ai-mode-entry-what" aria-hidden="true">?</span><span class="ai-mode-entry-tag">Preview</span>
+            </button>
+            <button type="button" class="ai-mode-entry" id="flowTandemEntry" data-flow-tandem-start data-tip="Keep working in the app while you and Mia talk it through" aria-label="Flow Tandem. Keep working in the app while you and Mia talk it through">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 9.4V8a5.4 5.4 0 0 1 10.8 0v1.4"/><rect x="1.8" y="9.2" width="3" height="4.4" rx="1.2"/><rect x="11.2" y="9.2" width="3" height="4.4" rx="1.2"/></svg>
+              <span class="ai-mode-entry-text">Flow Tandem</span><span class="ai-mode-entry-tag">Preview</span>
+            </button>
+            <button type="button" class="update-cue" id="miaUpdateCue" hidden>
+              <span class="update-cue-bar" data-update-bar></span>
+              <svg class="update-cue-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v7.5M5 7.5l3 3 3-3M3 13h10"/></svg>
+              <span class="update-cue-text" data-update-text></span><span class="update-cue-detail" data-update-detail></span>
+            </button>
             <div class="chat-sidebar-footer" data-rail-hide>
               <span class="csf-dot" id="chatSyncDot"></span><span id="chatSyncFooter">Connecting&hellip;</span>
             </div>
@@ -992,6 +1005,10 @@
           <button class="styled-settings-pill-btn" id="settingsReplayTour">Replay</button>
         </div>
         <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Flow mode intro</div><div class="styled-settings-row-desc">Watch the short intro to Flow mode again</div></div>
+          <button class="styled-settings-pill-btn" id="settingsReplayAiModeIntro">Watch</button>
+        </div>
+        <div class="styled-settings-row">
           <div><div class="styled-settings-row-label">View tips</div><div class="styled-settings-row-desc">Show the tips for Chat, Automations, Artifacts and Browser again</div></div>
           <button class="styled-settings-pill-btn" id="settingsReplayViewTips">Replay</button>
         </div>
@@ -1367,12 +1384,14 @@
 <script src="feedback-report.js?v=20261022-feedback-1"></script>
 <script src="hermes-connectors.js?v=20260904-google-g"></script>
 <script src="chat-scroll.js?v=20261101-approval-reveal-1"></script>
-<script src="dictation.js?v=20261112-ideas-1"></script>
+<script src="dictation.js?v=20261114-recorder-1"></script>
 <script src="agent-activity.js?v=20261111-working-line-1"></script>
+<script src="chat-steps.js?v=20261113-steps-2"></script>
+<script src="update-cue.js?v=20261113-update-cue-1"></script>
 <script src="clerk-desktop-ui.js"></script>
 <script src="account-switcher.js"></script>
     <script src="browser-work.js"></script>
-    <script src="browser-omnibox.js?v=20261019-omnibox-1"></script>
+    <script src="browser-omnibox.js?v=20261113-places-2"></script>
     <script src="automations-board.js?v=20261019-automations-1"></script>
     <script src="needs-you.js?v=20261102-1"></script>
     <script src="artifacts-page.js?v=20261103-artifacts-2"></script>
@@ -1382,13 +1401,13 @@
     <script src="instruction-proposal-card.js?v=20261106-instruction-review-1"></script>
     <script src="mia-app-card.js?v=20261102-mia-app-1"></script>
     <script src="tab-strip.js?v=20261102-apps-3"></script>
-    <script src="native-browser.js?v=20261103-call-1"></script>
+    <script src="native-browser.js?v=20261114-drawer-scrim"></script>
     <script src="team-logo.js"></script>
-    <script src="hub-chat.js?v=20261103-space-control-1"></script>
+    <script src="hub-chat.js?v=20261114-working-once"></script>
     <script src="safe-page-url.js?v=20261102-space-1"></script>
     <script src="shared-space.js?v=20261112-ideas-1"></script>
     <script src="team-files.js?v=20261102-team-files-2"></script>
-    <script src="bot-folder-sync.js?v=20261109-folder-1"></script>
+    <script src="bot-folder-sync.js?v=20261114-bot-memory"></script>
     <script src="team-files-ui.js?v=20261102-team-files-1"></script>
     <script src="step-report.js?v=20261102-step-report-1"></script>
     <script src="team-workflows.js?v=20261102-team-workflows-2"></script>
@@ -1398,11 +1417,17 @@
     <script src="interrupted-work.js?v=20261104-interrupted-1"></script>
     <script src="sidebar-bot-order.js?v=20261111-bot-order-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
+    <script src="bot-memory-intro.js?v=20261114-memory-intro-2"></script>
     <script src="bot-marketplace.js?v=20261109-market-1"></script>
     <script src="mcp-apps-ui.js?v=20261110-mcp-3"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
-    <script src="app.js?v=20261111-working-line-2"></script>
+    <script src="app.js?v=20261116-attach-together-1"></script>
+    <script src="remote-link-core.js?v=20261114-phone-1"></script>
+    <script src="remote-link-host.js?v=20261116-phone-2"></script>
+    <script src="ai-mode-intro.js?v=20261114-ai-mode-intro-4"></script>
+    <script src="ai-mode.js?v=20261116-ai-mode-34"></script>
+    <script src="flow-tandem.js?v=20261116-flow-tandem-1"></script>
     <script src="shared-space-live.js?v=20261112-ideas-1"></script>
     <script src="shared-space-talk.js?v=20261112-ideas-1"></script>
     <script src="shared-space-ui.js?v=20261112-ideas-1"></script>

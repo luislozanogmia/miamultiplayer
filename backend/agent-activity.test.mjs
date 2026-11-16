@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { extractToolActivity } = require('./agent-activity');
+const { extractToolActivity, toolActivityLine } = require('./agent-activity');
 const names = activity => activity.files.map(file => file.name);
 const opaque = activity => {
   assert.ok(activity.files.every(file => /^[a-f0-9]{24}$/.test(file.id)));
@@ -108,4 +108,23 @@ test('same-named files retain distinct opaque identities without parent director
   assert.deepEqual(names(activity), ['plan.md', 'plan.md']);
   assert.notEqual(activity.files[0].id, activity.files[1].id);
   assert.doesNotMatch(JSON.stringify(activity), /client-a|client-b|\/private/);
+});
+
+test('a power user sees one plain line per tool call, never the command, code or output', () => {
+  const code = 'import os\nprint(os.environ)\n'.repeat(400);
+  const write = toolActivityLine('tool.start', { name: 'write_file', args: { path: '/work/uat/ticket.py', content: code } });
+  assert.equal(write, 'Editing files — ticket.py');
+  const run = toolActivityLine('tool.start', { name: 'terminal', args: { command: 'cat /work/secret.txt | head' } });
+  assert.equal(run, 'Running a command');
+  assert.equal(toolActivityLine('tool.start', { name: 'asana_list', args: { q: 'x' } }), 'Using asana_list');
+  const many = toolActivityLine('tool.start', { name: 'read_many_files', args: { paths: ['/a/1.js', '/a/2.js', '/a/3.js', '/a/4.js', '/a/5.js'] } });
+  assert.equal(many, 'Reading files — 1.js, 2.js, 3.js and 2 more');
+});
+
+test('a finished tool call adds a line only when it failed, without its output', () => {
+  assert.equal(toolActivityLine('tool.complete', { name: 'terminal', result: 'total 0\n-rw-r--r-- a.py' }), '');
+  assert.equal(toolActivityLine('tool.complete', { name: 'terminal', result: { error: 'Traceback: boom at /work/a.py' } }),
+    'Running a command: this step did not work');
+  assert.equal(toolActivityLine('tool.progress', { name: 'terminal', text: 'x' }), '');
+  assert.equal(toolActivityLine('message.delta', { text: 'hi' }), '');
 });

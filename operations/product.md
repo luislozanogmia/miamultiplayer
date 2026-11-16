@@ -6,6 +6,59 @@ A desktop OS layer (Electron) that gives users an AI agent (Mia) with chat,
 automations, browser control, Google Workspace integration, and bot creation.
 Open-source core at github.com/luislozanogmia/miamultiplayer.
 
+## Three ways of working — approved direction
+
+Mia is one app with three ways of working. They differ in how much the AI
+drives, like a car: you drive, assisted driving, the car drives. All three
+show the same chats, bots, files and browser. Only what is drawn on screen
+and how Mia talks change. Nothing is kept in a place only one of them knows.
+
+| | App | Flow Tandem | Flow |
+| --- | --- | --- | --- |
+| Who drives | The person | The person, with Mia beside them | Mia |
+| On screen | The normal app | The normal app, plus a small Flow Tandem card at the bottom of the sidebar | The stage only |
+| Talking to Mia | Typing in her chat | Voice, hands-free, from anywhere in the app | Voice or the bar |
+| How Mia answers | Text in her chat | She talks it through, like a call. One line in the card, the full text in her chat | One or two spoken lines, the rest laid out on the stage |
+| Who speaks first | The person | Mia speaks up when something needs the person ("LinkedIn is done. Do you want us to send it?") | Mia shows it on the stage |
+| Bots at work | The person opens each bot's chat | The same as the app. The person sees them in the sidebar and chats | Tiles on the stage |
+| Who briefs the bots | The person | Either one ("you manage Disk Manager, I'll take LinkedIn") | Mia |
+| A bot needs approval | The app's prompt | The app's prompt. A spoken yes answers that same prompt | A card on the stage |
+| Cards from Mia and bots | No | No | Yes |
+| Canvas and views | No | Only when asked, saved as a file | Yes, by default |
+| Browser | The app's browser and tabs | The app's browser and tabs | Flow's own view of the same browser |
+| Mia moving the app | No | Yes: Mia herself opens a chat, a bot or a web page, and is told when the app could not open it | Yes: Mia puts the chat of any bot, another chat or a web page on the stage. A bot with no chat yet gets one |
+| Making a new bot | Mia drafts it in her chat, the person accepts the card | The same card, opened in Mia's chat in the app | The same draft, shown as a card on the stage |
+
+### Why Flow Tandem
+
+The person and Mia work at the same time, like two people at one desk. The
+person can step in at any moment, take a bot over, or hand one to Mia. The
+app is already on screen, so the person has every visual cue they need: which
+bot is working, which one is done, which one needs them. Mia does not repeat
+any of that on screen. Her job is to talk: say what finished, ask what to do
+next, and act in the app on a spoken answer. She waits until the person stops
+talking, and when several bots finish together she says it once.
+
+### Why Flow
+
+The person looks and decides. They are reading pages, comparing options and
+choosing on the spot, and a voice talking over that gets in the way. So in
+Flow Mia says one or two lines and puts the rest on the stage as views, cards
+and pages.
+
+Later, Flow can carry more sound for people who cannot rely on the screen.
+That is an accessibility direction and is not being built now.
+
+### Rules for building them
+
+- One source. Messages, sends, live updates, approvals, the browser, bots and
+  models come from the app's own code and data in all three. Drawing them
+  differently is expected.
+- One shared core for voice, Mia's turn, hand-offs to bots and stop. Flow is
+  that core plus the stage. Flow Tandem is that core plus the card.
+- One model choice. The model picked in one way of working is the model in
+  the others.
+
 ## Browser multiplayer — approved direction and first MVP
 
 The Mia app browser is the shared working surface: websites are the canvas. Later, Chrome extension participants and multiple humans may join; other native applications come later. First deliver one human collaborating with their personal Mia agent and multiple bots inside Mia's browser. Mia owns the overall goal, context, delegation, dependency tracking and synthesis; each bot owns one explicit tab and a bounded task. Named tab groups preserve related sites and working state. Bots work in parallel across tabs without stealing the human's view or typing focus. Activity, ownership, approvals, Stop and results remain visible. Adapt Mia Browser Use interactions to Mia's pinned Hermes runtime; smaller models handle suitable bounded tasks and validated scripts provide deterministic replay. Archived Canvas remains a demo reference, not the product architecture.

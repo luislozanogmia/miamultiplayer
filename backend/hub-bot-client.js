@@ -304,7 +304,11 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       if(controller.signal.aborted) throw controller.signal.reason;
       const preparedSkills=materializeSharedSkills(sharedSkills(definition.skills));
       skillFilesCleanup=preparedSkills.cleanup;
-      const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills};
+      // The bot's shared folder holds its memory, the same for everyone in the company.
+      const folder=await hub('GET','/v1/teams/'+s.teamId+'/market/bots/'+run.botId+'/folder').catch(()=>null);
+      if(controller.signal.aborted) throw controller.signal.reason;
+      const currentBot={id:'shared-'+run.botId+'-v'+definition.version, registrationId:run.botId, name:definition.name || bot.name || 'Shared bot', instructions:definition.instructions, bundledSkills:preparedSkills.skills,
+        sharedFolder:!!folder && folder.enabled!==false && Array.isArray(folder.files)};
       const attached=await triggerFile(s,trigger,token);
       const reply=await runBot({owner:s.owner,bot:currentBot,trigger,history:history.filter(row=>row.sequence<run.triggerSequence),
         channel:{teamId:s.teamId,teamName:s.teamName,channelId:s.channelId,privateChat:false},signal:controller.signal,modelSelection:run.selection||null,asker:asker(s,run.botId,true,run.openPage),...attached});
@@ -465,9 +469,10 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       const binding=journal.bind(scope,bot,known);
       // A copy from another company brings the skills its owner reviewed.
       const skills=sharedSkills(Array.isArray(input.skills)?input.skills:bundleSkills(bot));
+      // Every company bot starts with a shared folder, where its memory lives.
       const result=await requestHub(scope.origin,token,'POST','/v1/teams/'+scope.teamId+'/market/bots',
         {id:binding.registration_id,name:bot.name,avatar_color:bot.avatarColor||'',instructions:bot.instructions || bot.role || bot.output || '',
-          skills,tags:[],channel_id:scope.channelId,access:shareAccess(input.access)},fetcher)
+          skills,tags:[],channel_id:scope.channelId,access:shareAccess(input.access),share_folder:true},fetcher)
         .catch(error=>{throw error.code!=='bot_storage_limit' && error.code!=='bot_name_taken' && (error.status===400 || error.status===413)?failure(413,'bot_too_large_for_team'):error;});
       if(!result.bot || result.bot.id!==binding.registration_id) throw failure(503,'hub_identity_mismatch');
       return {bot:result.bot};

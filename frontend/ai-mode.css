@@ -1,0 +1,523 @@
+/* AI mode: one full-screen dark stage in Mia's own dark palette, drawn inside a
+   shadow root so nothing here meets the app's own styles. Rain behind, Mia's
+   mark as the presence, work that appears only when work exists. Single dark
+   look by choice. */
+:host{
+  color-scheme:dark;
+  --void:#050504; --paper:#0B0A09; --card:#14120F; --card-2:#1D1A16;
+  --rule:#262320; --rule-strong:#332F2A; --border-strong:rgba(255,255,255,.28);
+  --ink:#FFFFFF; --soft:rgba(255,255,255,.74); --muted:rgba(255,255,255,.55); --faint:rgba(255,255,255,.40);
+  --accent:#E3A61B; --accent-hover:#F2B833; --accent-text:#F0BC4A; --accent-tint:rgba(227,166,27,.14); --on-accent:#0B0A09;
+  --mia-dot:rgba(255,255,255,.78); --mia-gold:#C9962B; --mia-gold-hi:#E6B94A;
+  --sans:"Instrument Sans",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+:host{--top:calc(52px + env(safe-area-inset-top,0px));--bottom:calc(76px + max(env(safe-area-inset-bottom,0px),var(--keys,0px)));position:fixed;inset:0;z-index:2147483000;display:block;color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+:host([hidden]){display:none}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mia-mark{display:block;max-width:100%;max-height:100%}
+.mia-mark circle{fill:var(--mia-dot);transform-box:fill-box;transform-origin:center}
+.mia-mark.pop circle.on{animation:mia-pop 1.1s cubic-bezier(.4,0,.2,1) 1}
+@keyframes mia-pop{0%{transform:scale(1);fill:var(--mia-dot)}12%{fill:var(--mia-gold)}50%{transform:scale(1.5);fill:var(--mia-gold-hi)}88%{fill:var(--mia-gold)}100%{transform:scale(1);fill:var(--mia-dot)}}
+
+/* The app fades away under the stage as it opens, and comes back as it closes. */
+.stage{position:absolute;inset:0;overflow:hidden;background:var(--void);opacity:0;transition:opacity 1.6s ease}
+.stage.on{opacity:1}
+#rain{position:absolute;inset:0;width:100%;height:100%}
+.pad{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+
+.btn{appearance:none;height:34px;border-radius:8px;padding:0 14px;border:1px solid var(--rule);background:rgba(255,255,255,.06);font-size:13px;cursor:pointer;transition:background .12s ease,border-color .12s ease;white-space:nowrap}
+.btn:hover{background:rgba(255,255,255,.11)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:500}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.big{height:40px;padding:0 22px;font-size:14px;margin-top:10px}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--ink);background:rgba(255,255,255,.06)}
+
+/* AI mode */
+.hud{position:absolute;top:0;left:0;right:0;height:var(--top);display:flex;align-items:center;gap:10px;padding-top:env(safe-area-inset-top,0px);opacity:0;transition:opacity 1.2s ease;z-index:3}
+.hud.on{opacity:1}
+/* on a Mac the window's own buttons sit in this corner */
+:host-context(html.mac-inset-titlebar) .hud{padding-left:84px}
+/* the app's bar for moving the window lies over this row; the controls take their clicks back */
+.hud button,.hud .tools{-webkit-app-region:no-drag}
+.hud .who{display:flex;align-items:center;gap:8px;font-weight:500;font-size:13px;color:var(--soft)}
+.hud .who{position:relative}
+/* the "?" beside the name says what Flow mode is, on hover or a click */
+.hud .what{display:grid;place-items:center;width:16px;height:16px;padding:0;border:1px solid var(--rule-strong);border-radius:50%;background:none;color:inherit;font:inherit;font-size:10px;line-height:1;cursor:help;opacity:.75}
+.hud .what:hover,.hud .what[aria-expanded="true"]{opacity:1}
+.hud .what-tip{position:absolute;left:0;top:calc(100% + 10px);z-index:9;width:max-content;max-width:min(300px,80vw);padding:10px 12px;border:1px solid var(--rule-strong);border-radius:10px;background:var(--paper);color:var(--ink);font-weight:400;font-size:12.5px;line-height:1.45;white-space:normal}
+.hud .what:hover + .what-tip{display:block!important}
+.hud .sp{flex:1}
+.hud .tools{display:flex;align-items:center;gap:10px;min-width:0}
+.hud .tools[hidden]{display:none}
+.hud .more{padding:0 10px;font-size:18px;line-height:1}
+.cv{position:absolute;inset:calc(var(--top) + var(--convo,0px)) 0 var(--bottom) 0;overflow-y:auto;display:flex;flex-direction:column;z-index:2}
+.cv>.wrap{width:100%;max-width:1120px;margin:auto;padding-block:8px 44px;display:flex;flex-direction:column;gap:18px}
+.center{align-items:center;text-align:center}
+.hello{margin:18px 0 0;font:500 clamp(26px,4.4vw,40px)/1.15 var(--sans);letter-spacing:-.02em;text-wrap:balance}
+.line{margin:0;font-size:clamp(16px,2vw,20px);color:var(--soft)}
+.convo{position:absolute;top:var(--top);left:0;right:0;z-index:3;pointer-events:none}
+.convo>*{width:100%;max-width:1120px;margin-inline:auto;pointer-events:auto}
+.convo .said{padding-top:6px}
+.convo .mia{align-items:flex-start;padding-block:8px 12px}
+.convo .mia p{margin:0;min-width:0;max-height:6.6em;overflow-y:auto;scrollbar-width:none;line-height:1.45;padding-top:1px}
+.convo .said p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:clamp(18px,2.3vw,23px)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.morph .w{display:inline-block;white-space:nowrap}
+.morph .l{display:inline-block;white-space:pre}
+.morph .l.in{animation:l-in .46s cubic-bezier(.2,.7,.2,1) both;animation-delay:var(--d)}
+.morph.out .l{animation:l-out .22s ease-in both;animation-delay:var(--o)}
+@keyframes l-in{from{opacity:0;transform:translate(var(--x),var(--y)) scale(.7);filter:blur(5px)}}
+@keyframes l-out{to{opacity:0;transform:translate(var(--x),calc(var(--y)*-1)) scale(.7);filter:blur(5px)}}
+@media(prefers-reduced-motion:reduce){.morph .l{animation:none!important}}
+.said{display:flex;flex-direction:column;gap:4px;position:relative}
+.said:has(.said-log){padding-right:40px}
+.said-log{appearance:none;position:absolute;right:0;bottom:0;width:30px;height:30px;padding:0;border:1px solid var(--rule-strong);border-radius:50%;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center;-webkit-app-region:no-drag}
+.said-log:hover{color:var(--ink)}
+.said-log svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.said small{font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.said p{margin:0;font:500 clamp(20px,3vw,28px)/1.2 var(--sans);letter-spacing:-.01em;text-wrap:balance}
+.mia{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--soft)}
+.mia .mk{flex:none;width:22px;height:22px}
+.center .mia{justify-content:center}
+
+.step{font:11px/1.4 var(--mono);color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.step.done{color:var(--accent-text)}
+
+.work{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:20px;align-items:start}
+@media(max-width:820px){.work{grid-template-columns:minmax(0,1fr)}}
+.panel{background:rgba(20,18,15,.82);border:1px solid var(--rule);border-radius:14px;min-width:0;backdrop-filter:blur(6px)}
+.p-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--rule)}
+.p-head b{font-weight:600}
+.p-head span{font:11px var(--mono);color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums}
+
+.lbl{font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.hint{font-size:12px;color:var(--muted);margin:0}
+.ask{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-color:var(--rule-strong)}
+.ask b{font-weight:600}
+.ask p{margin:0;color:var(--soft)}
+.ask .acts{display:flex;gap:8px;align-items:center;min-height:34px}
+
+.intent{position:absolute;left:0;right:0;bottom:max(env(safe-area-inset-bottom,0px),var(--keys,0px));height:76px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 1.2s ease;z-index:3;pointer-events:none}
+.intent.on{opacity:1;pointer-events:auto}
+
+.in{animation:rise .7s cubic-bezier(.2,.7,.2,1) both}
+.d1{animation-delay:.35s}.d2{animation-delay:.8s}.d3{animation-delay:1.25s}.d4{animation-delay:1.7s}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.in{animation:none}.stage,.hud,.intent{transition:none}}
+
+/* bots stand on the canvas with no frame; the open one perches on its mini-map */
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.rail{position:fixed;top:calc(var(--top) + 8px);right:max(14px,env(safe-area-inset-right,0px));bottom:var(--bottom);z-index:2;display:flex;flex-direction:column;align-items:center;gap:6px;overflow-y:auto;scrollbar-width:none}
+/* a window too narrow for an edge of its own: the bots go under what is shown */
+@media(max-width:1380px){.rail{position:static;flex:none;flex-direction:row;flex-wrap:wrap;justify-content:center;gap:6px 14px;overflow:visible;width:100%;max-width:1120px;margin:0 auto;padding-block:8px}}
+.bot{appearance:none;background:none;border:0;padding:4px 2px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:78px;min-width:0;text-align:center;opacity:.7;transition:opacity .2s ease}
+.bot:hover,.bot.on{opacity:1}
+/* one of the person's own bots at work: shown, with nothing to open */
+div.bot{cursor:default;opacity:1}
+.bot img{width:34px;height:auto}
+.bot.busy img{animation:bob 2.6s ease-in-out infinite}
+.bot:nth-child(2) img{animation-delay:-.9s}.bot:nth-child(3) img{animation-delay:-1.7s}
+.bot b{font-weight:600;font-size:12px}
+.bot.on b{color:var(--accent-text)}
+.bot.on img{opacity:.2;animation:none}
+.bot .step{font-size:10px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+/* What a bot brought back, shown large: whose it is, and a way back to Mia's own result. */
+.from{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;color:var(--soft)}
+.from img{width:30px;height:auto}
+.from b{font-weight:600;color:var(--fg,#fff)}
+.from .btn{margin-left:auto;height:28px;padding:0 10px;font-size:12px}
+.mini{position:relative;margin:28px 0 0 22px}
+.mini .perch{position:absolute;left:-24px;top:-32px;width:58px;height:auto;z-index:1;filter:drop-shadow(0 6px 8px rgba(0,0,0,.6))}
+.mini.busy .perch{animation:bob 2.2s ease-in-out infinite}
+.mini-win{border:1px solid var(--rule-strong);border-radius:10px;background:radial-gradient(rgba(255,255,255,.07) 1px,transparent 1px) 0 0/14px 14px,rgba(11,10,9,.86);padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.mini-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding-left:36px;min-height:22px}
+.mini-h b{font-weight:600;font-size:13px}
+.still .in{animation:none}
+.intent form{width:min(560px,100%);height:44px;border:1px solid var(--border-strong);border-radius:22px;background:rgba(11,10,9,.8);box-shadow:0 4px 12px -1px rgba(0,0,0,.5);display:flex;align-items:center;gap:10px;padding:0 6px 0 16px;color:var(--muted)}
+.intent form:focus-within{border-color:rgba(255,255,255,.5)}
+.intent input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--ink);font:16px var(--sans)}
+.intent input::placeholder{color:var(--muted)}
+.intent .send{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:var(--accent);color:var(--on-accent);cursor:pointer;display:grid;place-items:center}
+.intent .send:hover{background:var(--accent-hover)}
+.intent .mic{appearance:none;flex:none;width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.intent .mic:hover,.intent .mode:hover{color:var(--ink)}
+.mic{position:relative}
+.mic.off{color:var(--faint)}
+.mic.off::after{content:"";position:absolute;left:50%;top:50%;width:22px;height:1.6px;border-radius:1px;background:currentColor;transform:translate(-50%,-50%) rotate(-45deg)}
+/* the sign at the left of the bar: a keyboard while it takes a direction, a lens while it searches */
+.intent .mode{appearance:none;flex:none;width:28px;height:32px;margin-left:-8px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.intent .mode .m-find,.intent .mode .m-chat,.intent .mode.find .m-type,.intent .mode.chat .m-type,.intent .mode.chat .m-find{display:none}
+.intent .mode.find .m-find,.intent .mode.chat .m-chat{display:block}
+.intent .mode.chat{color:var(--accent-text)}
+.intent form.chat #pen{display:none}
+.talk{display:flex;flex-direction:column;gap:14px}
+.talk .msg{min-width:0}
+.talk .msg>b{display:block;margin-bottom:2px;font:600 12px var(--sans);color:var(--ink)}
+.talk .msg .md p:last-child{margin-bottom:0}
+.talk .thread{appearance:none;border:0;background:none;padding:2px 0;margin-top:2px;font:11px var(--sans);color:var(--muted);cursor:pointer}
+.talk .thread:hover{color:var(--accent-text)}
+.talk .thread.back{align-self:flex-start;font-size:12px}
+.intent .mode.find{color:var(--accent-text)}
+/* The pen: marks drawn over the stage, numbered in the order drawn. */
+.ink{position:absolute;inset:var(--top) 0 var(--bottom) 0;z-index:2;cursor:crosshair;touch-action:none}
+.ink svg{display:block;width:100%;height:100%}
+.ink path{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.ink circle{fill:var(--accent)}
+.ink text{fill:var(--on-accent);font:600 12px var(--sans);text-anchor:middle;pointer-events:none}
+.intent #pen.on,.intent #find.on{animation:none}
+.intent .mic.on{background:var(--accent);color:var(--on-accent);animation:mic-on 1.6s ease-in-out infinite}
+@keyframes mic-on{50%{box-shadow:0 0 0 6px rgba(255,255,255,.12)}}
+@media(prefers-reduced-motion:reduce){.intent .mic.on{animation:none}}
+@media(prefers-reduced-motion:reduce){.bot.busy img,.mini.busy .perch{animation:none}}
+
+/* Mindspace: blurred traces of what Mia is weighing; only the colors stay once the work stops */
+.mind{position:absolute;inset:0;overflow:hidden;z-index:1;pointer-events:none}
+.mind i{position:absolute;font-style:normal;white-space:nowrap;color:var(--ink);opacity:0;transition:opacity 2.4s ease}
+.mind i.on{opacity:var(--o)}
+.mind span{display:block;animation:drift var(--t) ease-in-out infinite alternate}
+.mind .w{font:500 var(--fs)/1 var(--sans);filter:blur(calc(var(--b)*var(--k,1)))}
+.mind .g{font-size:var(--fs);line-height:1;filter:blur(calc(var(--b)*var(--k,1))) saturate(.75)}
+.mind .c{width:var(--fs);height:var(--fs);border-radius:50%;filter:blur(70px)}
+.mind.hold span{animation-play-state:paused}
+@keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(var(--dx),var(--dy),0)}}
+@media(prefers-reduced-motion:reduce){.mind span{animation:none}}
+:host(.calm) .mind span,:host(.calm) .intent .mic.on,:host(.calm) .bot.busy img,:host(.calm) .mini.busy .perch{animation-play-state:paused}
+
+#miaLine{transition:opacity .5s ease}
+
+/* Pictures Mia is drawing on sit with the other traces: out of focus, at the edges. */
+.mind .p img{display:block;width:var(--fs);height:auto;max-width:none;border-radius:14px;filter:blur(calc(var(--b)*var(--k,1))) saturate(.8)}
+
+/* The run as it happens: what Mia made, beside what needs the person. */
+.work.solo{grid-template-columns:minmax(0,1fr);max-width:820px}
+.main{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* What Mia made, in the app's own reply formatting. */
+/* The result as cards: a picture, a title, a line or two. */
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
+@media(max-width:620px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Decisions as a deck: one in front, the next at the edges. */
+.deck{container-type:inline-size;min-width:0}
+.leaves{--leaf:min(78cqw,560px);display:flex;gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding:4px calc((100cqw - var(--leaf))/2) 6px;overscroll-behavior-x:contain}
+.leaves::-webkit-scrollbar{display:none}
+.leaf{flex:0 0 var(--leaf);scroll-snap-align:center;transform:scale(.94);opacity:.4;cursor:pointer;transition:transform .25s ease,opacity .25s ease,border-color .25s ease}
+.leaf.card{animation:none}
+.leaf.on{transform:none;opacity:1;cursor:default;border-color:var(--rule-strong)}
+.leaf.card .pic{aspect-ratio:16/7}
+.leaf.card .pic{overflow:hidden}
+.leaf.card .pic img{position:absolute;inset:0}
+.leaf .card-t{padding:18px 20px 6px;gap:8px}
+.leaf .card-t small{font:500 11px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.leaf .card-t b{font-size:20px}
+.leaf .card-t p{font-size:15px}
+.leaf.decided:not(.on){opacity:.28}
+.decide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:14px 20px 20px}
+.decide .btn{height:40px;font-size:14px}
+.decide .btn:disabled{cursor:default;opacity:.45}
+.decide .btn.primary:disabled{opacity:1}
+.leaf:not(.on) .decide{pointer-events:none}
+.deck-nav{display:flex;align-items:center;justify-content:center;gap:14px;padding-top:10px}
+.deck-go{appearance:none;width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--rule);border-radius:50%;background:transparent;color:var(--soft);cursor:pointer}
+.deck-go:hover{color:var(--ink);border-color:var(--rule-strong)}
+.deck-go svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.dots{display:flex;align-items:center;gap:7px}
+.dot{appearance:none;width:8px;height:8px;padding:0;border:0;border-radius:4px;background:var(--rule-strong);cursor:pointer;transition:width .2s ease,background .2s ease}
+.dot.done{background:var(--soft)}
+.dot.on{width:20px;background:var(--mia-gold)}
+.deck-send{display:flex;flex-direction:column;align-items:center;gap:8px;padding-top:6px}
+.deck-send span,.deck-sent{font-size:13px;color:var(--muted)}
+.deck-sent{margin:10px 0 0;text-align:center}
+@media(max-width:620px){.leaves{--leaf:88cqw;gap:10px}}
+@media(prefers-reduced-motion:reduce){.leaf,.dot{transition:none}}
+/* What Mia drew herself, large, in place of cards. */
+.work:has(.canvas){grid-template-columns:minmax(0,1fr);max-width:none}
+.canvas{height:calc(100vh - var(--top) - var(--bottom) - var(--convo,0px) - 60px);min-height:360px;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px);animation:rise .5s ease both}
+.canvas-f{display:block;width:100%;height:100%;border:0;background:transparent}
+.blur-bar select{font:inherit;color:var(--fg,#fff);background:rgba(255,255,255,.06);border:1px solid var(--rule);border-radius:8px;padding:5px 8px;max-width:260px}
+.blur-bar select option{color:#111;background:#fff}
+.card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px);animation:rise .5s ease both;animation-delay:calc(var(--i)*70ms)}
+.card .pic{aspect-ratio:4/3;background:linear-gradient(135deg,rgba(227,166,27,.22),rgba(255,255,255,.04))}
+.card .pic img{display:block;width:100%;height:100%;object-fit:cover}
+.card-t{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.card-t b{font:600 15px/1.3 var(--sans);color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
+.card-t p{margin:0;font-size:13px;line-height:1.5;color:var(--soft);overflow-wrap:anywhere}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.card{animation:none}}
+/* One item at the front, the others on a shelf beside it. */
+.card[data-item]{cursor:pointer;transition:border-color .15s ease,transform .15s ease}
+.card[data-item]:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.card[data-item]:focus-visible,.thumb:focus-visible,.front-x:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
+.card.page .pic img,.thumb .pic img[data-page],.pic img[data-shot]{object-position:top}
+.sm{display:grid;grid-template-columns:104px minmax(0,1fr);gap:16px;align-items:start}
+.shelf{display:flex;flex-direction:column;gap:10px;min-width:0;perspective:700px}
+.shelf:empty{display:none}
+.shelf:empty+.front{grid-column:1/-1}
+.thumb{appearance:none;display:flex;flex-direction:column;gap:5px;padding:0;border:0;background:transparent;color:var(--muted);font:500 11px/1.25 var(--sans);text-align:left;cursor:pointer;
+  transform:rotateY(14deg);transform-origin:left center;transition:transform .2s ease,color .2s ease;animation:rise .4s ease both}
+.thumb:hover{transform:none;color:var(--ink)}
+.thumb .pic{display:block;aspect-ratio:4/3;border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:linear-gradient(135deg,rgba(227,166,27,.22),rgba(255,255,255,.04));box-shadow:0 10px 24px rgba(0,0,0,.4)}
+.thumb .pic img{display:block;width:100%;height:100%;object-fit:cover}
+.thumb b{font-weight:500;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.front{position:relative;min-width:0;margin:0;animation:front .35s cubic-bezier(.2,.7,.2,1) both}
+@keyframes front{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.front.card{cursor:default}
+.front.card .pic{aspect-ratio:16/9}
+.front.card .pic.visit,.leaf.card .pic.visit{display:block;cursor:pointer;color:inherit;text-decoration:none}
+.front.card .pic.visit .go,.leaf.card .pic.visit .go{position:absolute;left:12px;bottom:12px;padding:6px 11px;border:1px solid var(--rule-strong);border-radius:999px;background:rgba(20,18,15,.82);font:500 12px/1 var(--sans);color:var(--ink)}
+.front.card .pic.visit:hover .go,.leaf.card .pic.visit:hover .go{border-color:var(--accent-text)}
+.front.card.on-site .pic{aspect-ratio:auto;height:min(58vh,540px)}
+.leaf.card .pic.site-live{aspect-ratio:auto;height:min(52vh,480px)}
+.front.card .card-t{padding:16px 18px 18px}
+.front.card .card-t b{font-size:19px}
+.front.card .card-t p{font-size:15px}
+/* a card about a site Mia has not been in yet carries the site's name */
+.pic{position:relative}
+.site-n{position:absolute;inset:0;display:grid;place-items:center;padding:8px;text-align:center;font:500 13px/1.3 var(--mono);color:var(--soft);overflow-wrap:anywhere}
+.thumb .site-n{font-size:9px;padding:4px}
+/* A drawn picture: the card's figure, a ring for a share of a whole and an icon, tinted by its tone. It is as tall as what it holds. */
+.card .pic.draw,.leaf.card .pic.draw,.front.card .pic.draw{--tone:var(--accent-text);--tint:var(--accent-tint);aspect-ratio:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;background:var(--tint)}
+.pic.draw.tone-good,.draw-s.tone-good{--tone:#6FCF97;--tint:rgba(111,207,151,.13)}
+.pic.draw.tone-warn,.draw-s.tone-warn{--tone:#F0BC4A;--tint:rgba(227,166,27,.16)}
+.pic.draw.tone-bad,.draw-s.tone-bad{--tone:#F2776B;--tint:rgba(242,119,107,.14)}
+.pic.draw .fig{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0}
+.pic.draw .ico,.draw-s .ico{fill:none;stroke:var(--tone);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pic.draw .ico{width:36px;height:36px;padding:8px;border-radius:10px;background:rgba(255,255,255,.07);box-sizing:border-box}
+.pic.draw .fig b{font:600 32px/1 var(--sans);letter-spacing:-.02em;color:var(--ink);overflow-wrap:anywhere}
+.pic.draw .fig span{font:500 11px/1.3 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--tone)}
+.pic.draw .dial{position:relative;flex:none;width:64px;height:64px;display:grid;place-items:center}
+.pic.draw .dial svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+.pic.draw .dial circle{fill:none;stroke:rgba(255,255,255,.12);stroke-width:3.5}
+.pic.draw .dial circle.on{stroke:var(--tone);stroke-linecap:round}
+.pic.draw .dial i{font:600 13px/1 var(--sans);font-style:normal;color:var(--ink)}
+.front.card .pic.draw,.leaf.card .pic.draw{padding:22px 20px}
+.front.card .pic.draw .fig b,.leaf.card .pic.draw .fig b{font-size:48px}
+.front.card .pic.draw .dial,.leaf.card .pic.draw .dial{width:92px;height:92px}
+.front.card .pic.draw .dial i,.leaf.card .pic.draw .dial i{font-size:18px}
+.draw-s{--tone:var(--accent-text);position:absolute;inset:0;display:grid;place-items:center;padding:4px}
+.draw-s .ico{width:44%;height:auto}
+.draw-s b{font:600 13px/1 var(--sans);color:var(--tone);overflow-wrap:anywhere;text-align:center}
+.links{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.links .lnk{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid var(--rule-strong);border-radius:8px;font:500 12px/1.3 var(--sans);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+.links .lnk::after{content:'\2197';color:var(--muted);font-size:11px}
+.links .lnk:hover{border-color:var(--accent-text);color:var(--accent-text)}
+.leaf:not(.on) .links,.leaf:not(.on) a.pic{pointer-events:none}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.chips span{padding:3px 8px;border:1px solid var(--rule-strong);border-radius:999px;font:500 11px/1.3 var(--sans);color:var(--soft);overflow-wrap:anywhere}
+.btn.act{align-self:flex-start;height:30px;margin-top:4px;color:var(--ink)}
+/* a card about a bot shows that bot, not a photo */
+.pic img.mote{object-fit:contain;padding:8% 0;box-sizing:border-box}
+/* A card about a bot is a small one: the bot stands beside its name, not over it. */
+.card.of-bot{flex-direction:row;align-items:flex-start;gap:12px;padding:12px 14px}
+.card.of-bot .pic{flex:none;width:52px;aspect-ratio:1;border-radius:12px;overflow:hidden}
+.card.of-bot .pic img.mote{padding:10%}
+.card.of-bot .card-t{padding:0}
+.front.shot{display:flex;flex-direction:column;border:1px solid var(--rule);border-radius:16px;overflow:hidden;background:rgba(20,18,15,.82);backdrop-filter:blur(6px)}
+.front.shot img{display:block;width:100%;height:auto}
+.front.shot .hint{padding:60px 18px;text-align:center}
+.front.shot figcaption{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding:12px 16px 14px;border-top:1px solid var(--rule)}
+.front.shot figcaption b{font:600 15px/1.3 var(--sans);overflow-wrap:anywhere}
+.front.shot figcaption span{font-size:13px;color:var(--soft)}
+.front.shot figcaption small{flex-basis:100%;font-size:12px;color:var(--muted)}
+/* The live page takes this place in the desktop app. */
+.front.live{height:min(62vh,560px);border-radius:14px;animation:none}
+.front-x{appearance:none;position:absolute;top:10px;right:10px;z-index:1;width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--rule);border-radius:50%;background:rgba(20,18,15,.82);color:var(--soft);cursor:pointer}
+.front-x:hover{color:var(--ink);border-color:var(--border-strong)}
+.front-x svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
+@media(max-width:620px){
+  .sm{grid-template-columns:minmax(0,1fr)}
+  .shelf{flex-direction:row;overflow-x:auto;padding-bottom:4px}
+  .thumb{flex:none;width:84px;transform:none}
+}
+@media(prefers-reduced-motion:reduce){.thumb,.front{animation:none}.thumb,.card[data-item]{transition:none}.thumb{transform:none}}
+.result{padding:16px 18px}
+.result.live{border-style:dashed}
+.result.answer{margin-bottom:14px}
+.md{font-size:14.5px;line-height:1.6;color:var(--soft);min-width:0;overflow-wrap:anywhere}
+.md.small{font-size:12.5px;max-height:260px;overflow-y:auto}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:0 0 10px}
+.md h1,.md h2,.md h3,.md h4{margin:16px 0 8px;font:600 16px/1.3 var(--sans);color:var(--ink);text-wrap:balance}
+.md h1{font-size:19px}
+.md strong,.md b{color:var(--ink);font-weight:600}
+.md ul,.md ol{margin:0 0 10px;padding-left:22px}
+.md li{margin:3px 0}
+.md a{color:var(--accent-text);text-decoration:underline;text-underline-offset:2px}
+.md code{font:12.5px var(--mono);background:rgba(255,255,255,.08);border-radius:4px;padding:1px 5px}
+.md pre{margin:0 0 10px;padding:12px 14px;border-radius:8px;background:rgba(0,0,0,.45);border:1px solid var(--rule);overflow-x:auto}
+.md pre code{background:none;padding:0}
+.md table{display:block;overflow-x:auto;border-collapse:collapse;margin:0 0 10px;font-size:13px}
+.md th,.md td{border:1px solid var(--rule-strong);padding:6px 10px;text-align:left}
+.md th{color:var(--ink);font-weight:600}
+.md blockquote{margin:0 0 10px;padding-left:12px;border-left:2px solid var(--rule-strong);color:var(--muted)}
+.md hr{border:0;border-top:1px solid var(--rule);margin:14px 0}
+.md img{max-width:100%;border-radius:8px}
+
+/* What is the person's to decide. */
+.ask.open{border-color:var(--accent)}
+.newbot label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
+.newbot input,.newbot textarea{padding:8px 10px;border:1px solid var(--rule-strong);border-radius:8px;background:rgba(255,255,255,.06);color:var(--ink);font:13px/1.5 var(--sans);min-width:0;outline:0}
+.newbot textarea{resize:vertical;min-height:120px}
+.newbot input:focus,.newbot textarea:focus{border-color:var(--accent)}
+.newbot .err{color:var(--ink)}
+.newbot .btn:disabled{cursor:default;opacity:.6}
+.ask pre{margin:0;font:12px/1.5 var(--mono);color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow-y:auto}
+.opts{display:flex;flex-wrap:wrap;gap:8px}
+.opts .btn{height:auto;min-height:34px;padding:7px 14px;white-space:normal;text-align:left}
+.files{display:flex;flex-wrap:wrap;gap:6px}
+.file{font:11px var(--mono);color:var(--soft);border:1px solid var(--rule-strong);border-radius:6px;padding:4px 8px;text-decoration:none;min-width:0;overflow-wrap:anywhere}
+a.file{color:var(--accent-text)}
+a.file:hover{border-color:var(--accent)}
+
+/* Flow Tandem: the stage steps aside and the normal app is on screen, with Mia on the call. */
+:host(.tandem){pointer-events:none;opacity:0;visibility:hidden;transition:opacity .5s,visibility 0s .5s}
+/* On a phone the controls drop down under the bar, so none of them runs off the screen. */
+@media(max-width:620px){
+  .hud .tools{position:absolute;top:calc(100% - 4px);right:max(12px,env(safe-area-inset-right,0px));left:max(12px,env(safe-area-inset-left,0px));flex-wrap:wrap;justify-content:flex-end;gap:6px;padding:8px;border:1px solid var(--rule);border-radius:14px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px)}
+  .hud .tools .btn{height:40px}
+  .hud .more{min-width:44px;height:44px}
+  .intent .send,.intent .mic{width:36px;height:36px}
+  .stage .blur-bar{top:auto;bottom:calc(var(--bottom) + 8px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px))}
+  .stage .blur-bar input{flex:1;width:auto;min-width:0}
+  .stage .phone-bar{top:auto;bottom:calc(var(--bottom) + 8px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));width:auto}
+}
+
+/* A website on the stage. The frame and its bar are see-through; the page inside is the browser's own. */
+.site{position:absolute;z-index:4;display:flex;flex-direction:column;border:1px solid var(--border-strong);border-radius:14px;background:rgba(20,18,15,.46);backdrop-filter:blur(16px) saturate(1.2);box-shadow:0 28px 80px rgba(0,0,0,.5);overflow:hidden}
+.site[hidden]{display:none}
+.site.moving{opacity:.7}
+.site.docked{box-shadow:0 14px 40px rgba(0,0,0,.4)}
+.site.docked .site-bar{cursor:default}
+.site-bar{display:flex;align-items:center;gap:2px;padding:7px 8px;cursor:grab;touch-action:none;user-select:none}
+.site.moving .site-bar{cursor:grabbing}
+.site-bar button{appearance:none;flex:none;width:30px;height:30px;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--soft);cursor:pointer}
+.site-bar button:hover{background:rgba(255,255,255,.1);color:var(--ink)}
+.site-bar button:disabled{color:var(--faint);background:transparent;cursor:default}
+.site-bar button[aria-pressed="true"]{color:var(--accent-text)}
+.site-bar svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.site-bar form{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:30px;margin:0 4px;padding:0 10px;border-radius:9px;background:rgba(255,255,255,.08);color:var(--muted)}
+.site-bar form:focus-within{background:rgba(255,255,255,.13);outline:1px solid var(--border-strong)}
+.site-bar form svg{flex:none;width:15px;height:15px}
+.site-bar input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:13px var(--sans)}
+.site-bar.loading form{background:linear-gradient(90deg,rgba(255,255,255,.08),rgba(227,166,27,.22),rgba(255,255,255,.08));background-size:200% 100%;animation:site-load 1.2s linear infinite}
+@keyframes site-load{to{background-position:-200% 0}}
+.site-body{flex:1;min-height:0;display:flex}
+.site-tabs{flex:none;width:148px;display:flex;flex-direction:column;gap:12px;padding:6px 6px 10px 10px;overflow-y:auto;scrollbar-width:none}
+.site-tabs[hidden]{display:none}
+.site-tab{animation:none;transform:none;opacity:.72}
+.site-tab:hover,.site-tab.on{opacity:1}
+.site-tab.on{color:var(--ink)}
+.site-tab.on .pic{border-color:var(--accent-text);box-shadow:0 0 0 1px var(--accent-text),0 10px 24px rgba(0,0,0,.4)}
+.site-tab .pic{position:relative}
+.site-page{flex:1;min-width:0;min-height:0;margin:0 6px 6px;border-radius:9px;background:rgba(255,255,255,.04)}
+:host(.tandem) .site{display:none}
+@media(prefers-reduced-motion:reduce){.site-bar.loading form{animation:none}}
+
+/* How soft the pictures and words behind the work are. */
+.blur-bar{position:absolute;top:var(--top);right:max(16px,env(safe-area-inset-right,0px));z-index:5;display:flex;align-items:center;gap:10px;padding:9px 14px;border:1px solid var(--rule);border-radius:12px;background:rgba(20,18,15,.82);backdrop-filter:blur(6px);font-size:12.5px;color:var(--soft)}
+.blur-bar[hidden]{display:none}
+.blur-bar input{width:170px;accent-color:var(--accent)}
+.blur-bar small{font:11px var(--mono);color:var(--faint)}
+/* Pairing a phone: the code to type on it, and the phones already paired. */
+.phone-bar{position:absolute;top:var(--top);right:max(16px,env(safe-area-inset-right,0px));z-index:5;width:min(340px,calc(100% - 32px));display:flex;flex-direction:column;gap:10px;padding:14px 16px;border:1px solid var(--rule);border-radius:12px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px);font-size:13px;color:var(--soft)}
+.phone-bar[hidden]{display:none}
+.phone-bar b{font-weight:600;font-size:14px;color:var(--ink)}
+.phone-bar p{margin:0}
+.phone-code{display:block;padding:10px 0;border:1px solid var(--rule-strong);border-radius:10px;text-align:center;font:500 17px var(--mono);letter-spacing:.04em;color:var(--ink);user-select:all}
+.phone-code[hidden]{display:none}
+.phone-bar ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.phone-bar li{display:flex;align-items:center;gap:8px;min-width:0}
+.phone-bar li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.phone-bar li small{font:11px var(--mono);color:var(--faint)}
+.phone-bar .btn{align-self:flex-start}
+.phone-bar li .btn{align-self:auto;padding:0 8px}
+
+.building{position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--rule,rgba(255,255,255,.16));border-radius:14px;background:rgba(255,255,255,.04)}
+.b-lines{position:absolute;inset:28px;display:flex;flex-direction:column;gap:16px;opacity:.5}
+.b-lines i{display:block;height:14px;border-radius:7px;background:linear-gradient(90deg,rgba(255,255,255,.06) 25%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.06) 75%);background-size:200% 100%;animation:b-shine 2.4s linear infinite;animation-delay:var(--t)}
+.b-lines i:nth-child(1){width:42%;height:22px}.b-lines i:nth-child(2){width:88%}.b-lines i:nth-child(3){width:76%}.b-lines i:nth-child(4){width:82%}.b-lines i:nth-child(5){width:54%}
+.b-say{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:20px 28px;border-radius:14px;background:rgba(11,10,9,.72);backdrop-filter:blur(6px)}
+.b-say b{font-size:20px;font-weight:500}.b-say span{color:var(--accent)}.b-say small{opacity:.62}
+@keyframes b-shine{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.b-lines i{animation:none}}
+
+/* Hands-free sits at the top right, above the bots, with its own mute. */
+.ears{position:absolute;top:calc(var(--top) + 6px);right:max(14px,env(safe-area-inset-right,0px));z-index:3;display:flex;align-items:center;gap:8px;height:36px;padding:0 4px 0 12px;border:1px solid var(--rule-strong);border-radius:18px;background:rgba(11,10,9,.8);font-size:12px;color:var(--soft);max-width:min(260px,70vw)}
+.ears span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ears i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--accent);animation:mic-on 1.6s ease-in-out infinite}
+.ears button{appearance:none;flex:none;width:28px;height:28px;border-radius:50%;border:0;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.ears button:hover{color:var(--ink)}
+.ears .off{display:none}
+.ears button.on{background:rgba(255,255,255,.12);color:var(--ink)}
+.ears button.on .off{display:inline}
+.ears:has(#earsMute.on) i{background:var(--faint);animation:none}
+:host(.ears-on) .rail{top:calc(var(--top) + 50px)}
+@media(max-width:1380px){:host(.ears-on) .cv{padding-top:44px}}
+/* Earlier views: back, forward up to now. */
+.steps{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) + 4px);z-index:3;display:flex;align-items:center;gap:2px;height:30px;padding:0 4px;border:1px solid var(--rule);border-radius:15px;background:rgba(11,10,9,.85);font:11px var(--mono);color:var(--muted);white-space:nowrap}
+.steps span{padding:0 6px}
+.steps button{appearance:none;border:0;background:none;color:var(--soft);cursor:pointer;height:24px;min-width:24px;border-radius:12px;font-size:16px;line-height:1;padding:0 6px}
+.steps button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--ink)}
+.steps button:disabled{opacity:.3;cursor:default}
+.steps .now{font:500 11px var(--sans);color:var(--accent-text);padding:0 10px}
+/* What the search found, above the bar. */
+.finds{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) - 8px);z-index:4;width:min(560px,calc(100% - 32px));max-height:min(420px,60vh);overflow-y:auto;display:flex;flex-direction:column;padding:6px;border:1px solid var(--rule-strong);border-radius:14px;background:rgba(14,13,11,.96);box-shadow:0 12px 32px -8px rgba(0,0,0,.7)}
+.finds button{appearance:none;border:0;background:none;text-align:left;cursor:pointer;display:grid;grid-template-columns:64px minmax(0,1fr) auto;align-items:baseline;gap:10px;padding:8px 10px;border-radius:8px}
+.finds button:hover,.finds button.on{background:rgba(255,255,255,.07)}
+.finds small{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.finds b{font-weight:500;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.finds span{font-size:11px;color:var(--muted);white-space:nowrap}
+/* On a Mac the app's left strip moves the window and lies under this screen; everything below the top row takes its clicks back. */
+.cv,.ink,.log,.log-tab,.steps,.finds,.intent{-webkit-app-region:no-drag}
+/* The drawer at the left edge: what was asked, what Mia reported. */
+.log-tab{appearance:none;position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:4;width:18px;height:56px;padding:0;border:1px solid var(--rule-strong);border-left:0;border-radius:0 9px 9px 0;background:rgba(11,10,9,.85);color:var(--muted);cursor:pointer;display:grid;place-items:center}
+.log-tab:hover{color:var(--ink)}
+.log-tab svg,.log header svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.log{position:absolute;left:0;top:var(--top);bottom:var(--bottom);z-index:4;width:min(300px,86vw);display:flex;flex-direction:column;border:1px solid var(--rule-strong);border-left:0;border-radius:0 14px 14px 0;background:rgba(11,10,9,.94);backdrop-filter:blur(8px)}
+.log header{flex:none;display:flex;align-items:center;justify-content:space-between;padding:10px 8px 8px 14px;font-size:12px;color:var(--soft)}
+.log header button{appearance:none;border:0;background:none;color:var(--muted);cursor:pointer;width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
+.log header button:hover{color:var(--ink)}
+.log header b{margin-right:auto}
+.log header .new{width:auto;height:26px;padding:0 10px;border:1px solid var(--rule-strong);border-radius:999px;font:500 11px/1 var(--sans);color:var(--soft)}
+.log-l{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding:0 6px 10px}
+.turn{padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:2px}
+.turn[data-view]{cursor:pointer}
+.turn[data-view]:hover{background:rgba(255,255,255,.05)}
+.turn.on{background:rgba(255,255,255,.07)}
+.turn small{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.turn p{margin:0 0 4px;font-size:12.5px;color:var(--soft);overflow-wrap:anywhere}
+.turn p:first-of-type{color:var(--ink)}
+/* The drawer at the right edge: the person's chats. Its tab sits low, under the bots at work. */
+.chats-tab{left:auto;right:0;top:auto;bottom:calc(var(--bottom) + 8px);transform:none;border:1px solid var(--rule-strong);border-right:0;border-radius:9px 0 0 9px}
+.chats{left:auto;right:0;border:1px solid var(--rule-strong);border-right:0;border-radius:14px 0 0 14px;z-index:5}
+.chats .turn{cursor:pointer}
+.chats .turn:hover{background:rgba(255,255,255,.05)}
+@media(prefers-reduced-motion:reduce){.ears i{animation:none}}
+:host(.calm) .ears i{animation-play-state:paused}
+/* On a wide screen the stage moves over so the drawer covers nothing. */
+@media(min-width:1000px){:host(.log-on) .cv{padding-left:316px}}
+/* a stage redrawn as it grows does not fade in again, which would blink what Mia drew */
+.again .canvas,.again .card,.again .thumb,.again .front,.again .in{animation:none}
+/* Connecting Mia's voice: offered above the box where the person types, out of the way of the stage. */
+.voice-ask{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--bottom) + 44px);z-index:5;width:min(420px,calc(100% - 32px));display:flex;flex-direction:column;gap:10px;padding:14px 16px;border:1px solid var(--rule-strong);border-radius:12px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px);font-size:13px;line-height:1.45;color:var(--soft)}
+.voice-ask[hidden]{display:none}
+.voice-ask b{font-weight:600;font-size:14px;color:var(--ink)}
+.voice-ask p,.voice-ask ol{margin:0}
+.voice-ask ol{padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.voice-ask a{color:var(--accent)}
+.voice-ask code{font:12px var(--mono);color:var(--ink)}
+.voice-ask input{height:36px;padding:0 10px;border:1px solid var(--rule-strong);border-radius:8px;background:rgba(255,255,255,.06);color:var(--ink);font:13px var(--mono);min-width:0}
+.voice-ask input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.voice-ask .va-note{color:var(--accent)}
+.voice-ask .va-row{display:flex;gap:8px}
+/* A bot put on the stage: its chat takes the whole width and the other bots draw small. */
+.work.big,.work.big.solo{grid-template-columns:minmax(0,1fr);max-width:none}
+.rail.small .bot:not(.on){width:46px;opacity:.5}
+.rail.small .bot:not(.on) img{width:20px}
+.rail.small .bot:not(.on) .step{display:none}
+.rail.small .bot:not(.on) b{font-size:10px}

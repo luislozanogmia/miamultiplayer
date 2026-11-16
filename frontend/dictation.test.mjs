@@ -44,8 +44,7 @@ test('insertText adds spaces only where words would glue together', () => {
 test('the composer mic is wired to local dictation, not the old stub', () => {
   assert.match(index, /dictation\.js[^>]*>[\s\S]*app\.js/);
   assert.match(app, /window\.MiaSpeech = D\.createEngine\(/);
-  assert.match(app, /engine\.transcribe\(wav\)/);
-  assert.match(app, /getUserMedia\(\{audio:true\}\)/);
+  assert.match(app, /D\.createRecorder\(\{[^}]*transcribe: engine\.transcribe\}\)/);
   assert.match(app, /engine\.ready\(\{\s*confirm: function\(text\)\{ return window\.confirm\(text\); \}/, 'model download needs explicit confirmation');
   assert.doesNotMatch(app, /var recording = false;\s*micBtn\.addEventListener/);
 });
@@ -83,4 +82,94 @@ test('transcribing posts the recording to this computer and returns the words', 
   assert.equal(ok.calls[0][1].headers['Content-Type'], 'audio/wav');
   assert.equal(ok.calls[0][1].body, 'wav-bytes');
   await assert.rejects(engineWith({ '/api/speech/transcribe': [409, { message: 'The speech model has not been downloaded yet.' }] }).engine.transcribe('x'), /not been downloaded/);
+});
+
+test('the recorder gives the mic back and returns what was said', async () => {
+  const stopped = [], heard = [];
+  class Recorder {
+    constructor(stream) { this.stream = stream; this.mimeType = 'audio/webm'; }
+    start() { this.ondataavailable({ data: new Blob(['sound']) }); }
+    stop() { if (this.onstop) this.onstop(); }
+  }
+  class Context {
+    decodeAudioData() { return Promise.resolve({ numberOfChannels: 1, sampleRate: 16000, getChannelData: () => new Float32Array(160) }); }
+    close() {}
+  }
+  const media = { getUserMedia: async (ask) => { assert.deepEqual(ask, { audio: true }); return { getTracks: () => [{ stop: () => stopped.push(1) }] }; } };
+  const recorder = D.createRecorder({ media, MediaRecorder: Recorder, AudioContext: Context, transcribe: async (wav) => { heard.push(wav.byteLength); return 'open the report'; } });
+  assert.equal(await recorder.stop(), '');
+  await recorder.start();
+  assert.equal(recorder.active(), true);
+  assert.equal(await recorder.stop(), 'open the report');
+  assert.deepEqual([recorder.active(), stopped.length, heard[0] > 44], [false, 1, true]);
+  await recorder.start();
+  recorder.cancel();
+  assert.deepEqual([recorder.active(), stopped.length, heard.length], [false, 2, 1]);
+});
+
+test('the endpointer hears a person start, waits out a pause, and ends a second after they stop', () => {
+  const ears = D.createEndpointer();
+  const feed = (level, times, loud) => { const got = []; for (let i = 0; i < times; i++) { const what = ears.feed(level, 40, loud); if (what) got.push(what); } return got; };
+  assert.deepEqual(feed(0.003, 50), []);
+  assert.deepEqual(feed(0.1, 20), ['start']);
+  assert.deepEqual(feed(0.003, 10), [], 'a short pause is not the end');
+  assert.deepEqual(feed(0.1, 10), []);
+  assert.deepEqual(feed(0.003, 30), ['end']);
+  assert.deepEqual(feed(0.1, 4), ['start']);
+  assert.deepEqual(feed(0.003, 30), ['drop'], 'a click or a cough is not something said');
+});
+
+test('while Mia is speaking it takes a louder, longer sound to count as the person', () => {
+  const ears = D.createEndpointer();
+  for (let i = 0; i < 50; i++) ears.feed(0.003, 40, true);
+  for (let i = 0; i < 30; i++) assert.equal(ears.feed(0.03, 40, true), '', 'her own voice coming back');
+  const got = [];
+  for (let i = 0; i < 10; i++) got.push(ears.feed(0.2, 40, true));
+  assert.equal(got.filter(Boolean).join(), 'start');
+  assert.equal(got.indexOf('start'), 7);
+});
+
+test('the listener writes down each thing said, first word included, and lets go of the mic', async () => {
+  const calls = [], stopped = [];
+  let wavBytes = 0, done;
+  const text = new Promise((resolve) => { done = resolve; });
+  const listener = D.createListener({
+    media: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => stopped.push(1) }] }) },
+    AudioContext: function(){
+      this.sampleRate = 16000;
+      this.createGain = () => ({ gain: {}, connect(){} });
+      this.createScriptProcessor = () => ({ connect(){}, disconnect(){} });
+      this.createMediaStreamSource = () => ({ connect(){} });
+      this.destination = {};
+      this.close = () => {};
+    },
+    transcribe: async (wav) => { wavBytes = wav.byteLength; return ' find the report '; },
+    onStart: () => calls.push('start'),
+    onWriting: () => calls.push('writing'),
+    onText: (t) => { calls.push(t); done(); },
+  });
+  await listener.start();
+  assert.equal(listener.active(), true);
+  const block = (level) => new Float32Array(640).fill(level);
+  for (let i = 0; i < 30; i++) listener.hear(block(0.002), 16000);
+  for (let i = 0; i < 25; i++) listener.hear(block(0.2), 16000);
+  for (let i = 0; i < 26; i++) listener.hear(block(0.002), 16000);
+  await text;
+  assert.deepEqual(calls, ['start', 'writing', 'find the report']);
+  // 1 s said + 1 s of quiet + the lead kept from before the first word was heard.
+  assert.ok(wavBytes > 44 + 2 * 16000 * 2 && wavBytes < 44 + 3 * 16000 * 2, String(wavBytes));
+  listener.stop();
+  assert.equal(listener.active(), false);
+  assert.equal(stopped.length, 1);
+});
+
+test('Send while recording finishes the dictation and sends it, the mic still stops into the box', () => {
+  const block = app.slice(app.indexOf('CHAT: mic dictation'), app.indexOf('CHAT: connected model picker'));
+  // Send is caught before the composer's own handler, only while recording.
+  assert.match(block, /sendBtn\.addEventListener\('click', function\(e\)\{[\s\S]*state !== 'recording' \|\| sendBtn\.getAttribute\('data-stop-task-id'\)\) return;[\s\S]*stopImmediatePropagation\(\);\s*onRecorded\(true\);\s*\}, true\);/);
+  // The words go into the box first, then out through the composer's own send.
+  assert.match(block, /dispatchEvent\(new Event\('input'[\s\S]*hide\(\);\s*if\(thenSend\) submitComposerDraft\(\);/);
+  // The mic keeps today's behaviour: stop, text in the box, nothing sent.
+  assert.match(block, /micBtn\.addEventListener\('click', function\(\)\{\s*if\(state === 'recording'\)\{ onRecorded\(\); return; \}/);
+  assert.match(block, /click Send to send it, or the mic to stop and edit/);
 });

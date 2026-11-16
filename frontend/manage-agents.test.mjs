@@ -591,7 +591,7 @@ test('no keyword rule starts bot creation; every message reaches Mia', async () 
 
 test('Mia\'s chat clarifies, drafts, and creates a bot with the shared review card', async () => {
   const source = await readFile(appUrl, 'utf8');
-  assert.match(source, /function syncMiaBotSetupRequest\(roomId, state\)[\s\S]*requestMiaBotDraft\(roomId, state\.botDraft\)/);
+  assert.match(source, /function syncMiaBotSetupRequest\(roomId, state\)[\s\S]*openMiaBotDraft\(roomId, message\.nativeEvent\)[\s\S]*requestMiaBotDraft\(roomId, flow\)/);
   assert.match(source, /flow\.phase = 'created';\s*answerMiaBotSetupRequest\(roomId, flow, 'accepted'/);
   assert.match(source, /Review the draft\. Edit any field, then accept it\./);
   assert.match(source, /confirmLabel: 'Accept',[\s\S]*hideLater: true/);

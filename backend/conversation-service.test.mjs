@@ -581,3 +581,46 @@ test("a system line the app posts as the owner in Mia's chat starts her turn onc
   assert.equal(again.event.id, sent.event.id);
   assert.equal(again.dispatch.idempotent, true);
 });
+
+test('the AI mode chat is the person\'s own, one per place, kept and listed with their chats', (t) => {
+  const { db, repository, service } = fixture();
+  t.after(() => db.close());
+  const mia = service.createConversation({
+    companyId: 'company-a', principal: owner(), type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' },
+  });
+  const team = 'hub_' + 'a'.repeat(32);
+  const inCompany = service.openAiModeConversation({ companyId: 'company-a', principal: owner(), teamWorkspace: team });
+  assert.equal(inCompany.metadata.teamWorkspace, team, 'opened in a company it belongs to that company');
+  const first = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
+  const second = service.openAiModeConversation({ companyId: 'company-a', principal: owner() });
+
+  assert.equal(first.type, 'agent');
+  assert.equal(first.name, 'Flow mode');
+  assert.equal(first.metadata.teamWorkspace, undefined, 'opened in Solo it belongs to no company');
+  assert.equal(first.metadata.source, 'ai-mode');
+  assert.equal(first.metadata.agentId, 'gateway');
+  assert.equal(first.metadata.conversationMode, 'fresh', 'it never stands in for the main chat with Mia');
+  assert.notEqual(first.id, mia.id);
+  assert.notEqual(first.id, inCompany.id, 'Solo and a company each have their own');
+  assert.equal(second.id, first.id, 'coming back finds the same chat');
+  assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner(), teamWorkspace: team }).id, inCompany.id);
+  assert.equal(repository.getMember({
+    companyId: 'company-a', conversationId: first.id, principalId: 'gateway', principalType: 'agent',
+  }).role, 'agent');
+  assert.deepEqual(
+    service.listConversations({ companyId: 'company-a', principal: owner() }).map((row) => row.id).sort(),
+    [mia.id, inCompany.id, first.id].sort(),
+    'the AI mode chats show in the person\'s list',
+  );
+  assert.equal(repository.getConversation({ companyId: 'company-a', id: first.id, includeDeleted: true }).deletedAt, null);
+  const next = service.openAiModeConversation({ companyId: 'company-a', principal: owner(), fresh: true, createdAt: '2999-01-01T00:00:00.000Z' });
+  assert.notEqual(next.id, first.id, 'a new chat is another chat');
+  assert.equal(next.name, 'Flow mode');
+  assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner() }).id, next.id, 'coming back opens the newest');
+  assert.equal(repository.getConversation({ companyId: 'company-a', id: first.id }).deletedAt, null, 'the earlier one is kept');
+  assert.equal(service.openAiModeConversation({ companyId: 'company-a', principal: owner(), teamWorkspace: team }).id, inCompany.id, 'a new chat in Solo leaves the company\'s alone');
+  assert.throws(() => service.getConversation({
+    companyId: 'company-a', conversationId: first.id,
+    principal: { companyId: 'company-a', principalId: 'member@example.com', principalType: 'user' },
+  }));
+});

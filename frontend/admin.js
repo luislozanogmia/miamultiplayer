@@ -257,7 +257,9 @@
       var owner = emails[bot.shared_by] || '';
       var places = (bot.channel_ids || []).map(function(id){ return channels[id] ? where(channels[id]) : ''; }).filter(Boolean);
       agents.push({id: bot.id, name: bot.name, owner: owner, ownerName: owner || 'Unknown member', ownerDescription: 'Colleague',
-        status: 'Active', model: '—', departments: places, createdAt: hubTime(bot.shared_at)});
+        status: 'Active', model: '—', departments: places, createdAt: hubTime(bot.shared_at),
+        // Its shared folder, where its memory lives: on unless an admin turns it off.
+        sharedFolder: bot.folder ? !!bot.folder.enabled : null});
     });
     (channelBots || []).forEach(function(entry){
       var channel = entry.channel || {};
@@ -410,6 +412,10 @@
         '</div></td>' +
         '<td><div class="admin-cell-name">' + esc(name) + '</div>' +
           '<div class="admin-agent-id">' + esc(id || '—') + '</div>' +
+          (agent && 'sharedFolder' in agent
+            ? '<div class="admin-cell-sub">Shared memory: ' + (agent.sharedFolder ? 'on' : 'off') +
+              ' <button type="button" class="btn small" data-action="bot-folder" data-id="' + esc(id) + '" data-on="' + (agent.sharedFolder ? '0' : '1') + '">' + (agent.sharedFolder ? 'Turn off' : 'Turn on') + '</button></div>'
+            : '') +
         '</td>' +
         '<td><span class="pill admin-agent-type ' + (mia ? 'mia' : 'bot') + '">' + esc(type) + '</span></td>' +
         '<td><span class="pill ' + agentStatusClass(status) + '">' + esc(status) + '</span></td>' +
@@ -1780,6 +1786,15 @@
 
       var newBotBtn = $('#teamNewBotBtn');
       var newBotForm = $('#newTeamBotForm');
+      // An admin turns a company bot's shared memory off or back on.
+      var agentsBody = $('#agentsBody');
+      if(agentsBody && team) agentsBody.addEventListener('click', function(ev){
+        var btn = ev.target.closest('[data-action="bot-folder"]');
+        if(!btn) return;
+        btn.disabled = true;
+        hub('PUT', '/market/bots/' + encodeURIComponent(btn.getAttribute('data-id')) + '/folder', {enabled: btn.getAttribute('data-on') === '1'})
+          .then(loadAgents, function(){ btn.disabled = false; });
+      });
       if(newBotBtn) newBotBtn.addEventListener('click', function(){
         $('#newTeamBotError').hidden = true;
         if(newBotBtn.disabled) return;

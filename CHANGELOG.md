@@ -9,7 +9,21 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
-## [0.3.9] — Unreleased
+## [0.3.10] — Unreleased
+
+### Added
+- Flow preview gives Mia a full-screen stage for voice, visible progress, bot handoffs, and decisions. Flow Tandem lets the person keep working in the app while Mia helps.
+- A paired phone can reach the person's open computer through encrypted remote-link frames. The phone can use Flow without exposing Mia's local API directly to the internet.
+- Bots with a shared folder keep their memory there. ElevenLabs can be connected through Connected apps for Mia's voice.
+
+### Changed
+- Long chats compact in the background when quiet. The address bar finds apps, artifacts, chats, and automations by name.
+- Company channels show a bot at work once, and the update sidebar shows download progress and restart readiness.
+
+### Fixed
+- Edit and resend replaces the original message. Mia acts only in her own browser tabs, and chat attachments can be sent together.
+
+## [0.3.9] — 2026-11-13
 
 ### Added
 - Shared browser sessions can transcribe each participant's opted-in microphone locally and suggest tasks from the conversation. A suggestion shows its full request for review before it can ask that person's Mia to act.

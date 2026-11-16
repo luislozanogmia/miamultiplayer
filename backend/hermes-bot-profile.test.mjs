@@ -115,10 +115,10 @@ test('Mia provisions agent and bot configurations in the shared Hermes runtime',
   assert.doesNotMatch(config, /  - memory\n|  - session_search\n/, 'no memory or session search shared across bots');
   assert.match(config, /coding_context: off/);
   assert.match(config, /max_turns: 100/);
-  // Long chats stay fast everywhere: one compression point for every profile.
+  // One compression ceiling for every profile.
   for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
     assert.match(fs.readFileSync(path.join(profileRoot, profile, 'config.yaml'), 'utf8'),
-      /compression:\n  enabled: true\n  threshold_tokens: 64000\n  protect_last_n: 20\n  min_tail_user_messages: 3/, profile);
+      /compression:\n  enabled: true\n  threshold_tokens: 300000\n  protect_last_n: 20\n  min_tail_user_messages: 3/, profile);
   }
   assert.match(agentConfig, /approvals:\n  mode: "off"/);
   assert.match(config, /approvals:\n  mode: "off"/);
@@ -518,6 +518,19 @@ test('the latest turn model becomes the profile default and survives re-provisio
     assert.equal(config.match(/^model:/gm).length, 1);
     assert.match(config, /default: "deepseek-flash"\n  provider: "deepseek"\n  switch_context_confirm_tokens: 0\n/,
       'a model switch keeps the confirmation off');
+    // On a Claude sign-in the helpers a turn hands work to run on the small
+    // model; they stay on the turn's provider, and any other pick removes it.
+    assert.doesNotMatch(config, /^delegation:/m);
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'claude-subscription-directsdk-experimental', model: 'claude-sonnet-5-5[1m]' }, { profilesRoot }), true);
+    config = fs.readFileSync(agentConfig, 'utf8');
+    assert.match(config, /switch_context_confirm_tokens: 0\ndelegation:\n  model: "claude-haiku-5-5"\ntoolsets:/);
+    assert.doesNotMatch(config, /^delegation:\n(?:  .*\n)*  provider:/m);
+    assert.equal(setHermesProfileModel(MIAOS_AGENT_HERMES_PROFILE,
+      { provider: 'deepseek', model: 'deepseek-flash' }, { profilesRoot }), true);
+    config = fs.readFileSync(agentConfig, 'utf8');
+    assert.doesNotMatch(config, /^delegation:/m);
+    assert.equal(config.match(/^model:/gm).length, 1);
 
     // Boot-time provisioning keeps the recorded model and the setting.
     provisionHermesRuntimeProfiles({ profilesRoot });

@@ -15,6 +15,16 @@ contextBridge.exposeInMainWorld("miaDesktop", {
   ready: () => ipcRenderer.send("miaos-renderer-ready"),
   hydrated: () => ipcRenderer.send("miaos-renderer-hydrated"),
   retryConnection: () => ipcRenderer.invoke("miaos-retry-connection"),
+  // A new version being downloaded: its progress, and the restart that installs it.
+  updates: {
+    state: () => ipcRenderer.invoke("miaos-update", "state"),
+    install: () => ipcRenderer.invoke("miaos-update", "install"),
+    onState: callback => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on("miaos-update-state", listener);
+      return () => ipcRenderer.removeListener("miaos-update-state", listener);
+    },
+  },
   claudeCode: {
     status: () => ipcRenderer.sendSync("miaos-claude-code-status"),
     install: () => ipcRenderer.invoke("miaos-claude-code-install"),

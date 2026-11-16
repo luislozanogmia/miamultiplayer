@@ -355,6 +355,10 @@
   var open = false;
   var scheduled = false;
   var lastLayout = '';
+  // AI mode's stage covers the whole app. While it is up the page shows only
+  // inside the stage's own window: null when there is no stage, false while
+  // the stage shows no page, else the rectangle the stage gives the page.
+  var staged = null;
   input.placeholder = 'Search everywhere: your computer, Mia app, web search or type web address';
   input.setAttribute('aria-label', 'Search everywhere or type a web address');
   // Drag a tab onto another to put it in that tab's place.
@@ -512,6 +516,11 @@
   // Full-window cards and viewers are added straight to the body; adding or
   // removing one lays the live page out again so it never covers them.
   new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
+  // A drawer's scrim stays in the page and opens by a class, so a scrim
+  // opening or closing lays the live page out again too.
+  new MutationObserver(function (changes) {
+    if (changes.some(function (change) { return change.target.matches && change.target.matches('.drawer-overlay, .styled-scrim'); })) layout();
+  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
   new MutationObserver(function () {
     if (showingView() !== docked && state) render(state);
     else dockChatActions(bar && bar.getAttribute('data-view') || docked);
@@ -842,8 +851,10 @@
       scheduled = false;
       var rect = screen.getBoundingClientRect();
       // Full-window cards and viewers (Edit channel, a confirmation, an image)
-      // sit in the page too.
-      var dialogOpen = !!document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer');
+      // sit in the page too, and so does every drawer or sheet (New channel,
+      // Settings, a new message): each one opens with a scrim over the whole
+      // window. The docked "Your bots" panel and the details pane have none.
+      var dialogOpen = !!document.querySelector('.app-prompt-overlay.open, .app-confirm-overlay.open, .chat-image-viewer, .drawer-overlay.open, .styled-scrim.open');
       // Native views sit above HTML; hide them while something covers the page.
       // The docked "Your bots" panel doesn't: it narrows the screen instead.
       var visible = open && !overlay.hidden && !downloadsOpen && !suggestCovered && !tabsListOpen && !followMenuOpen && !callMenuCovered && !tipsCovered &&
@@ -859,6 +870,10 @@
       // A menu (over a still of the page) or a dialog only covers the page for
       // a while, so the live view steps aside without pausing what it plays.
       if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered || dialogOpen) payload.menu = true;
+      if (staged !== null) {
+        payload = { action: 'layout', visible: !!staged, panelOpen: !!staged, dockVisible: false,
+          bounds: staged || { x: 0, y: 0, width: 0, height: 0 } };
+      }
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
@@ -1809,6 +1824,18 @@
   });
   window.miaNativeBrowser = {
     refresh: function () { render(state); },
+    // The AI mode stage takes the page (a rectangle), hides it (false) or
+    // gives it back to the app (null).
+    stage: function (rect) {
+      staged = rect === undefined ? null : rect;
+      lastLayout = '';
+      if (staged === null && !open) {
+        bridge.command({ action: 'layout', visible: false, panelOpen: false,
+          bounds: { x: 0, y: 0, width: 0, height: 0 } }).catch(function () {});
+        return;
+      }
+      layout();
+    },
     // The shared call's follow controls, and the still under its menus.
     callFollow: callFollow,
     coverPage: coverPage,
@@ -1827,6 +1854,7 @@
         // running, leaving the last browser pixels over chat. Hide the native
         // surface immediately and invalidate the cached layout for reopen.
         lastLayout = '';
+        if (staged) { layout(); return; }
         bridge.command({ action: 'layout', visible: false, panelOpen: false,
           bounds: { x: 0, y: 0, width: 0, height: 0 } }).catch(function () {});
         return;

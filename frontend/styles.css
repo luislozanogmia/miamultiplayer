@@ -6,6 +6,12 @@
     font-family:"JetBrains Mono";font-style:normal;font-weight:400 700;
     font-display:swap;src:url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),url("assets/fonts/JetBrainsMono-Variable.woff2") format("woff2");
   }
+  /* Emoji on a computer that has no emoji font of its own. The computer's
+     font is used when there is one, so the file loads only where it is needed. */
+  @font-face{
+    font-family:"Mia Emoji";font-display:swap;
+    src:local("Apple Color Emoji"),local("Segoe UI Emoji"),local("Noto Color Emoji"),url("assets/fonts/NotoColorEmoji.ttf") format("truetype");
+  }
   .chat-drive-files{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chat-drive-file{display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:7px 10px;border:1px solid currentColor;border-radius:9px;color:inherit!important;text-decoration:none!important;font-size:13px;line-height:1.4}
   .chat-drive-file img{flex:none}
@@ -40,9 +46,9 @@
     --danger-border:#F0C9C2;
     --bar-h:96px;
     --sidebar-w:248px;
-    --serif:"Instrument Sans",system-ui,sans-serif;
-    --sans:"Instrument Sans",system-ui,sans-serif;
-    --mono:"JetBrains Mono",ui-monospace,monospace;
+    --serif:"Instrument Sans",system-ui,sans-serif,"Mia Emoji";
+    --sans:"Instrument Sans",system-ui,sans-serif,"Mia Emoji";
+    --mono:"JetBrains Mono",ui-monospace,monospace,"Mia Emoji";
     /* dk-* tokens: declared globally (not just under .dk-wrap) so the drawer,
        which renders dk-* classes outside the kanban board container, resolves them too. */
     --dk-bg2:#F2F0EC;--dk-border:#E6E2DC;--dk-hair:#EDEAE4;--dk-ink:#111111;--dk-ink2:#6B6560;
@@ -62,7 +68,7 @@
        menu) and anywhere else this skin was applied — not a replacement
        for the --paper/--ink/--accent tokens above, which the rest of the
        app shell uses these shared tokens. */
-    --styled-sans:-apple-system, system-ui, "Segoe UI", sans-serif;
+    --styled-sans:-apple-system, system-ui, "Segoe UI", sans-serif, "Mia Emoji";
     --sand-bg-base:#ffffff;
     --sand-bg-subtle:#ffffff;
     --sand-bg-elevated:#ffffff;
@@ -680,6 +686,17 @@
   .interrupted-repeat{font-size:11px;padding:1px 6px;margin-top:2px;border-radius:6px;background:#FBF0D9;color:#7A5300;}
   .interrupted-error{font-size:12px;color:#B3261E;min-height:0;}
   .interrupted-error:not(:empty){margin-top:8px;}
+  /* The one-time card about bots sharing what they learn. */
+  .memory-intro-card{max-width:400px;}
+  .memory-intro-art{display:flex;align-items:flex-end;justify-content:center;gap:14px;margin:0 auto 12px;}
+  .memory-intro-mote{width:64px;height:auto;}
+  .memory-intro-mote-flip{transform:scaleX(-1);}
+  .memory-intro-page{width:44px;height:auto;}
+  .memory-intro-title{font-size:16px;font-weight:600;color:var(--ink);text-align:center;margin-bottom:8px;}
+  .memory-intro-copy{font-size:13.5px;line-height:1.5;color:var(--ink);margin:0 0 8px;}
+  .memory-intro-safe{font-size:13px;line-height:1.45;color:var(--muted);margin:0;}
+  .memory-intro-error{font-size:12px;color:#B3261E;}
+  .memory-intro-error:not(:empty){margin-top:8px;}
   /* TEMPORARY: bot files tidy-up card. Remove in 0.3.6. */
   .tidy-card{max-width:400px;}
   .tidy-art{display:flex;align-items:flex-end;justify-content:center;gap:14px;margin:0 auto 12px;}
@@ -1168,6 +1185,59 @@
   .chat-pre-reasoning-toggle.expanded .chat-pre-reasoning-chevron,.chat-expandable-toggle.expanded .chat-expandable-chevron{transform:rotate(225deg) translate(-1px,-1px);}
   .chat-pre-reasoning-full .chat-md-p:last-child,.chat-pre-reasoning-full .chat-md-list:last-child,.chat-expandable-full .chat-md-p:last-child,.chat-expandable-full .chat-md-list:last-child{margin-bottom:0;}
   .chat-msg-thinking{display:inline-block;color:var(--sand-text-secondary);background:transparent;padding:0;}
+  /* The sidebar's sign that a new version is downloading; it fills as the download goes. */
+  .update-cue{position:relative;flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;overflow:hidden;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:default;}
+  .update-cue[hidden]{display:none;}
+  /* AI mode: the way in sits above the footer; in the narrow rail only its icon shows. */
+  .ai-mode-entry{flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:pointer;}
+  .ai-mode-entry:hover{background:var(--sand-fill-ghost-hover);}
+  .ai-mode-entry-what{display:inline-grid;place-items:center;width:14px;height:14px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:9.5px;line-height:1;opacity:.8;}
+  .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
+  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-what,.ai-mode-entry-tag{display:none;}}
+  .ai-mode-entry[hidden]{display:none;}
+  /* Flow Tandem: the call with Mia, as a card where the way in was. */
+  .flow-tandem{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;margin:4px 12px;padding:10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:12px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);font-family:var(--styled-sans);}
+  .flow-tandem[hidden]{display:none;}
+  .flow-tandem-head{display:flex;align-items:center;gap:8px;min-width:0;}
+  .flow-tandem-mark{flex:0 0 auto;display:grid;place-items:center;width:22px;height:22px;}
+  .flow-tandem-names{display:flex;flex-direction:column;min-width:0;}
+  .flow-tandem-title{font-size:13px;font-weight:600;line-height:1.25;}
+  .flow-tandem-state{font-size:11.5px;line-height:1.3;color:var(--sand-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .flow-tandem-line{font-size:12px;line-height:1.4;color:var(--sand-text-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .flow-tandem-actions{display:flex;gap:6px;}
+  .flow-tandem-btn{flex:1 1 0;display:grid;place-items:center;height:30px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:8px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;}
+  .flow-tandem-btn:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+  .flow-tandem-btn:disabled{opacity:.45;cursor:default;}
+  /* A muted mic or voice is struck through, the way the mic in Flow's bar is. */
+  .flow-tandem-btn[aria-pressed="true"]{position:relative;color:var(--sand-text-danger);}
+  .flow-tandem-btn[aria-pressed="true"]::after{content:"";position:absolute;left:50%;top:50%;width:20px;height:1.5px;background:currentColor;transform:translate(-50%,-50%) rotate(-45deg);border-radius:1px;}
+  #flowTandemLeave{border-color:transparent;background:var(--sand-fill-danger);color:#fff;}
+  #flowTandemLeave:hover{filter:brightness(.94);}
+  @media (max-width:1100px){.flow-tandem{margin:4px 6px;padding:6px;}.flow-tandem-names,.flow-tandem-line{display:none;}.flow-tandem-head{justify-content:center;}.flow-tandem-actions{flex-direction:column;}}
+  /* At rail width only the mark fits. */
+  @media (max-width:1100px){.update-cue{margin:4px auto;padding:7px;}.update-cue-text,.update-cue-detail{display:none;}}
+  .update-cue-bar{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--sand-fill-ghost-hover);transition:width .4s ease;pointer-events:none;}
+  .update-cue-icon,.update-cue-text,.update-cue-detail{position:relative;}
+  .update-cue-icon{flex:0 0 auto;}
+  .update-cue-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .update-cue-detail{flex:0 0 auto;font-variant-numeric:tabular-nums;color:var(--sand-text-tertiary);}
+  .update-cue.is-ready{cursor:pointer;color:var(--sand-text-primary);border-color:var(--sand-border-default);}
+  .update-cue.is-ready .update-cue-bar{display:none;}
+  .update-cue.is-ready:hover{background:var(--sand-fill-ghost-hover);}
+  .update-cue.is-ready:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:2px;}
+  /* A run's thinking and tool calls, folded into one muted line the user can open. */
+  .chat-steps-row{padding-top:0;padding-bottom:0;}
+  .chat-steps-row:hover{background:transparent;}
+  .chat-steps{max-width:min(100%,74ch);font-family:var(--styled-sans);font-size:12.5px;line-height:1.45;color:var(--sand-text-secondary);}
+  .chat-steps summary{display:inline-flex;align-items:center;gap:4px;padding:2px 0;cursor:pointer;list-style:none;user-select:none;border-radius:6px;}
+  .chat-steps summary::-webkit-details-marker{display:none;}
+  .chat-steps summary:hover{color:var(--sand-text-primary);}
+  .chat-steps summary:focus-visible{outline:2px solid var(--sand-fill-accent);outline-offset:2px;}
+  .chat-steps-chevron{flex:0 0 auto;transition:transform .15s ease;}
+  .chat-steps[open] .chat-steps-chevron{transform:rotate(90deg);}
+  .chat-steps-list{display:flex;flex-direction:column;gap:6px;margin:4px 0 6px 2px;padding-left:10px;border-left:1.5px solid var(--sand-border-subtle);}
+  .chat-step{white-space:pre-wrap;overflow-wrap:anywhere;}
+  .chat-step-tool{color:var(--sand-text-primary);}
   .chat-thinking-shimmer{display:inline-block;color:#aeb2b6;background:linear-gradient(90deg,#aeb2b6 0%,#aeb2b6 40%,#ffffff 50%,#aeb2b6 60%,#aeb2b6 100%);background-size:220% 100%;background-position:140% 0;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:chatThinkingSweep 1.8s ease-in-out infinite;}
   @keyframes chatThinkingSweep{0%{background-position:140% 0;}100%{background-position:-40% 0;}}
   .chat-md-table{width:100%;min-width:0;max-width:100%;margin:8px 0;overflow-x:auto;box-sizing:border-box;border:1px solid var(--sand-border-default);border-radius:8px;}
@@ -4251,12 +4321,12 @@ body:has(.app-prompt-overlay.open, .drawer-overlay.open, .styled-scrim.open) .mi
 .mia-emoji-list{flex:1;min-height:0;overflow-y:auto;}
 .mia-emoji-title{padding:8px 2px 4px;font-size:11px;font-weight:600;color:var(--sand-text-secondary);}
 .mia-emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(36px,1fr));}
-.mia-emoji-grid button{appearance:none;height:36px;border:0;border-radius:8px;background:transparent;font-size:20px;line-height:1;cursor:pointer;}
+.mia-emoji-grid button{appearance:none;font-family:var(--styled-sans);height:36px;border:0;border-radius:8px;background:transparent;font-size:20px;line-height:1;cursor:pointer;}
 .mia-emoji-grid button:hover,.mia-emoji-grid button:focus-visible{background:var(--sand-fill-ghost-hover);}
 .mia-emoji-empty{padding:24px 8px;text-align:center;font-size:13px;color:var(--sand-text-secondary);}
 .chat-msg-row{position:relative;}
 .chat-msg-reactions{display:flex;flex-wrap:wrap;gap:4px;}
-.chat-msg-reaction{appearance:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);color:var(--sand-text-secondary);font:inherit;font-size:13px;line-height:1;cursor:pointer;}
+.chat-msg-reaction{appearance:none;font-family:var(--styled-sans);display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-bg-base);color:var(--sand-text-secondary);font:inherit;font-size:13px;line-height:1;cursor:pointer;}
 .chat-msg-reaction em{font-style:normal;font-size:12px;}
 .chat-msg-reaction:hover:not(:disabled){background:var(--sand-fill-ghost-hover);}
 .chat-msg-reaction.on{border-color:var(--sand-text-primary);color:var(--sand-text-primary);}

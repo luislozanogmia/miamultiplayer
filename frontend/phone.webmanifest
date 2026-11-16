@@ -1,0 +1,14 @@
+{
+  "name": "Mia",
+  "short_name": "Mia",
+  "start_url": "./phone.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050504",
+  "theme_color": "#050504",
+  "icons": [
+    { "src": "assets/icons/mia-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/mia-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

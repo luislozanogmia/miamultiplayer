@@ -202,14 +202,18 @@ function layoutHarness() {
   const layoutSource = source.slice(source.indexOf('  function layout() {'), source.indexOf('  function render(next) {'));
   const sent = [], box = () => ({ x: 0, y: 0, width: 700, height: 600 });
   const c = {
-    JSON, scheduled: false, lastLayout: '', dialog: null,
+    JSON, scheduled: false, lastLayout: '', dialog: null, staged: null,
     requestAnimationFrame: fn => fn(),
     open: true, overlay: { hidden: false }, screen: { getBoundingClientRect: box },
     pip: { hidden: true }, pipView: { getBoundingClientRect: box },
     downloadsOpen: false, suggestCovered: false, tabsListOpen: false, followMenuOpen: false, callMenuCovered: false, tipsCovered: false,
     bridge: { command(payload) { sent.push(payload); return Promise.resolve(); } },
   };
-  c.document = { body: { classList: { contains: () => false } }, querySelector: () => c.dialog };
+  // The open layer is found only when the page asks for one of its kind.
+  const matches = (selector, className) => selector.split(',').some(part =>
+    part.trim().split('.').filter(Boolean).every(name => className.split(' ').includes(name)));
+  c.document = { body: { classList: { contains: () => false } },
+    querySelector: selector => c.dialog && matches(selector, c.dialog.className) ? c.dialog : null };
   vm.createContext(c);
   vm.runInContext(layoutSource, c);
   return { c, sent };
@@ -228,4 +232,28 @@ test('a dialog over the page hides the live view without pausing what it plays',
   h.c.layout();
   assert.equal(h.sent.at(-1).visible, true);
   assert.equal(h.sent.at(-1).menu, undefined);
+});
+
+test('an open drawer over the page hides the live view the same way, and it comes back on close', () => {
+  const h = layoutHarness();
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true);
+  for (const className of ['drawer-overlay styled-scrim open', 'drawer-overlay conversation-drawer-overlay open', 'styled-scrim open bot-market-scrim']) {
+    h.c.dialog = { className };
+    h.c.layout();
+    assert.equal(h.sent.at(-1).visible, false, className + ' covers the whole window');
+    assert.equal(h.sent.at(-1).panelOpen, true);
+    assert.equal(h.sent.at(-1).menu, true, 'a drawer covers the page only for a while');
+    h.c.dialog = null;
+    h.c.layout();
+    assert.equal(h.sent.at(-1).visible, true);
+    assert.equal(h.sent.at(-1).menu, undefined);
+  }
+  h.c.dialog = { className: 'drawer-overlay styled-scrim' };
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true, 'a closed drawer leaves the page showing');
+});
+
+test('a drawer opening or closing by a class lays the live page out again', () => {
+  assert.match(source, /matches\('\.drawer-overlay, \.styled-scrim'\)[^\n]*layout\(\);\s*\}\)\.observe\(document\.body, \{ subtree: true, attributes: true, attributeFilter: \['class'\] \}\)/);
 });
