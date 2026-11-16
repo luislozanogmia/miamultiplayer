@@ -162,6 +162,43 @@ function settle(){Object.keys(mindMap).forEach(function(k){if(k[0]!=='c')mindDro
 function mark(px,mode){return '<span class="mk" data-mm="'+px+'" data-mode="'+(mode||'')+'" style="width:'+px+'px;height:'+px+'px"></span>';}
 function mount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.render(m,+m.dataset.mm,m.dataset.mode);});}
 function unmount(el){el.querySelectorAll('[data-mm]').forEach(function(m){window.MiaMark.destroy(m);});}
+// The stage drawn again for the same turn is brought up to date in place: a node that did not change is
+// left alone, so nothing that is already on screen is loaded or faded in a second time.
+function same(a,b){
+  if(a.nodeType!==b.nodeType||a.nodeName!==b.nodeName)return false;
+  if(a.nodeType!==1)return true;
+  // A mark is drawn into after it is placed, and a card or a slot is the one it is named.
+  return a.id===b.id&&a.dataset.key===b.dataset.key&&a.dataset.mm===b.dataset.mm&&a.dataset.mode===b.dataset.mode;
+}
+function patch(a,b){
+  var x=a.firstChild,y=b.firstChild,nx,ny;
+  while(y){
+    ny=y.nextSibling;
+    if(x&&same(x,y)){
+      nx=x.nextSibling;
+      if(x.nodeType!==1){if(x.data!==y.data)x.data=y.data;}
+      else if(x.dataset.mm==null){
+        [].slice.call(x.attributes).forEach(function(at){if(!y.hasAttribute(at.name))x.removeAttribute(at.name);});
+        [].forEach.call(y.attributes,function(at){if(x.getAttribute(at.name)!==at.value)x.setAttribute(at.name,at.value);});
+        // What Mia drew lives in its slot in a frame of its own; the slot only carries what to show.
+        if(x.id!=='canvasSlot')patch(x,y);
+      }
+      x=nx;
+    }else{
+      a.insertBefore(y,x);
+      if(y.nodeType===1){if(y.dataset.mm!=null)window.MiaMark.render(y,+y.dataset.mm,y.dataset.mode);else mount(y);}
+    }
+    y=ny;
+  }
+  while(x){
+    nx=x.nextSibling;
+    if(x.nodeType===1){
+      if(x.dataset.mm!=null)window.MiaMark.destroy(x);else unmount(x);
+      if(canvas.el&&x.contains(canvas.el))canvasHold();
+    }
+    a.removeChild(x);x=nx;
+  }
+}
 
 // A reply opens with the sentence Mia says out loud; choices she leaves to the person close it.
 // A job Mia hands to a bot is written for the app ("Handoff:", "Model:", "Brief:"); it is not shown.
@@ -242,6 +279,10 @@ function readCanvas(text){
   if(!m[3])return {html:'',building:html.length,rest:text.slice(0,m.index).trim()};
   return {html:html,rest:(text.slice(0,m.index)+'\n'+text.slice(m.index+m[0].length)).trim()};
 }
+// A view is something drawn on the stage: a canvas, cards or a deck. Words alone are not one.
+function showsView(text){return /(^|\n)```canvas/i.test(text||'')||readCards(readCanvas(text).rest).cards.length>0;}
+// The view a turn leaves on the stage for the next one: its own, or the one it kept when it only answered.
+function viewOf(r){return !r?'':r.body&&(showsView(r.body)||!showsView(r.keep))?r.body:r.keep||r.body||'';}
 function hasCanvas(){var b=shownBot();return !!R&&/(^|\n)```canvas/i.test(b?b.reply:R.running?R.keep||R.draft:R.body||R.keep);}
 // The frame is kept across redraws, so what she drew does not blink each time the stage changes.
 function canvasHold(){
@@ -511,8 +552,12 @@ function resultHtml(){
   // One short line on its own is her narration, shown beside her mark, not a result.
   if(R.running&&narrating())text='';
   // The view from before stays on the stage until the new one is whole; a reply with nothing to show keeps it.
-  var kept=!!R.keep&&(R.running||!text);
+  var kept=!!R.keep&&(R.running||!text),words='';
+  // An answer in words alone does not take the view away: it is read above the view it is about.
+  if(!kept&&R.keep&&text&&!showsView(text)&&showsView(R.keep)){words='<div class="panel result answer"><div class="md">'+format(text)+'</div></div>';kept=true;}
   if(kept)text=R.keep;
+  // A new view of her own starts clean: answers carried over belonged to the view before.
+  else if(R.carried&&!R.running){R.carried=false;if(!R.decided){R.picks={};R.leaf=0;}}
   // What a bot brought back takes the stage while the person looks at it.
   var shown=shownBot(),from='';
   if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>'+(shown.chat?'your chat with it':'brought this back')+'</span><button class="btn" data-hide="1">Close</button></div>';}
@@ -529,7 +574,7 @@ function resultHtml(){
   if(pageOn()&&!site.deckRun&&!siteLive(R.focus)&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   if(deck)items=items.filter(function(it){return it.key==='page';});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
-  return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
+  return from+words+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
     :(drawn.html?'<div class="canvas" id="canvasSlot" data-html="'+esc(drawn.html)+'"></div>':drawn.building!=null?buildingHtml(drawn.building):'')+(deck&&items.length?'<div class="cards">'+cardHtml(items[0],0)+'</div>':'')+(deck||(items.length?'<div class="cards">'+items.map(cardHtml).join('')+'</div>':'')))+
     (read.rest?'<div class="panel result'+(R.running&&!shown&&!kept?' live':'')+'"><div class="md">'+format(read.rest)+'</div></div>':'');
 }
@@ -731,11 +776,14 @@ function draw(){
   // The same stage is not drawn again: every redraw would reload the frame and start the fades over.
   // A stage that only grows (the same run, more of it) is rebuilt without its entrance motion.
   var key=seen||R||s;
+  // A new direction that keeps the view from before is the same stage going on, not a new one.
+  var on=cv._k===key||(key===R&&!!cv._k&&typeof cv._k==='object'&&!!R.keep&&R.keep===viewOf(cv._k));
   if(cv._h!==h){
-    cv.classList.toggle('again',!!cv._h&&cv._k===key);
-    var lv=cv._k===key?$('leaves'):null,lx=lv?lv.scrollLeft:-1;
-    unmount(cv);canvasHold();
-    cv.innerHTML=h;mount(cv);
+    cv.classList.toggle('again',!!cv._h&&on);
+    var lv=on?$('leaves'):null,lx=lv?lv.scrollLeft:-1;
+    // While Mia writes, only what changed is touched: her mark, the pictures and the cards stay as they are.
+    if(cv._h&&on){var t=document.createElement('template');t.innerHTML=h;patch(cv,t.content);}
+    else{unmount(cv);canvasHold();cv.innerHTML=h;mount(cv);}
     // The same deck drawn again stands where it stood, so a picture arriving does not move it.
     lv=$('leaves');if(lv&&lx>=0){lv._placed=true;lv.scrollLeft=lx;deckMark();}
     cv._h=h;cv._k=key;
@@ -943,7 +991,7 @@ function restore(events){
   });
   if(past.length)return;
   past=runs.filter(function(r){return r.done;}).slice(-30);
-  past.forEach(function(r){r.keep=keep;keep=r.body||keep;});
+  past.forEach(function(r){r.keep=keep;keep=viewOf(r);});
 }
 // The bots Mia put on a job in the last day, still working or finished: they stand at the right again.
 function crewRestore(id){
@@ -1056,10 +1104,13 @@ function direct(t,shown){
   else{
     crew.forEach(function(b){if(b.open){b.open=false;b.seen=true;}});
     // The view on the stage stays there while Mia works on the next thing.
-    var was=R||past[past.length-1],keep=was?was.body||was.keep||'':'';
+    var was=R||past[past.length-1],keep=viewOf(was);
     // A page the person opened or chose to keep open is theirs: it stays up through the next run.
     var mine=!!(R&&R.picked&&site.open);
-    shelve(R);if(site.card){site.card='';site.open=false;site.deckRun=null;}R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
+    shelve(R);if(site.card){site.card='';site.open=false;site.deckRun=null;}R=newRun(shown||t);R.keep=keep;
+    // Answers given on a deck that was not sent yet stay on it while the person asks about it.
+    if(was&&was.picks&&!was.decided&&showsView(keep)){R.picks=was.picks;R.leaf=was.leaf||0;R.carried=true;}
+    R.at=Date.now()-2000;seed(shown||t);
     if(mine){R.picked=true;R.focus='page';}
   }
   // Said from an earlier view, it goes to Mia and the person stays where they are; "Back to now" shows her answer.

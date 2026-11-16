@@ -307,6 +307,7 @@ div.bot{cursor:default;opacity:1}
 @media(prefers-reduced-motion:reduce){.thumb,.front{animation:none}.thumb,.card[data-item]{transition:none}.thumb{transform:none}}
 .result{padding:16px 18px}
 .result.live{border-style:dashed}
+.result.answer{margin-bottom:14px}
 .md{font-size:14.5px;line-height:1.6;color:var(--soft);min-width:0;overflow-wrap:anywhere}
 .md.small{font-size:12.5px;max-height:260px;overflow-y:auto}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}

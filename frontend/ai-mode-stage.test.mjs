@@ -7,15 +7,30 @@ const css = await readFile(new URL('./ai-mode.css', import.meta.url), 'utf8');
 const draw = js.slice(js.indexOf('function draw(){'), js.indexOf('function redraw()'));
 
 test('the stage is only rebuilt when its markup really changed', () => {
-  assert.match(draw, /if\(cv\._h!==h\)\{[^}]*unmount\(cv\);canvasHold\(\);[^}]*cv\.innerHTML=h;/);
+  assert.match(draw, /if\(cv\._h!==h\)\{[\s\S]*else\{unmount\(cv\);canvasHold\(\);cv\.innerHTML=h;mount\(cv\);\}/);
   assert.match(draw, /cv\._h=h;/);
   // The deferred swap of a new view still runs when the markup is the same.
   assert.match(draw, /\}\s*canvasPlace\(\);stepsDraw\(\);/);
   assert.match(js, /\$\('cv'\)\.innerHTML='';\$\('cv'\)\._h='';/);
 });
 
+test('while Mia writes the stage is brought up to date in place instead of being built again', () => {
+  // The same turn drawn again goes through the patch; only another turn or view is built from nothing.
+  assert.match(draw, /if\(cv\._h&&on\)\{var t=document\.createElement\('template'\);t\.innerHTML=h;patch\(cv,t\.content\);\}/);
+  const patch = js.slice(js.indexOf('function same(a,b){'), js.indexOf('// A reply opens with the sentence'));
+  // Her mark is left as it was drawn, and the frame of what she drew stays in its slot.
+  assert.match(patch, /a\.dataset\.mm===b\.dataset\.mm&&a\.dataset\.mode===b\.dataset\.mode/);
+  assert.match(patch, /else if\(x\.dataset\.mm==null\)\{/);
+  assert.match(patch, /if\(x\.id!=='canvasSlot'\)patch\(x,y\);/);
+  // Text that grew is changed where it stands; only a new part is added and only a part that left is taken away.
+  assert.match(patch, /if\(x\.data!==y\.data\)x\.data=y\.data;/);
+  assert.match(patch, /a\.insertBefore\(y,x\);/);
+  assert.match(patch, /if\(canvas\.el&&x\.contains\(canvas\.el\)\)canvasHold\(\);/);
+  assert.doesNotMatch(patch, /innerHTML/);
+});
+
 test('a stage that grows inside the same run does not fade in again', () => {
-  assert.match(draw, /classList\.toggle\('again',!!cv\._h&&cv\._k===key\)/);
+  assert.match(draw, /classList\.toggle\('again',!!cv\._h&&on\)/);
   assert.match(css, /\.again \.canvas,[^{]*\.again \.card[^{]*\{animation:none\}/);
 });
 
@@ -249,4 +264,34 @@ test('a site opened from the decision in front is shown live in that card of tha
   // Turning to another card closes it, and the front card's picture and links open it.
   assert.match(js, /el\.children\[at\]\.dataset\.key!==site\.card\)\)\{deckSiteOff\(\);/);
   assert.match(js, /closest\('\.leaf\.on a\.visit,\.leaf\.on a\.lnk'\)/);
+});
+
+test('an answer in words alone leaves the view it is about on the stage', () => {
+  const at = js.indexOf('var MAX_CARDS=9,pics={};');
+  let read;
+  try {
+    read = new Function('function str(v,n){return (typeof v==="string"?v.trim():"").slice(0,n);}' +
+      js.slice(at, js.indexOf('function hasCanvas(){')) + 'return {showsView:showsView,viewOf:viewOf};')();
+  } catch (e) { assert.fail('the view helpers could not be read on their own: ' + e.message); }
+  const deck = 'Decision: Pursue the first company\nText: It fits.\nDecision: Drop the second\nText: Too small.';
+  assert.equal(read.showsView(deck), true);
+  assert.equal(read.showsView('Card: One\nIcon: check\nText: Done.'), true);
+  assert.equal(read.showsView('```canvas\n<p>Plan</p>\n```'), true);
+  assert.equal(read.showsView('Nothing happens until you send the deck.\nThen I act on each answer.'), false);
+  // A turn that only answered hands on the view it kept, so a second question still has the deck under it.
+  assert.equal(read.viewOf({ body: 'Then I act on each answer.', keep: deck }), deck);
+  assert.equal(read.viewOf({ body: deck, keep: 'older' }), deck);
+  assert.equal(read.viewOf({ body: 'Just words.', keep: 'Older words.' }), 'Just words.');
+  assert.equal(read.viewOf({ body: '', keep: deck }), deck);
+  assert.equal(read.viewOf(null), '');
+  // The answer is drawn above the kept view, and both places that pick the kept view use the same rule.
+  assert.match(js, /if\(!kept&&R\.keep&&text&&!showsView\(text\)&&showsView\(R\.keep\)\)\{words='<div class="panel result answer">/);
+  assert.match(js, /return from\+words\+\(front\?/);
+  assert.match(js, /past\.forEach\(function\(r\)\{r\.keep=keep;keep=viewOf\(r\);\}\);/);
+  assert.match(js, /var was=R\|\|past\[past\.length-1\],keep=viewOf\(was\);/);
+  // Answers already given on a deck that was not sent stay through the question, and go when a new view comes.
+  assert.match(js, /if\(was&&was\.picks&&!was\.decided&&showsView\(keep\)\)\{R\.picks=was\.picks;R\.leaf=was\.leaf\|\|0;R\.carried=true;\}/);
+  assert.match(js, /else if\(R\.carried&&!R\.running\)\{R\.carried=false;if\(!R\.decided\)\{R\.picks=\{\};R\.leaf=0;\}\}/);
+  // The kept view is the same stage going on, so it is brought up to date in place and does not come in again.
+  assert.match(draw, /var on=cv\._k===key\|\|\(key===R&&!!cv\._k&&typeof cv\._k==='object'&&!!R\.keep&&R\.keep===viewOf\(cv\._k\)\);/);
 });

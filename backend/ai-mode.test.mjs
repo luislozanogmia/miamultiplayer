@@ -349,3 +349,10 @@ test('Mia and the bots are told to draw a card\'s picture from its facts and kee
   assert.match(src, /never a guessed one/);
   assert.match(src, /Never make up a figure or an address/);
 });
+
+test('Mia is told that a question gets an answer and the view on the stage stays', () => {
+  const text = require('node:fs').readFileSync(new URL('./ai-mode.js', import.meta.url), 'utf8');
+  assert.match(text, /A question gets an answer, not a new view\./);
+  assert.match(text, /with no cards, no canvas, no decisions and ' \+\s*'no Next line/);
+  assert.match(text, /a deck ' \+\s*'they have not sent can still be answered/);
+});

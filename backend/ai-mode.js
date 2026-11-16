@@ -86,6 +86,12 @@ function turnNote(hub) {
     'first: only what truly needs them, the most important first, nine at most, each one clear enough to ' +
     'answer in a few seconds. They answer each with Approve, Not approve, Keep working or Show me more, and ' +
     'the answers come back to you together. Then act on every answer and say what you did.\n' +
+    '- A question gets an answer, not a new view. When the person asks about what is on the stage, or ' +
+    'asks what happens next, what you meant, why, how or whether, they want to know something and to stay ' +
+    'where they are: answer in plain sentences, four at most, with no cards, no canvas, no decisions and ' +
+    'no Next line. The view they are looking at stays on the stage with your answer above it, and a deck ' +
+    'they have not sent can still be answered. Build or rebuild a view only when they ask to see ' +
+    'something, ask for a change to it, or the answer truly needs one.\n' +
     '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
     '- The person can draw on the stage to mark parts of what you showed. The marks come at the end of ' +
     'their direction in square brackets, numbered in the order drawn, each with the words it was drawn on. ' +
