@@ -93,7 +93,7 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
 
 test('a drawer at the right edge lists the chats with people, and picking one reads it on the stage as search does', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines\}/);
+  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend\}/);
   assert.match(app, /function aiModePeopleChats\(\)\{[\s\S]*?channel\.kind !== 'bot'[\s\S]*?member\.kind === 'human'/, 'bots are left out, in a company and in Solo');
   assert.match(app, /function aiModeChatLines\(row\)\{[\s\S]*?loadHubRoomPreview\(roomId, state, activeWorkspaceKey\)/, 'a company chat is read by the loader the sidebar uses');
   assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
@@ -221,7 +221,7 @@ test('a card draws its picture from its own facts, and a photo is only looked up
   assert.deepEqual(Object.keys(ICONS).sort(), [...CARD_ICONS].sort());
   // A card with nothing to show carries no empty panel, and its button is a direction about that card.
   assert.match(js, /if\(!\(v\.bot\|\|v\.src\|\|v\.draw\|\|v\.site\|\|v\.wait\)\)return '';/);
-  assert.match(js, /if\(act\)\{if\(R&&!seeing\(\)&&!R\.running\)direct\(act\.dataset\.act\);return;\}/);
+  assert.match(js, /if\(act\)\{direct\(act\.dataset\.act\);return;\}/);
   assert.match(css, /\.cards\{[^}]*align-items:start\}/);
 });
 
@@ -426,4 +426,33 @@ test('what was said last stays in a strip above the stage and a changed line is 
   assert.match(css, /\.morph\.out \.l\{animation:l-out/);
   assert.match(css, /\.morph \.l\.in\{animation:l-in/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.morph \.l\{animation:none!important\}\}/);
+});
+
+test('a pulled chat turns the bar into its message box, a bot can be put on the stage, and small sounds do not cut Mia off', async () => {
+  const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  // The bar writes to the chat that was pulled, through the app's own send, and threads open in place.
+  assert.match(js, /if\(chatOn\(\)\)\{chatSay\(\);return;\}/);
+  assert.match(js, /var send=appHost\(\)\.chatSend;/);
+  assert.match(js, /send\(p\.chat,t\.slice\(0,6000\),p\.root\|\|''\)/);
+  assert.match(app, /function aiModeChatSend\(row, text, rootId\)\{[\s\S]*?sendActiveRoomMessage\(text, rootId \|\| null, null, roomId\)/);
+  assert.match(js, /data-thread="/);
+  // A click on the bare stage closes the chat that was pulled or the bot's chat.
+  assert.match(js, /\$\('stage'\)\.addEventListener\('click',function\(e\)\{\s*var t=e\.target;if\(\(!peek&&!shownBot\(\)\)/);
+  // A card's own button always reaches Mia, and a button drawn on a canvas does too.
+  assert.match(js, /if\(act\)\{direct\(act\.dataset\.act\);return;\}/);
+  assert.match(js, /el\.addEventListener\('load',canvasWire\)/);
+  // What a bot asks approval for is shown on the stage under its name.
+  assert.match(js, /crewAsks\.concat\(R\?R\.asks:\[\]\)/);
+  // The card of the page Mia is in opens her tab, not the one in front.
+  assert.match(js, /else if\(R\.focus==='page'\)\{site\.open=true;pageShow\(\);\}/);
+  // "Show <bot> big" is handled on the stage and is not sent to Mia.
+  assert.match(js, /if\(!shown&&stageAsk\(t\)\)return;/);
+  assert.match(css, /\.work\.big,\.work\.big\.solo\{grid-template-columns:minmax\(0,1fr\);max-width:none\}/);
+  // Sounds a transcriber invents are dropped; a word or two while Mia works does not redirect her.
+  const at = js.indexOf('var PHANTOM='), end = js.indexOf('function talkStart(){');
+  const chatter = new Function('R', js.slice(at, end) + 'return chatter;');
+  assert.equal(chatter(null)('Thank you.'), 1);
+  assert.equal(chatter({ running: true })('okay so'), 2);
+  assert.equal(chatter({ running: true })('look at the second one instead'), 0);
+  assert.equal(chatter(null)('okay so'), 0);
 });

@@ -7290,9 +7290,18 @@ function nativeMiaHandoffBots(conversation, reply) {
 function aiModeRouterBots(conversation, email) {
   if (!conversation || conversation.type === 'bot') return [];
   if (conversation.metadata && conversation.metadata.privateAgentId !== undefined) return [];
+  // Every bot of theirs, whichever list it is kept in: the ones of this chat's own list come
+  // first, and a name is offered once.
+  const names = new Set();
   return db.loadAll(conn, 'bots')
-    .filter((bot) => recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId))
-    .filter((bot) => bot.name && sameOwner(bot, email));
+    .filter((bot) => bot.name && bot.status !== 'draft' && sameOwner(bot, email))
+    .map((bot) => ({ bot, here: recordBelongsToCompany(bot, NATIVE_COMPANY_ID, conversation.companyId) }))
+    .sort((a, b) => Number(b.here) - Number(a.here))
+    .filter(({ bot }) => {
+      const name = String(bot.name).trim().toLowerCase();
+      return name && !names.has(name) && names.add(name);
+    })
+    .map(({ bot }) => bot);
 }
 
 // The jobs Mia handed over from each AI mode chat, newest last, so she is told where
@@ -7388,13 +7397,25 @@ async function nativeHandoffBotConversation(bot, conversation, senderId) {
   const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
   const sender = String(senderId || '').trim().toLowerCase();
   // Only your own bot has a chat of yours in a company.
-  if (!main || typeof team !== 'string' || !/^hub_[a-f0-9]{32}$/.test(team) || ownerOf(bot) !== sender) return main;
+  if (!main || ownerOf(bot) !== sender) return main;
+  if (typeof team === 'string' && /^hub_[a-f0-9]{32}$/.test(team)) {
+    return nativeConversationService.createConversation({
+      companyId: nativeCompanyId('solo', sender),
+      principal: nativeConversationPrincipal(sender, 'solo'),
+      type: 'bot',
+      name: bot.name,
+      metadata: { botId: bot.id, departments: departmentsOf(bot), teamWorkspace: team, source: 'team-bot-chat' },
+    });
+  }
+  // A bot kept in the person's other list works in a chat beside the one that asked, so
+  // the stage that handed the job over can follow it.
+  if (!conversation || main.companyId === conversation.companyId) return main;
   return nativeConversationService.createConversation({
-    companyId: nativeCompanyId('solo', sender),
-    principal: nativeConversationPrincipal(sender, 'solo'),
+    companyId: conversation.companyId,
+    principal: { companyId: conversation.companyId, principalId: sender, principalType: 'user' },
     type: 'bot',
     name: bot.name,
-    metadata: { botId: bot.id, departments: departmentsOf(bot), teamWorkspace: team, source: 'team-bot-chat' },
+    metadata: { botId: bot.id, departments: departmentsOf(bot), source: 'team-bot-chat' },
   });
 }
 

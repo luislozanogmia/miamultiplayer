@@ -248,7 +248,8 @@
           }catch(_e){}
         },
         stop: function(){
-          try{ master.gain.setTargetAtTime(0, ac.currentTime, 0.15); setTimeout(function(){ try{ ac.close(); }catch(_e){} }, 700); }catch(_e){}
+          try{ // Fades under Flow's own wind as it comes up, so the two meet instead of one stopping.
+          master.gain.setTargetAtTime(0, ac.currentTime, 0.7); setTimeout(function(){ try{ ac.close(); }catch(_e){} }, 3500); }catch(_e){}
         }
       };
     }catch(_e){ return null; }

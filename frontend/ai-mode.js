@@ -81,7 +81,7 @@ var MARKUP=
       '<div class="site-body"><div class="site-tabs" id="siteTabs" role="tablist" aria-label="This card\'s pages" hidden></div><div class="site-page" id="sitePage"></div></div>'+
     '</div>'+
     '<div class="intent pad" id="intent"><form id="form" autocomplete="off">'+
-      '<button type="button" class="mode" id="find"><svg class="m-type" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="3.75" width="13" height="8.5" rx="2"/><path d="M4.5 6.8h.01M7 6.8h.01M9.5 6.8h.01M11.5 6.8h.01M5.5 9.6h5"/></svg><svg class="m-find" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg></button>'+
+      '<button type="button" class="mode" id="find"><svg class="m-type" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="1.5" y="3.75" width="13" height="8.5" rx="2"/><path d="M4.5 6.8h.01M7 6.8h.01M9.5 6.8h.01M11.5 6.8h.01M5.5 9.6h5"/></svg><svg class="m-find" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg><svg class="m-chat" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg></button>'+
       '<input id="box" type="text" aria-label="Say what you want" placeholder="Say what you want" enterkeyhint="send">'+
       '<button type="button" class="mic" id="pen" aria-pressed="false" aria-label="Mark on the screen" title="Draw on the screen to show Mia what you mean" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z"/><path d="M9.5 4l2.5 2.5"/></svg></button>'+
       '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
@@ -269,7 +269,7 @@ function readCards(body){
 // Mia's canvas: a view she draws herself when cards are not the best way to show it. It lives in a
 // frame that runs no scripts and loads nothing from outside.
 var CANVAS_BASE='<!doctype html><meta charset="utf-8"><style>:root{color-scheme:dark;--accent:#E3A61B;--soft:rgba(255,255,255,.62);--rule:rgba(255,255,255,.16);--panel:rgba(255,255,255,.06)}'+
-  'html{background:#14120f}body{margin:0;padding:18px;color:#fff;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}</style>';
+  'html{background:#14120f}body{margin:0;padding:18px;color:#fff;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}*{box-sizing:border-box}button,[data-say],[role=button]{cursor:pointer}</style>';
 var canvas={el:null,src:'',at:0,timer:null};
 function readCanvas(text){
   text=String(text||'');
@@ -290,6 +290,35 @@ function canvasHold(){
   var el=canvas.el,hold=$('hold');
   if(el&&el.isConnected&&hold.moveBefore){try{hold.moveBefore(el,null);}catch(e){}}
 }
+// A button she drew does nothing in the frame itself, so the stage hears the press and takes it
+// to her as the person's next direction, with what was typed into the fields beside it.
+function canvasSaid(b,doc){
+  var say=str(b.getAttribute('data-say'),600),label=str(b.textContent.replace(/\s+/g,' '),120)||str(b.getAttribute('aria-label'),120)||str(b.value,120);
+  if(!say&&!label)return '';
+  var filled=[].map.call(doc.querySelectorAll('input,select,textarea'),function(f,i){
+    if(f.type==='password'||f.type==='hidden'||f.type==='file'||f.type==='button'||f.type==='submit')return '';
+    if((f.type==='checkbox'||f.type==='radio')&&!f.checked)return '';
+    var v=str(f.tagName==='SELECT'&&f.selectedOptions[0]?f.selectedOptions[0].textContent:f.value,300);
+    if(!v)return '';
+    var lab=f.labels&&f.labels[0]?f.labels[0].textContent:'';
+    return (str(f.getAttribute('aria-label')||lab||f.name||f.placeholder||'Field '+(i+1),60).replace(/\s+/g,' '))+': '+v;
+  }).filter(Boolean).slice(0,20);
+  return (say||'I pressed the button "'+label+'" on what you drew. Do what it stands for.')+(filled.length?'\n\nWhat I filled in:\n'+filled.join('\n'):'');
+}
+function canvasWire(){
+  var doc=null;try{doc=canvas.el&&canvas.el.contentDocument;}catch(e){}
+  if(!doc||doc.miaWired)return;doc.miaWired=true;
+  doc.addEventListener('click',function(e){
+    var t=e.target&&e.target.closest?e.target:e.target&&e.target.parentElement;if(!t||!t.closest)return;
+    var a=t.closest('a[href]');
+    if(a){e.preventDefault();if(/^https?:/i.test(a.getAttribute('href')||''))siteOpen(a.href);return;}
+    var b=t.closest('[data-say],button,[role=button],input[type=button],input[type=submit]');if(!b||b.disabled)return;
+    e.preventDefault();
+    var said=canvasSaid(b,doc);if(!said||!open)return;
+    direct(said.slice(0,2000),str(b.getAttribute('data-say'),600)||str(b.textContent.replace(/\s+/g,' '),120));
+  });
+  doc.addEventListener('submit',function(e){e.preventDefault();});
+}
 function canvasPlace(){
   var slot=$('canvasSlot'),el=canvas.el;
   if(!slot){if(el)el.remove();return;}
@@ -297,6 +326,7 @@ function canvasPlace(){
     el=canvas.el=document.createElement('iframe');el.className='canvas-f';
     // No scripts run in it; the stage may read its words, so a mark drawn over it says what it is on.
     el.setAttribute('sandbox','allow-same-origin');el.setAttribute('title','What Mia drew');
+    el.addEventListener('load',canvasWire);
   }
   var html=slot.dataset.html||'',wait=900-(Date.now()-canvas.at);
   clearTimeout(canvas.timer);canvas.timer=null;
@@ -513,7 +543,7 @@ function focus(key,picked){
     var url=R.focus!=='page'&&innerWidth>=760?siteOf(R.focus):'';
     site.card=url?R.focus:'';
     if(url){site.open=true;site.wide=false;siteShow(url);}
-    else if(R.focus==='page'&&!site.open){site.open=true;siteDo('state');}
+    else if(R.focus==='page'){site.open=true;pageShow();}
     else if(R.focus!=='page')site.open=false;
   }
   draw();
@@ -534,6 +564,8 @@ function miaLine(){
   if(R.note)return R.note;
   var ask=R.asks.filter(function(a){return a.status==='pending';})[0];
   if(ask)return 'I need your OK before I go on.';
+  ask=crewAsks.filter(function(a){return a.status==='pending';})[0];
+  if(ask)return ask.by+' needs your OK before it goes on.';
   if(R.running&&narrating())return dropHandoffs(R.draft).trim().replace(/[*_`]+/g,'');
   // The last view stays up while she makes the next one, so her line says what she is on.
   if(R.running&&R.keep&&R.draft.indexOf('\n')>0)return /```canvas/i.test(R.draft)?'Building your new view\u2026':'Writing this up\u2026';
@@ -565,7 +597,7 @@ function resultHtml(){
   else if(R.carried&&!R.running){R.carried=false;if(!R.decided){R.picks={};R.leaf=0;}}
   // What a bot brought back takes the stage while the person looks at it.
   var shown=shownBot(),from='';
-  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>'+(shown.chat?'your chat with it':'brought this back')+'</span><button class="btn" data-hide="1">Close</button></div>';}
+  if(shown){text=shown.reply;from='<div class="from"><img alt="" '+moteArt(shown.name)+'><b>'+esc(shown.name)+'</b><span>'+(shown.chat?'your chat with it':'brought this back')+'</span><button class="btn" data-big="1">'+(big?'Smaller':'Bigger')+'</button><button class="btn" data-hide="1">Close</button></div>';}
   // Its tile opens the whole chat with it, read as it stands; nothing in it is drawn as a card.
   if(shown&&shown.chat)return from+'<div class="panel result"><div class="md">'+format(shown.talk==null?'Getting that conversation\u2026':shown.talk||'That conversation has nothing in it yet.')+'</div></div>';
   var drawn=readCanvas(text),read=readCards(drawn.rest),items=read.cards.map(function(c,i){return {key:'c'+i,card:c};});
@@ -585,7 +617,7 @@ function resultHtml(){
 }
 function askHtml(a){
   if(a.status!=='pending')return '<div class="panel ask"><span class="lbl">'+(a.status==='approved'?'Approved':a.status==='declined'?'Not approved':'No longer open')+'</span>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+'</div>';
-  return '<div class="panel ask open"><span class="lbl">Needs you</span><b>Do you approve?</b>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+(a.summary?'<pre>'+esc(a.summary)+'</pre>':'')+
+  return '<div class="panel ask open"><span class="lbl">'+(a.by?esc(a.by)+' needs you':'Needs you')+'</span><b>Do you approve?</b>'+(a.line?'<p>'+esc(a.line)+'</p>':'')+(a.summary?'<pre>'+esc(a.summary)+'</pre>':'')+
     '<div class="acts"><button class="btn primary" data-ask="'+esc(a.id)+'" data-ok="1">Yes</button><button class="btn" data-ask="'+esc(a.id)+'" data-ok="0">No</button></div></div>';
 }
 function choiceHtml(){
@@ -596,6 +628,32 @@ function choiceHtml(){
 }
 // Bots at work: the bots Mia handed a job to, the workers of this run, then the person's own
 // bots that are working right now. A bot Mia put on a job stays until its result was dealt with.
+// "Show LinkedIn big" or "put LinkedIn on stage": that bot's chat takes the whole stage and the
+// other bots draw small; "make it small" gives the stage its usual width back.
+var big=false;
+function stageAsk(t){
+  t=String(t||'').trim();
+  if(big&&shownBot()&&/^(?:make|show) (?:it|that) (?:small|smaller)(?: again)?[.!]?$/i.test(t)){big=false;draw();return true;}
+  var m=/^(?:show|put|bring|open)\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\s+bot)?\s+(?:big|bigger|large|full ?screen|on (?:the )?stage)[.!]?$/i.exec(t);
+  if(!m)return false;
+  var want=m[1].toLowerCase(),mate=crew.filter(function(b){var n=b.name.toLowerCase();return n===want||n.indexOf(want)===0;})[0];
+  if(!mate)return false;
+  mateShow(mate,true,true);return true;
+}
+// mateShow(mate,asChat,wide): the chat with a bot, or what it brought back, takes the stage.
+function mateShow(mate,asChat,wide){
+  // A bot from an earlier visit can be opened before anything was said this time.
+  backToNow();
+  if(!R){R=newRun('');R.running=false;R.sent=true;R.line=asChat?'Here is your chat with '+mate.name+'.':'Here is what '+mate.name+' brought back.';s=2;}
+  var was=!wide&&mate.open&&!!mate.chat===asChat;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.chat=asChat;if(mate.reply)mate.seen=true;R.top=true;big=!!wide;draw();
+  if(mate.open&&asChat){
+    mate.talk=null;
+    chatText({id:mate.conversationId,label:mate.name}).then(function(lines){
+      mate.talk=lines.join('\n\n---\n\n');
+      if(open&&mate.open&&mate.chat){draw();$('cv').scrollTop=$('cv').scrollHeight;}
+    },function(){mate.talk='That conversation could not be opened.';if(open)draw();});
+  }
+}
 function shownBot(){return seeing()?null:crew.filter(function(b){return b.open&&(b.chat||b.reply);})[0]||null;}
 function botLine(b){return b.running?b.line:b.failed?'Could not finish':'Done';}
 function botsHtml(){
@@ -607,7 +665,7 @@ function botsHtml(){
     return '<button class="bot'+(b.open?' on':'')+(b.running?' busy':'')+'" data-'+kind+'="'+i+'" aria-pressed="'+!!b.open+'"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step'+(b.running?'':' done')+'">'+esc(botLine(b))+'</span></button>';
   };}
   // The bots stand at the right edge of the screen, out of the way of what is being shown.
-  return '<div class="rail" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+mine.map(tile('bot')).join('')+own.map(function(b){
+  return '<div class="rail'+(big&&shownBot()?' small':'')+'" aria-label="'+(named.length+own.length===1?'Bot at work':'Bots at work')+'">'+crew.map(tile('crew')).join('')+mine.map(tile('bot')).join('')+own.map(function(b){
     return '<div class="bot busy"><img alt="" '+moteArt(b.name)+'><b>'+esc(b.name)+'</b><span class="step">Working</span></div>';
   }).join('')+'</div>';
 }
@@ -643,9 +701,9 @@ function convoOf(seen){
   var now=R,mia='';R=run;
   try{
     var words=!run.running&&!run.plain&&run.body&&!showsView(run.body)&&showsView(run.keep)?spoken(run.body):'';
-    mia=run.plain?'':words||miaLine();
+    mia=words||miaLine();
   }finally{R=now;}
-  return {by:run.plain?'Chat':run.own?'Mia, on her own':seen?'You said earlier':'You said',said:run.said||'',mia:mia,busy:!!run.running,
+  return {by:run.chat?(run.root?'Thread':'Chat'):run.plain?'Chat':run.own?'Mia, on her own':seen?'You said earlier':'You said',said:run.said||'',mia:mia,busy:!!run.running,
     log:past.length+(now&&now.said?1:0)>1};
 }
 // Words move letter by letter; a long line moves word by word so it stays light.
@@ -710,11 +768,11 @@ function stageHtml(seen){
   var rail=botsHtml(),now=R;stageNow=now;
   if(seen)R=seen;
   try{
-    var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
-    var main=R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
+    var side=seen?filesHtml():crewAsks.concat(R.asks).map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
+    var main=R.chat?chatHtml(R):R.plain?'<div class="panel result"><div class="md">'+format(R.body)+'</div></div>':resultHtml(),quiet=!main&&!side;
     // What was said last is in the strip above; the stage is only the work.
     return '<div class="wrap still'+(quiet?' center':'')+'">'+
-      (quiet?'':'<div class="work'+(side?'':' solo')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
+      (quiet?'':'<div class="work'+(side?'':' solo')+(big&&shownBot()?' big':'')+'"><div class="main">'+main+'</div>'+(side?'<div class="side">'+side+'</div>':'')+'</div>')+'</div>'+rail;
   }finally{R=now;}
 }
 // Stepping through earlier views: left is the past, right comes back up to now. Nothing is sent to Mia.
@@ -739,7 +797,7 @@ function stepsDraw(){
   $('steps').hidden=!a.length&&!peek;
   $('stepBack').disabled=!peek&&at<=0;$('stepNext').disabled=!old;
   $('stepBack').hidden=$('stepNext').hidden=!a.length;
-  $('stepAt').textContent=peek?'A chat you pulled':old?(at+1)+' of '+(a.length+1):'Now';
+  $('stepAt').textContent=peek?(peek.root?'A thread you pulled':'A chat you pulled'):old?(at+1)+' of '+(a.length+1):'Now';
   $('stepNow').hidden=!old;
 }
 // The drawer: what the person asked and what Mia reported, turn by turn. No steps, no tools.
@@ -786,11 +844,10 @@ function chatsDraw(){
 // shows it on the stage and sends nothing; the last row hands the typed words to Mia.
 // The bar does one of two things: it takes a direction for Mia, or it searches. The small sign at its
 // left shows which; Tab in the box, or a click on the sign, changes it. Hands-free starts on search.
-function findMode(){return findOn;}
+function findMode(){return findOn&&!chatOn();}
 function findSet(on){
   findOn=!!on;found=[];
-  var tip=findOn?'Searching your views, chats and artifacts. Press Tab to type to Mia':'Typing to Mia. Press Tab to search';
-  $('find').classList.toggle('find',findOn);$('find').title=tip;$('find').setAttribute('aria-label',tip);
+  $('find').classList.toggle('find',findOn);barDraw();
   findDraw();if(!earState)$('box').placeholder=boxHint();
 }
 function findRun(){
@@ -824,30 +881,75 @@ function findPick(r){
 // A chat's messages as the app keeps them, newest last: a company chat through the app's own
 // reader, any other from the conversation itself. Nothing is sent or marked read.
 function chatText(r){
-  var name=function(who){return '**'+String(who||'Someone').replace(/[*_`]/g,'')+'**\n\n';};
+  return chatLines(r).then(function(lines){
+    return lines.map(function(l){return '**'+String(l.who||'Someone').replace(/[*_`]/g,'')+'**\n\n'+l.text;});
+  });
+}
+// The same messages one by one, each with its own id and the message it answers in a thread.
+function chatLines(r){
   if(r.hub)return Promise.resolve(appHost().chatLines(r)).then(function(lines){
-    return (lines||[]).slice(-60).map(function(l){return name(l.who)+String(l.text).slice(0,6000);});
+    return (lines||[]).slice(-60).map(function(l){return {who:l.who,text:String(l.text).slice(0,6000),id:l.id||'',root:l.root||''};});
   });
   return call(chat(r.id,'/events?latest=true&limit=100')).then(function(d){
     return (Array.isArray(d.data.events)?d.data.events:[]).slice().sort(function(a,b){return a.sequence-b.sequence;}).map(function(ev){
       var meta=(ev&&ev.metadata)||{},text=ev&&ev.content&&typeof ev.content.text==='string'?ev.content.text.trim():'';
-      if(!text||ev.deletedAt||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return '';
+      if(!text||ev.deletedAt||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo)return null;
       // A job Mia handed over reads as hers, without the working notes she adds for the bot.
       var brief=text.search(/\s*\[From Mia, in [^\]\n]{1,20}\]/),handed=brief>=0;
       if(handed)text=text.slice(0,brief);
-      if(!text)return '';
-      return name(handed?'Mia':ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label:'Someone')+text.slice(0,6000);
+      if(!text)return null;
+      return {who:handed?'Mia':ev.senderType==='user'?'You':ev.senderType==='agent'||ev.senderType==='bot'?r.label:'Someone',text:text.slice(0,6000),id:ev.id||'',root:ev.parentEventId||''};
     }).filter(Boolean).slice(-60);
   });
 }
-function readChat(r){
-  var p=peek=newRun(r.label);p.chatId=r.id;p.running=false;p.past=p.plain=true;p.line='Getting that conversation…';view=-1;draw();
-  chatText(r).then(function(lines){
+// A chat that was pulled is on the stage with the bar under it as its message box: what is written
+// there is sent to that chat, or into the thread that is open, the way the app's own composer sends it.
+var chatTimer=null;
+function chatOn(){return peek&&peek.chat?peek:null;}
+function chatLoad(p,end){
+  return chatLines(p.chat).then(function(lines){
     if(peek!==p)return;
-    p.body=lines.join('\n\n---\n\n');
-    p.line=lines.length?'Here is that conversation. Nothing was sent.':'That conversation has nothing in it yet.';
-    if(open){draw();$('cv').scrollTop=$('cv').scrollHeight;}
-  },function(){if(peek===p){p.line='That conversation could not be opened.';if(open)draw();}});
+    var grew=lines.length!==p.lines.length;
+    p.lines=lines;p.body=lines.map(function(l){return l.who+': '+l.text;}).join('\n\n');
+    if(!p.note)p.line=lines.length?'Here is that conversation. What you write below is sent to it.':'That conversation has nothing in it yet. What you write below is sent to it.';
+    if(open){draw();if(end||grew)$('cv').scrollTop=$('cv').scrollHeight;}
+  },function(){if(peek===p&&!p.lines.length){p.line='That conversation could not be opened.';if(open)draw();}});
+}
+function readChat(r){
+  var p=peek=newRun(r.label);p.chat=r;p.chatId=r.id;p.lines=[];p.root='';p.running=false;p.past=p.plain=true;p.line='Getting that conversation…';view=-1;draw();
+  chatLoad(p,true);
+  // What others write shows up while the chat is on the stage.
+  clearInterval(chatTimer);chatTimer=setInterval(function(){var c=open&&chatOn();if(c)chatLoad(c);else{clearInterval(chatTimer);chatTimer=null;}},5000);
+}
+function chatHtml(p){
+  var replies={},top=[],root=null;
+  p.lines.forEach(function(l){if(l.root)replies[l.root]=(replies[l.root]||0)+1;else top.push(l);if(p.root&&l.id===p.root)root=l;});
+  var row=function(l,inThread){
+    var n=replies[l.id]||0;
+    return '<div class="msg"><b>'+esc(l.who||'Someone')+'</b><div class="md">'+format(l.text)+'</div>'+
+      (inThread||!l.id?'':'<button class="thread" data-thread="'+esc(l.id)+'">'+(n?n+(n===1?' reply':' replies'):'Reply')+'</button>')+'</div>';
+  };
+  if(p.root&&!root)p.root='';
+  var rows=p.root?[row(root,true)].concat(p.lines.filter(function(l){return l.root===p.root;}).map(function(l){return row(l,true);})):top.map(function(l){return row(l,false);});
+  return '<div class="panel result talk">'+(p.root?'<button class="thread back" data-thread="">\u2190 Back to '+esc(p.said)+'</button>':'')+rows.join('')+'</div>';
+}
+function chatSay(){
+  var p=chatOn(),box=$('box'),t=box.value.trim();if(!p||!t||p.sending)return;
+  var send=appHost().chatSend;
+  if(!send){p.note=p.line='Messages are sent from the Mia desktop app.';draw();return;}
+  box.value='';p.sending=true;p.note='';
+  Promise.resolve(send(p.chat,t.slice(0,6000),p.root||'')).then(function(ok){return ok;},function(){return false;}).then(function(ok){
+    p.sending=false;
+    if(peek!==p)return;
+    if(!ok){if(!box.value)box.value=t;p.note=p.line='That was not sent. Try again.';if(open)draw();return;}
+    chatLoad(p,true);
+  });
+}
+// The bar's sign: a pulled chat turns the bar into its message box, and a click on the sign leaves it.
+function barDraw(){
+  var p=chatOn(),b=$('find'),tip=p?'Writing to '+p.said+'. Click to go back to Mia':findOn?'Searching your views, chats and artifacts. Press Tab to type to Mia':'Typing to Mia. Press Tab to search';
+  $('form').classList.toggle('chat',!!p);b.classList.toggle('chat',!!p);b.title=tip;b.setAttribute('aria-label',tip);
+  if(p){found=[];$('finds').hidden=true;}
 }
 function draw(){
   clearTimeout(drawTimer);drawTimer=null;
@@ -874,7 +976,7 @@ function draw(){
     lv=$('leaves');if(lv&&lx>=0){lv._placed=true;lv.scrollLeft=lx;deckMark();}
     cv._h=h;cv._k=key;
   }
-  canvasPlace();stepsDraw();logDraw();chatsDraw();deckPlace();
+  canvasPlace();stepsDraw();logDraw();chatsDraw();deckPlace();barDraw();
   // The finished work is read from its top; while it grows the view follows the newest line.
   if(R&&R.top){R.top=false;cv.scrollTop=0;}else cv.scrollTop=R&&R.running&&atEnd?cv.scrollHeight:top;
   var live=s===2&&R&&R.running;
@@ -970,6 +1072,18 @@ function listen(id,onEv,onAct){
 }
 // Each bot Mia put on the work does it in its own chat; the stage follows it there, and keeps
 // following while the person gives Mia the next thing.
+var crewAsks=[];
+function botAsk(bot,q){
+  var old=crewAsks.filter(function(a){return a.id===q.id;})[0];
+  if(old){if(old.status==='pending')old.status=q.status||old.status;}
+  else{
+    if(q.status&&q.status!=='pending')return;
+    if(crewAsks.length>=12)crewAsks.shift();
+    crewAsks.push({id:q.id,by:bot.name,line:str(q.line,300),summary:str(q.summary,600),status:'pending'});
+    speak(bot.name+' needs your OK before it goes on.');
+  }
+  redraw();
+}
 function followBot(b){
   if(!b||!b.conversationId)return;
   var bot=crew.filter(function(x){return x.conversationId===b.conversationId;})[0];
@@ -979,7 +1093,9 @@ function followBot(b){
   if(botSocks[b.conversationId])return;
   botSocks[b.conversationId]=listen(b.conversationId,function(ev){
     var meta=(ev&&ev.metadata)||{};
-    if(!open||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||meta.askBeforeDo||Date.parse(ev.createdAt)<bot.at)return;
+    // A bot that needs an OK asks in its own chat; the person is here, so the card comes to the stage.
+    if(open&&ev&&meta.askBeforeDo&&meta.askBeforeDo.id){botAsk(bot,meta.askBeforeDo);return;}
+    if(!open||!ev||(ev.senderType!=='agent'&&ev.senderType!=='bot')||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<bot.at)return;
     var text=ev.content&&typeof ev.content.text==='string'?ev.content.text:'';
     if(!text)return;
     bot.reply=text.slice(0,20000);bot.running=false;
@@ -1032,7 +1148,7 @@ function newChat(){
   host.classList.remove('driving');$('back').hidden=true;
   draw();openChat(true).catch(function(){});$('box').focus();
 }
-function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];}
+function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];crewAsks=[];}
 // Mia's chat for this visit: made once, then every direction goes into it.
 function openChat(fresh){
   if(conv)return Promise.resolve(conv);
@@ -1181,6 +1297,7 @@ function inkWire(){
 }
 function direct(t,shown){
   startAudio();
+  if(!shown&&stageAsk(t))return;
   var marked=inkNote();
   if(marked){shown=shown||t;t+=marked;}
   if(ink.on)inkSet(false);
@@ -1238,7 +1355,7 @@ function halt(reason){
   },function(){});
 }
 function answer(id,ok){
-  var a=R.asks.filter(function(x){return x.id===id;})[0];if(!a)return;
+  var a=crewAsks.concat(R?R.asks:[]).filter(function(x){return x.id===id;})[0];if(!a)return;
   a.status=ok?'approved':'declined';draw();
   call('/api/ask-before-do/'+encodeURIComponent(id),{approved:ok}).then(function(r){if(r.status>=400){a.status='gone';draw();}},function(){a.status='gone';draw();});
 }
@@ -1246,11 +1363,11 @@ function answer(id,ok){
 function takeWheel(){
   drive=true;hush();halt('take-over');
   host.classList.add('driving');$('back').hidden=false;sitePlace();
-  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
 }
 function handBack(){
   drive=false;host.classList.remove('driving');$('back').hidden=true;sitePlace();
-  if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
+  if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
   direct('(I took over and did part of this myself in the app. Look at how things stand now, keep what I did, and continue from there.)','You took the wheel, then handed it back.');
 }
 // A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
@@ -1427,6 +1544,15 @@ function siteTab(url){
     var tab=(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return samePage(t.url,url);})[0];
     if(tab)return siteDo('select',{id:tab.id});
     return siteDo('new').then(function(){return siteDo('navigate',{value:url});});
+  }).catch(function(){});
+}
+// The card of the page Mia is in opens the tab she is in, whichever tab the person left in front.
+function pageShow(){
+  var url=R&&R.page&&R.page.url;
+  web.command({action:'state'}).then(function(st){
+    var tab=url?(st&&Array.isArray(st.tabs)?st.tabs:[]).filter(function(t){return t.url===url||samePage(t.url,url);})[0]:null;
+    if(tab)return siteDo('select',{id:tab.id});
+    if(st&&st.tabs)siteState(st);
   }).catch(function(){});
 }
 // siteShow(url): the tab already on that site comes forward; without one the site opens in a new tab.
@@ -1693,7 +1819,7 @@ function hush(){
 // The words are written down on this computer by the same recorder the chat box uses.
 // Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
 var ear=null,earState='';
-function boxHint(){return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):findMode()?'Search your views, chats and artifacts':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
+function boxHint(){var c=chatOn();if(c)return c.root?'Reply in thread':'Message '+c.said;return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):findMode()?'Search your views, chats and artifacts':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
 function earParts(){
   var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
   return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
@@ -1704,7 +1830,7 @@ function earShow(state,note){
   // Hands-free says where it is at the top right; the bar below is then for searching.
   if(talkOn){$('earsSay').textContent=note||(state==='on'?'I am listening\u2026':state==='wait'?'Writing it down\u2026':talkMuted?'Mic is muted':'Just talk');$('box').placeholder=boxHint();}
   else $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
-  if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,0.1);
+  if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,state==='on'?0.25:0.8);
   hold(slow&&!!state);
 }
 // The speech model writes sounds it hears as notes, "(keyboard clicking)"; those are not the person's words.
@@ -1721,7 +1847,9 @@ function earToggle(){
       t=heard(t);
       if(earState!=='wait')return;
       earShow('',t?'':'I did not catch that. Press the mic and try again.');
-      if(t&&open)direct(t.slice(0,2000));
+      // In a pulled chat the words land in its box, to be read before they are sent.
+      if(t&&open&&chatOn()){$('box').value=($('box').value+' '+t).trim();$('box').focus();}
+      else if(t&&open)direct(t.slice(0,2000));
     },function(){earStop('I could not write down what you said. Type it here.');});
   }
   if(!ear)ear=parts.D.createRecorder({media:parts.media,MediaRecorder:window.MediaRecorder,AudioContext:parts.Context,transcribe:window.MiaSpeech.transcribe});
@@ -1771,6 +1899,13 @@ function talkStop(note){
   talkOn=false;talkMuted=false;stoodBy=false;findOn=false;if(talk)talk.stop();
   if(host){talkShow();earShow('',note);}
 }
+// Hands-free hears the room too. The speech model writes a few stock lines over noise, and a word or two
+// said while Mia works is not a new direction: neither is sent, so the turn she is on is not cut off.
+var PHANTOM=/^\W*(thank you|thanks for watching|thank you for watching|you|bye|hmm+|mm+|uh+|um+|ah+|gracias|subt[i\u00ed]tulos\b.*)\W*$/i;
+function chatter(t){
+  if(PHANTOM.test(t))return 1;
+  return R&&R.running&&t.split(/\s+/).length<3?2:0;
+}
 function talkStart(){
   var parts=earParts();if(!parts||talkOn)return;
   earStop();talkOn=true;talkMuted=false;findOn=true;talkShow();
@@ -1785,6 +1920,8 @@ function talkStart(){
       if(!t||!open)return;
       if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
       if(/^\W*(mia\W+)?(stand\W?by|en espera)(\W+mia)?\W*$/i.test(t)){standBy();return;}
+      var noise=chatter(t);
+      if(noise){if(noise>1)earShow('','I heard \u201c'+str(t,40)+'\u201d and kept working. Say a full sentence to redirect me, or \u201cstop\u201d.');return;}
       direct(t.slice(0,2000));
     }});
   window.MiaSpeech.ready({
@@ -1812,13 +1949,15 @@ function startAudio(){
   if(ac){if(ac.state==='suspended')ac.resume();return;}
   var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
   ac=new AC();master=ac.createGain();master.gain.value=0;master.connect(ac.destination);
-  master.gain.linearRampToValueAtTime(muted?0:1,ac.currentTime+3);
+  // Every change of loudness eases from where it is, so the wind never starts or stops at once.
+  master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
   var wf=ac.createBiquadFilter();wf.type='bandpass';wf.frequency.value=300;wf.Q.value=0.8;
-  var wg=ac.createGain();wg.gain.value=0.01;noise().connect(wf);wf.connect(wg);wg.connect(master);
+  var wg=ac.createGain();wg.gain.value=0.04;noise().connect(wf);wf.connect(wg);wg.connect(master);
+  // A gust swells and settles to a floor that is still heard, and the next one starts before the last has gone.
   (function gust(){var t=ac.currentTime,up=2.5+Math.random()*2,down=3+Math.random()*3;
-    wg.gain.cancelScheduledValues(t);wg.gain.setValueAtTime(wg.gain.value,t);wg.gain.linearRampToValueAtTime(0.05+Math.random()*0.05,t+up);wg.gain.linearRampToValueAtTime(0.01,t+up+down);
-    wf.frequency.cancelScheduledValues(t);wf.frequency.setValueAtTime(wf.frequency.value,t);wf.frequency.linearRampToValueAtTime(380+Math.random()*320,t+up);wf.frequency.linearRampToValueAtTime(260,t+up+down);
-    setTimeout(gust,(up+down+4+Math.random()*9)*1000);})();
+    wg.gain.setTargetAtTime(0.05+Math.random()*0.05,t,up/3);wg.gain.setTargetAtTime(0.028,t+up,down/3);
+    wf.frequency.setTargetAtTime(380+Math.random()*320,t,up/3);wf.frequency.setTargetAtTime(280,t+up,down/3);
+    setTimeout(gust,(up+down+1+Math.random()*4)*1000);})();
 }
 function plink(px,sc){
   if(!ac||muted||!open)return;var t=ac.currentTime,g=ac.createGain(),o=ac.createOscillator(),base=520+Math.random()*380;
@@ -1871,15 +2010,16 @@ function build(){
   $('leave').onclick=leave;
   $('form').onsubmit=function(e){
     e.preventDefault();
+    if(chatOn()){chatSay();return;}
     if(findMode()){if(found.length)findPick(found[0]);return;}
     var t=$('box').value.trim();if(!t&&ink.marks.length)t='Look at what I marked.';if(!t)return;$('box').value='';direct(t.slice(0,2000));
   };
   $('box').addEventListener('input',function(){if(findMode())findRun();});
   $('box').addEventListener('keydown',function(e){
-    if(e.key!=='Tab'||e.shiftKey||e.altKey||e.ctrlKey||e.metaKey||ink.on)return;
+    if(e.key!=='Tab'||e.shiftKey||e.altKey||e.ctrlKey||e.metaKey||ink.on||chatOn())return;
     e.preventDefault();findSet(!findOn);if(findOn)findRun();
   });
-  $('find').onclick=function(){findSet(!findOn);if(findOn)findRun();$('box').focus();};
+  $('find').onclick=function(){if(chatOn()){peek=null;view=-1;draw();$('box').focus();return;}findSet(!findOn);if(findOn)findRun();$('box').focus();};
   $('finds').onclick=function(e){var b=e.target&&e.target.closest&&e.target.closest('[data-find]');if(b)findPick(found[+b.dataset.find]);};
   $('stepBack').onclick=function(){step(-1);};$('stepNext').onclick=function(){step(1);};$('stepNow').onclick=function(){if(backToNow()){draw();$('cv').scrollTop=0;}};
   $('convo').onclick=function(e){if(e.target.closest('[data-log]')){drawerOn=true;logDraw();return;}};
@@ -1925,6 +2065,15 @@ function build(){
     else page.requestFullscreen().then(function(){fullOwn=true;},function(){});
   };
   document.addEventListener('fullscreenchange',function(){$('full').textContent=document.fullscreenElement?'Exit full screen':'Full screen';if(!document.fullscreenElement)fullOwn=false;});
+  // A click on the empty stage beside a chat that was pulled, or beside a bot's chat, closes it.
+  $('stage').addEventListener('click',function(e){
+    var t=e.target;if((!peek&&!shownBot())||!t||!t.closest)return;
+    // Only the bare stage counts: the gaps between what is drawn, never a card, a picture or a control.
+    var empty=t.id==='stage'||t.id==='rain'||t.id==='cv'||(t.parentNode&&t.parentNode.id==='cv')||/(^| )(work|main|side)( |$)/.test(String(t.className||''));
+    if(!empty||String(window.getSelection&&window.getSelection()||''))return;
+    if(peek){peek=null;view=-1;}else{crew.forEach(function(x){x.open=false;});big=false;}
+    draw();
+  });
   $('cv').addEventListener('click',function(e){
     // A decision at the edge of the deck is turned to, not answered or followed.
     var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
@@ -1942,10 +2091,11 @@ function build(){
     if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
     // A card's own button is a direction to Mia about that card, not a pick of the card.
     var act=e.target&&e.target.closest&&e.target.closest('[data-act]');
-    if(act){if(R&&!seeing()&&!R.running)direct(act.dataset.act);return;}
+    if(act){direct(act.dataset.act);return;}
     var it=(R||seeing())&&e.target&&e.target.closest&&e.target.closest('[data-item]');
     if(it){focus(it.dataset.item,true);return;}
     var b=e.target&&e.target.closest&&e.target.closest('button');if(!b)return;
+    if(b.dataset.thread!==undefined&&chatOn()){chatOn().root=b.dataset.thread;draw();$('cv').scrollTop=$('cv').scrollHeight;$('box').focus();return;}
     if(b.dataset.turn||b.dataset.dot){var run=seeing()||R;deckTo(b.dataset.dot?+b.dataset.dot:(run&&run.leaf||0)+(+b.dataset.turn),true);return;}
     if(b.dataset.pick){deckPick(b.dataset.of,b.dataset.pick);return;}
     if(b.dataset.decided){deckSend();return;}
@@ -1953,19 +2103,7 @@ function build(){
       var mate=crew[+(b.dataset.crew||b.dataset.show)];
       // The tile opens the chat with that bot; "Show me" opens what it brought back.
       var asChat=!!b.dataset.crew;
-      if(mate&&(asChat||mate.reply)){
-        // A bot from an earlier visit can be opened before anything was said this time.
-        backToNow();
-        if(!R){R=newRun('');R.running=false;R.sent=true;R.line=asChat?'Here is your chat with '+mate.name+'.':'Here is what '+mate.name+' brought back.';s=2;}
-        var was=mate.open&&!!mate.chat===asChat;crew.forEach(function(x){x.open=false;});mate.open=!was;mate.chat=asChat;if(mate.reply)mate.seen=true;R.top=true;draw();
-        if(mate.open&&asChat){
-          mate.talk=null;
-          chatText({id:mate.conversationId,label:mate.name}).then(function(lines){
-            mate.talk=lines.join('\n\n---\n\n');
-            if(open&&mate.open&&mate.chat){draw();$('cv').scrollTop=$('cv').scrollHeight;}
-          },function(){mate.talk='That conversation could not be opened.';if(open)draw();});
-        }
-      }
+      if(mate&&(asChat||mate.reply))mateShow(mate,asChat,false);
       return;
     }
     if(!R||seeing())return;
@@ -1973,13 +2111,14 @@ function build(){
     else if(b.dataset.opt)direct(R.options[+b.dataset.opt]);
     else if(b.dataset.next)direct(R.next);
     else if(b.dataset.bot){var bot=R.bots[+b.dataset.bot];if(bot){bot.open=!bot.open;draw();}}
-    else if(b.dataset.hide){crew.forEach(function(x){x.open=false;});draw();}
+    else if(b.dataset.big){big=!big;draw();}
+    else if(b.dataset.hide){crew.forEach(function(x){x.open=false;});big=false;draw();}
     else if(b.dataset.manage){
       var left=crew[+b.dataset.manage];
       if(left){left.seen=true;direct('Look at what '+left.name+' brought back and take it from here. Tell me only what needs me.','You manage '+left.name+'.');}
     }
   });
-  $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.2);};
+  $('mute').onclick=function(){muted=!muted;this.textContent=muted?'Sound off':'Sound on';if(muted)hush();if(R)redraw();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.35);};
   // Keys typed on the stage stay on the stage; Esc brings the app back.
   // Esc puts the item at the front back with the others first.
   // A phone's keyboard covers the bottom of the page; the box rides above it.
@@ -2011,7 +2150,7 @@ function enter(){
   if(pane()&&!webOff)webOff=web.onState(siteState);
   if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
-  startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,0.6);
+  startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
   ask='';askNote='';voiceAskDraw();
   voiceCheck().then(function(){if(open&&s===1)welcome();});
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
@@ -2025,7 +2164,7 @@ function leave(){
   open=false;clearTimeout(drawTimer);drawTimer=null;inkSet(false);hush();earStop();talkStop();seedId++;
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
-  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.3);
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
   host.classList.remove('driving');$('back').hidden=true;drive=false;
   site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');

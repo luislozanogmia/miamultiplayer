@@ -19531,7 +19531,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19568,6 +19568,16 @@
   }
   // A company chat's newest page, read the way the sidebar reads it for its
   // preview: who wrote each message, and what it says. Nothing is marked read.
+  // What is written in Flow's chat box goes out the way the composer sends it, to
+  // the chat that was pulled and, with a root, into that thread.
+  function aiModeChatSend(row, text, rootId){
+    var roomId = row && row.id;
+    text = String(text || '').trim();
+    if(!roomId || !text) return Promise.resolve(false);
+    return Promise.resolve(sendActiveRoomMessage(text, rootId || null, null, roomId)).then(function(res){
+      return !!res && (res.status === 200 || res.status === 201);
+    });
+  }
   function aiModeChatLines(row){
     var roomId = row && row.id;
     if(!roomId || !hubWorkspace() || !hubChannel(roomId)) return Promise.resolve([]);
@@ -19579,7 +19589,7 @@
         var bot = String(m.sender || '').indexOf('hub-bot:') === 0;
         var text = bot ? displayBotBody(m.body) : m.body;
         if(!text) return null;
-        return {who: bot ? (messageBotIdentity(m).name || 'Bot') : String(m.sender || '').toLowerCase() === me ? 'You' : displayNameForEmail(m.sender), text: String(text)};
+        return {who: bot ? (messageBotIdentity(m).name || 'Bot') : String(m.sender || '').toLowerCase() === me ? 'You' : displayNameForEmail(m.sender), text: String(text), id: m.id || '', root: m.threadRoot || ''};
       }).filter(Boolean);
     });
   }

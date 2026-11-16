@@ -114,7 +114,11 @@ function turnNote(hub) {
     'already set, and these colors ready: var(--accent) the gold, var(--soft) quiet text, var(--rule) ' +
     'lines, var(--panel) a raised surface. Fill the width, keep it readable from a step back, and one ' +
     'screen tall when you can. It is yours to edit: when the person asks for a change, write the whole ' +
-    'canvas again with the change. One canvas in a reply, after your first sentence, and no cards beside ' +
+    'canvas again with the change. A button on your canvas reaches you: write <button data-say="what ' +
+    'pressing it means, in the person\'s words">Label</button> and a press comes to you as their next ' +
+    'direction, with what they typed into any field you drew. Nothing else on the canvas does ' +
+    'anything by itself, so give every button a data-say, and never draw a control that goes nowhere. ' +
+    'One canvas in a reply, after your first sentence, and no cards beside ' +
     'it. Never build a page as a file and open it in the browser to show something you made: the canvas ' +
     'is where you show it. The browser is for real sites.\n' +
     '- No bot fits the job: do it yourself. When it splits into parts that can go on at the same time, hand ' +
@@ -221,7 +225,7 @@ function matchModel(name, providers) {
 function routerNote(hub) {
   const bots = (hub && Array.isArray(hub.bots) ? hub.bots : [])
     .map((bot) => ({ name: clip(bot && bot.name, 60), about: clip(bot && bot.about, 140) }))
-    .filter((bot) => bot.name).slice(0, 24);
+    .filter((bot) => bot.name).slice(0, 60);
   if (!bots.length) return '';
   const models = (hub && Array.isArray(hub.models) ? hub.models : []).map((model) => clip(model, 80)).filter(Boolean).slice(0, 30);
   const reports = (hub && Array.isArray(hub.reports) ? hub.reports : []).slice(-8);
@@ -235,6 +239,10 @@ function routerNote(hub) {
     'reply. Say in your first sentence which bot you put on it, and end your reply there: do not wait for ' +
     'the bot and do not do its job yourself. The person watches the bot work on the stage and gives you ' +
     'the next thing meanwhile. Prefer a bot that fits over doing the job yourself.\n' +
+    '- One list, many bots. When the person gives one list of things to do (people to reach, pages to ' +
+    'check, files to go through) and more than one bot fits, split the list yourself: one hand-off per ' +
+    'bot, each brief carrying only its own share of the list in full, and one sentence saying who got ' +
+    'which. Do not ask the person to brief each bot.\n' +
     (models.length
       ? '- Models. A bot runs on its own model unless you add a line "Model: <name>" between Handoff and ' +
         'Brief. The person has these connected: ' + models.join(', ') + '. What the person says about ' +

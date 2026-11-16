@@ -152,8 +152,17 @@ div.bot{cursor:default;opacity:1}
 .mic.off::after{content:"";position:absolute;left:50%;top:50%;width:22px;height:1.6px;border-radius:1px;background:currentColor;transform:translate(-50%,-50%) rotate(-45deg)}
 /* the sign at the left of the bar: a keyboard while it takes a direction, a lens while it searches */
 .intent .mode{appearance:none;flex:none;width:28px;height:32px;margin-left:-8px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;display:grid;place-items:center}
-.intent .mode .m-find,.intent .mode.find .m-type{display:none}
-.intent .mode.find .m-find{display:block}
+.intent .mode .m-find,.intent .mode .m-chat,.intent .mode.find .m-type,.intent .mode.chat .m-type,.intent .mode.chat .m-find{display:none}
+.intent .mode.find .m-find,.intent .mode.chat .m-chat{display:block}
+.intent .mode.chat{color:var(--accent-text)}
+.intent form.chat #pen{display:none}
+.talk{display:flex;flex-direction:column;gap:14px}
+.talk .msg{min-width:0}
+.talk .msg>b{display:block;margin-bottom:2px;font:600 12px var(--sans);color:var(--ink)}
+.talk .msg .md p:last-child{margin-bottom:0}
+.talk .thread{appearance:none;border:0;background:none;padding:2px 0;margin-top:2px;font:11px var(--sans);color:var(--muted);cursor:pointer}
+.talk .thread:hover{color:var(--accent-text)}
+.talk .thread.back{align-self:flex-start;font-size:12px}
 .intent .mode.find{color:var(--accent-text)}
 /* The pen: marks drawn over the stage, numbered in the order drawn. */
 .ink{position:absolute;inset:var(--top) 0 var(--bottom) 0;z-index:2;cursor:crosshair;touch-action:none}
@@ -502,3 +511,9 @@ a.file:hover{border-color:var(--accent)}
 .voice-ask input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .voice-ask .va-note{color:var(--accent)}
 .voice-ask .va-row{display:flex;gap:8px}
+/* A bot put on the stage: its chat takes the whole width and the other bots draw small. */
+.work.big,.work.big.solo{grid-template-columns:minmax(0,1fr);max-width:none}
+.rail.small .bot:not(.on){width:46px;opacity:.5}
+.rail.small .bot:not(.on) img{width:20px}
+.rail.small .bot:not(.on) .step{display:none}
+.rail.small .bot:not(.on) b{font-size:10px}
