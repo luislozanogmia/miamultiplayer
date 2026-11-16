@@ -14,11 +14,12 @@
   var ALLOWED = [
     ['POST', /^\/api\/conversations\/ai-mode$/],
     ['POST', new RegExp('^/api/conversations/(' + ID + ')/events$'), true],
+    ['GET', new RegExp('^/api/conversations/(' + ID + ')/events\\?latest=true&limit=100$'), true],
     ['GET', new RegExp('^/api/conversations/(' + ID + ')/dispatches/active$'), true],
     ['POST', new RegExp('^/api/conversations/(' + ID + ')/dispatches/' + ID + '/stop$'), true],
     ['POST', /^\/api\/ai-mode\/(?:seed|speech)$/],
     ['GET', /^\/api\/ai-mode\/voices$/],
-    ['GET', new RegExp('^/api/ai-mode/handoffs\\?conversation=' + ID + '$')],
+    ['GET', new RegExp('^/api/ai-mode/handoffs\\?conversation=(' + ID + ')$'), true],
     ['GET', /^\/api\/ai-mode\/images\?q=[^&#]{1,600}$/],
     ['GET', /^\/api\/ai-mode\/image\?u=[^&#]{1,3000}$/],
     ['GET', /^\/api\/ai-mode\/page\?since=[0-9]{1,16}$/],
@@ -111,6 +112,15 @@
               if(typeof id === 'string') (chats[device] = chats[device] || {})[id] = true;
             } catch(_noChat) {}
           }
+          else if(head.path.startsWith('/api/ai-mode/handoffs?conversation=') && result.status < 300){
+            try {
+              var bots = JSON.parse(Link.text(result.bytes)).bots;
+              if(Array.isArray(bots)) bots.slice(0, 20).forEach(function(bot){
+                if(bot && typeof bot.conversationId === 'string' && bot.conversationId.length <= 120)
+                  (chats[device] = chats[device] || {})[bot.conversationId] = true;
+              });
+            } catch(_noBots) {}
+          }
         }
       } catch(_failed) { result = json(502, {error:'computer_unavailable'}); }
       var parts = Link.chunks(result.bytes);
@@ -141,7 +151,8 @@
       // The phone only ever asks to follow a chat; nothing else is passed on.
       try {
         var said = JSON.parse(Link.text(payload));
-        if(said && said.type === 'subscribe' && typeof said.conversationId === 'string') live.send(JSON.stringify({type:'subscribe',
+        if(said && said.type === 'subscribe' && typeof said.conversationId === 'string' &&
+           chats[device] && chats[device][said.conversationId]) live.send(JSON.stringify({type:'subscribe',
           conversationId:said.conversationId, afterSequence:Number.isSafeInteger(said.afterSequence) && said.afterSequence > 0 ? said.afterSequence : 0}));
       } catch(_notJson) {}
     }

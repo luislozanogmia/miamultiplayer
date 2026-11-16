@@ -115,8 +115,11 @@ test('the computer\'s held read and its sends to the Hub get room and time', () 
 });
 
 test('the phone can read its Flow handoff reports and page pictures through the bounded relay', () => {
-  const allowed = (method, path) => Host.allowedRequest('phone', method, path, {});
+  const chats = { phone: { flow_1: true } };
+  const allowed = (method, path) => Host.allowedRequest('phone', method, path, chats);
   assert.equal(allowed('GET', '/api/ai-mode/handoffs?conversation=flow_1'), true);
+  assert.equal(allowed('GET', '/api/ai-mode/handoffs?conversation=other'), false);
+  assert.equal(allowed('GET', '/api/conversations/flow_1/events?latest=true&limit=100'), true);
   assert.equal(allowed('GET', '/api/ai-mode/page?since=123'), true);
   assert.equal(allowed('POST', '/api/ai-mode/page'), false);
   assert.equal(allowed('GET', '/api/conversations/other/events?latest=true'), false);

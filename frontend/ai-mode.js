@@ -49,6 +49,7 @@ var MARKUP=
     '<div id="hold" hidden></div>'+
     '<div class="phone-bar" id="phoneBar" hidden>'+
       '<b>Flow mode on your phone</b>'+
+      '<a href="https://miamultiplayer.com/phone/" target="_blank" rel="noopener noreferrer">Open Mia on your phone</a>'+
       '<p id="phoneNote"></p>'+
       '<output class="phone-code" id="phoneCode" hidden></output>'+
       '<ul id="phoneList"></ul>'+
