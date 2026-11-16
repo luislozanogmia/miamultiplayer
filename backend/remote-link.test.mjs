@@ -1,6 +1,6 @@
 // Remote link: a phone uses AI mode on the person's computer through the Hub.
-// The Hub here is a small stand-in written from the API the app calls: it
-// passes sealed frames between the two and reads none of them.
+// Only the app's own side is checked here. The Hub's side is tested in the
+// Hub's own repository, and no stand-in for it is written in this one.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -12,67 +12,9 @@ import { buildPhonePage, PHONE_FILES } from '../scripts/build_phone_page.mjs';
 
 const require = createRequire(import.meta.url);
 const Link = require('../frontend/remote-link-core.js');
-const { createHost } = require('../frontend/remote-link-host.js');
-const { createPhone } = require('../frontend/remote-link-phone.js');
 const { readState, writeState } = require('./remote-link.js');
 const { hubRouteLimits } = require('./hub-client.js');
 
-function fail(status, code) { const error = new Error(code); error.status = status; error.code = code; return error; }
-// Frames wait in a queue until the reader names the last one it got.
-class Queue {
-  frames = []; seq = 0; epoch = randomBytes(4).toString('hex'); waiter = null;
-  push(items) { for (const item of items) this.frames.push({ seq: ++this.seq, ...item }); this.wake(); }
-  wake() { const resume = this.waiter; this.waiter = null; if (resume) resume(); }
-  async take(body) {
-    const after = body.epoch === this.epoch ? body.after : 0;
-    this.frames = this.frames.filter(frame => frame.seq > after);
-    this.wake();
-    if (!this.frames.length) await new Promise(resolve => { const timer = setTimeout(resolve, 150); this.waiter = () => { clearTimeout(timer); resolve(); }; });
-    return { epoch: this.epoch, frames: this.frames.slice() };
-  }
-}
-function relay() {
-  const pairings = new Map(), devices = new Map(), up = new Queue(), down = new Map(), seen = [];
-  let hostAt = 0;
-  const forget = id => { devices.delete(id); down.get(id)?.wake(); down.delete(id); up.frames = up.frames.filter(frame => frame.device !== id); };
-  return {
-    seen, devices,
-    async host(method, path, body = {}) {
-      const [, action, device] = path.match(/^\/v1\/remote\/hosts\/[a-f0-9]{32}\/(pairings|devices|poll|send)(?:\/([a-f0-9]{32}))?$/) || [];
-      if (!action) throw fail(404, 'not_found');
-      if (action === 'pairings') { pairings.set(body.claim, Date.now() + 300000); return { expiresAt: Math.floor(Date.now() / 1000) + 300 }; }
-      if (action === 'devices' && method === 'DELETE') { if (!devices.has(device)) throw fail(404, 'not_found'); forget(device); return { ok: true }; }
-      const list = () => [...devices].map(([id, d]) => ({ id, name: d.name, online: true }));
-      if (action === 'devices') return { devices: list() };
-      if (action === 'send') {
-        if (!devices.has(body.device)) throw fail(404, 'not_found');
-        seen.push(...body.frames); down.get(body.device).push(body.frames.map(data => ({ data })));
-        return { ok: true };
-      }
-      hostAt = Date.now();
-      return { ...await up.take(body), devices: list() };
-    },
-    // The phone's side, as the `fetch` it is given.
-    fetch: async (url, init) => {
-      const path = new URL(url).pathname, body = JSON.parse(init.body || '{}');
-      const answer = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
-      if (path === '/v1/remote/claim') {
-        if (!pairings.delete(body.claim)) return answer(404, { error: 'not_found' });
-        const id = randomBytes(16).toString('hex'), token = randomBytes(32).toString('base64url');
-        devices.set(id, { name: body.name, token }); down.set(id, new Queue());
-        return answer(200, { device: id, token });
-      }
-      const [, id, token] = String(init.headers.Authorization).match(/^Remote ([a-f0-9]{32})\.(.+)$/) || [];
-      if (!devices.has(id) || devices.get(id).token !== token) return answer(401, { error: 'invalid_session' });
-      if (init.method === 'DELETE' && path === '/v1/remote/device') { forget(id); return answer(200, { ok: true }); }
-      if (path === '/v1/remote/device/send') { seen.push(...body.frames); up.push(body.frames.map(data => ({ device: id, data }))); return answer(200, { ok: true }); }
-      const reply = await down.get(id).take(body);
-      if (!devices.has(id)) return answer(401, { error: 'invalid_session' });
-      return answer(200, { ...reply, host: Date.now() - hostAt < 5000 });
-    },
-  };
-}
-const until = async (check, label) => { const end = Date.now() + 15000; while (!check()) { if (Date.now() > end) throw new Error('timed out: ' + label); await Link.wait(20); } };
 
 test('a pairing code is easy to read and survives how a person types it', () => {
   const code = Link.newCode();
@@ -106,83 +48,6 @@ test('a sealed frame opens once, only for the other side of the same phone, and 
   const late = await phone.seal({ t: 'req', id: 'r2' });
   clock += Link.FRESH_MS + 2;
   assert.deepEqual(await computer.open(late), { stale: true }, 'waited too long');
-});
-
-test('a phone pairs, uses only what AI mode calls, and either side can end the pairing', async () => {
-  const hub = relay(), big = randomBytes(700000), asked = [], lines = [];
-  let saved = null, kept = null;
-  const host = createHost({
-    hub: (method, path, body) => hub.host(method, path, body),
-    local: async q => {
-      asked.push(q.method + ' ' + q.path);
-      if (q.path === '/api/conversations/ai-mode') return { status: 200, type: 'application/json', bytes: Link.utf8(JSON.stringify({ conversation: { id: 'chat-1' }, said: Link.text(q.body) })) };
-      if (q.path.startsWith('/api/ai-mode/image?')) return { status: 200, type: 'image/jpeg', bytes: new Uint8Array(big) };
-      return { status: 201, type: 'application/json', bytes: Link.utf8('{"ok":true}') };
-    },
-    socket: () => {
-      const s = { send(text) { lines.push(text); for (let i = 0; i < 30; i++) setTimeout(() => s.onmessage({ data: JSON.stringify({ n: i }) }), 2); }, close() { if (s.onclose) s.onclose(); } };
-      setTimeout(() => s.onopen(), 2);
-      return s;
-    },
-    store: { load: async () => saved, save: async state => { saved = JSON.parse(JSON.stringify(state)); } },
-    changed() {},
-  });
-  const phone = createPhone({ hubUrl: 'https://hub.test', fetch: hub.fetch, changed() {},
-    store: { load: async () => kept, save: async value => { kept = value; }, clear: async () => { kept = null; } } });
-  try {
-    const { code, expiresAt } = await host.pair();
-    assert.ok(expiresAt > Date.now());
-    await assert.rejects(phone.pair('not a code', 'Phone'), error => error.code === 'invalid_code');
-    await assert.rejects(phone.pair(Link.newCode(), 'Phone'), error => error.status === 404);
-    await phone.pair(Link.showCode(code).toLowerCase(), 'Test phone');
-    await until(() => phone.state().linked && phone.state().computer, 'linked');
-    assert.deepEqual((await host.phones()).map(p => p.name), ['Test phone']);
-    const [device] = Object.keys(saved.devices);
-    // The code works once.
-    await assert.rejects(createPhone({ hubUrl: 'https://hub.test', fetch: hub.fetch, changed() {}, store: { load: async () => null, save: async () => {}, clear: async () => {} } }).pair(code, 'Second'), error => error.status === 404);
-
-    // Nothing but AI mode's own calls reaches this Mia, and a chat only after this phone opened it.
-    for (const [method, path] of [['GET', '/api/settings'], ['GET', '/api/conversations'], ['GET', '/api/remote-link/state'], ['PUT', '/api/remote-link/state'],
-      ['POST', '/api/conversations/chat-1/events'], ['POST', '/api/ai-mode/../settings'], ['GET', '/api/ai-mode/page?since=1&x=2'], ['DELETE', '/api/ai-mode/voices']]) {
-      assert.equal((await phone.request({ method, path, body: method === 'GET' ? null : Link.utf8('{}') })).status, 404, method + ' ' + path);
-    }
-    assert.deepEqual(asked, []);
-    const opened = await phone.request({ method: 'POST', path: '/api/conversations/ai-mode', type: 'application/json', body: Link.utf8('{"say":"ñ"}') });
-    assert.equal(JSON.parse(Link.text(opened.bytes)).said, '{"say":"ñ"}');
-    assert.equal((await phone.request({ method: 'POST', path: '/api/conversations/chat-1/events', body: Link.utf8('{}') })).status, 201);
-    assert.equal((await phone.request({ method: 'POST', path: '/api/conversations/chat-2/events', body: Link.utf8('{}') })).status, 404);
-    // An answer larger than one frame arrives whole.
-    const picture = await phone.request({ method: 'GET', path: '/api/ai-mode/image?u=https%3A%2F%2Fexample.test%2Fa.jpg' });
-    assert.equal(picture.type, 'image/jpeg'); assert.ok(Buffer.from(picture.bytes).equals(big));
-
-    // The live line: in order, and only a subscription is passed on.
-    const heard = [];
-    const socket = phone.socket('/api/conversations/ws');
-    socket.onopen = () => { socket.send(JSON.stringify({ type: 'subscribe', conversationId: 'chat-1', afterSequence: 7, extra: 'x' })); socket.send(JSON.stringify({ type: 'other' })); };
-    socket.onmessage = message => heard.push(JSON.parse(message.data).n);
-    await until(() => heard.length === 30, 'live line');
-    assert.deepEqual(heard, [...Array(30).keys()]);
-    assert.deepEqual(lines, ['{"type":"subscribe","conversationId":"chat-1","afterSequence":7}']);
-    socket.close(); assert.equal(socket.readyState, 3);
-
-    // What passed through the Hub says nothing it can read.
-    assert.ok(hub.seen.length > 10);
-    for (const frame of hub.seen) { const raw = Buffer.from(frame, 'base64url'); for (const word of ['ai-mode', 'chat-1', 'subscribe', 'said']) assert.ok(!raw.includes(word)); }
-
-    // Removed on the computer: the phone forgets the pairing.
-    await host.remove(device);
-    await until(() => !phone.state().paired, 'phone forgot');
-    assert.equal(kept, null); assert.deepEqual(saved.devices, {});
-    await assert.rejects(phone.request({ method: 'GET', path: '/api/ai-mode/voices' }));
-
-    // Disconnected on the phone: the computer forgets it.
-    const again = await host.pair();
-    await phone.pair(again.code, 'Test phone');
-    await until(() => phone.state().linked, 'linked again');
-    await phone.unpair();
-    assert.equal(phone.state().paired, false);
-    await until(() => Object.keys(saved.devices).length === 0, 'computer forgot');
-  } finally { host.stop(); await phone.unpair().catch(() => {}); }
 });
 
 test('the pairing kept on the computer is checked before it is saved and private on disk', () => {

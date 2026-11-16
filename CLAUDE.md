@@ -46,6 +46,14 @@ paste it into this repo, not even a snippet or a spec. This repo holds only
 the app's calls to the Hub. Hub changes go to the private repo, and only with
 the human's OK.
 
+That includes anything that behaves like the Hub. Never write a stand-in,
+fake, mock server or relay for the Hub here, in tests or anywhere else, even
+one written only from the calls the app makes: it publishes how the Hub
+answers. A test in this repo checks the app's own side (what it sends, how it
+reads an answer it is handed) and nothing more. A flow that needs both ends is
+tested in the private repo. Before any push, read the diff for this: a secret
+scan does not catch it.
+
 ## What lives where
 
 - **This repo** — the entire app, plus `operations/` (how we work:
