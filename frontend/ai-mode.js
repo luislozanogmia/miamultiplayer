@@ -207,6 +207,8 @@ function dropHandoffs(text){
   var out=[],on=false,brief=false;
   String(text||'').replace(/\r/g,'').split('\n').forEach(function(l){
     if(/^\s*(?:[-*]\s*)?\**Handoff:/i.test(l)){on=true;brief=false;return;}
+    // "Open:" is for the app too: it opens what the line names.
+    if(/^\s*(?:[-*]\s*)?\**Open:\**\s*\S/i.test(l)){on=false;return;}
     if(on){
       var part=/^\s*(?:[-*]\s*)?\**(Model|Brief):/i.exec(l);
       if(part){if(/brief/i.test(part[1]))brief=true;return;}
@@ -993,6 +995,7 @@ function say(t){if(!t||t===R.spoken)return;R.spoken=t;speak(t);}
 function onActivity(a){
   if(!R||!a||typeof a!=='object')return;
   // The bots Mia put on the work are named after her reply is saved; they still count.
+  if(a.aiMode==='open'){appOpens(a.targets);return;}
   if(a.aiMode==='handoff'){(Array.isArray(a.bots)?a.bots:[]).slice(0,6).forEach(followBot);redraw();return;}
   // A last signal can land after the reply it belongs to; that run is over.
   if(a.dispatchId&&R.over[a.dispatchId])return;
@@ -1052,7 +1055,7 @@ function onEvent(ev){
     return {name:str(f.filename,80)||'File',url:chat(conv,'/attachments/'+encodeURIComponent(f.id))+'?workspace='+encodeURIComponent(workspace())};
   }));
   // In Flow she says a line and shows the rest; in Flow Tandem she says all of it.
-  if(tandem){say(read.say);aloud(read.body);say(read.ask);}else{say(R.line);say(R.ask);}
+  if(tandem){suggest=null;say(read.say);aloud(read.body);say(read.ask);}else{say(R.line);say(R.ask);}
   redraw();
   // A line said mid-run is saved like a reply; the run is over only when nothing of it is still going.
   var my=R;call(chat(conv,'/dispatches/active')).then(function(r){
@@ -1299,8 +1302,9 @@ function inkWire(){
 }
 function direct(t,shown){
   startAudio();
-  if(!shown&&(tandem?appAsk(t):stageAsk(t)))return;
-  var marked=inkNote();
+  if(!shown&&!tandem&&stageAsk(t))return;
+  suggest=null;
+  var marked=inkNote()||(tandem?openNote():'');
   if(marked){shown=shown||t;t+=marked;}
   if(ink.on)inkSet(false);
   var steering=s===2&&R&&R.running&&R.sent,away=past[view]||null;
@@ -1328,7 +1332,7 @@ function direct(t,shown){
       // What the person saw themselves say, so it reads the same when this chat is opened again.
       ev.metadata={aiModeSaid:str(shown||t,2000)};
       if(pick)ev.metadata.chatModelSelection=pick;
-      if(tandem)ev.metadata.aiModeTandem=true;
+      if(tandem){ev.metadata.aiModeTandem=true;ev.metadata.aiModeRooms=roomNames();}
       return call(chat(id,'/events'),ev);
     });
   };
@@ -1399,7 +1403,7 @@ function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMu
 // In Flow Tandem the person drives bots too, in the app. Mia listens in every bot's chat, so a bot the
 // person briefed is announced like one she briefed, and its question for an OK is asked out loud. A bot
 // Mia put on the work is followed by followBot, and this stays silent for it.
-var watchSocks={},watchTimer=null;
+var watchSocks={},watchTimer=null,suggest=null;
 function watchBots(){
   if(!tandem)return;
   var h=appHost(),rows=h&&h.rooms?h.rooms():[];
@@ -1412,30 +1416,57 @@ function watchBots(){
       if(!tandem||!ev||botSocks[id])return;
       if(meta.askBeforeDo&&meta.askBeforeDo.id){botAsk(bot,meta.askBeforeDo);return;}
       if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||Date.parse(ev.createdAt)<since)return;
-      if(ev.content&&typeof ev.content.text==='string'&&ev.content.text)speak(bot.name+' has finished.');
+      if(!ev.content||typeof ev.content.text!=='string'||!ev.content.text)return;
+      // The next step the bot suggests, the one the app offers in its message box, is said too.
+      var step=str(meta.nextStep,160).replace(/[.!?\s]+$/,'');
+      suggest=step?{bot:bot.name,step:step,at:Date.now()}:null;
+      speak(bot.name+' has finished.'+(step?' It suggests next: '+step+'. Should it go ahead?':''));
     },function(){});
   });
 }
 function watchStart(){watchBots();clearInterval(watchTimer);watchTimer=setInterval(watchBots,30000);}
 function watchStop(){clearInterval(watchTimer);watchTimer=null;Object.keys(watchSocks).forEach(function(k){try{if(watchSocks[k])watchSocks[k].close();}catch(e){}});watchSocks={};}
-function appAsk(t){
-  var h=appHost(),m=/^(?:mia[,\s]+)?(?:please\s+)?(?:open|show(?:\s+me)?|go to|take me to|abre|muestra|ve a)\s+(?:the\s+|my\s+|el\s+|la\s+|mi\s+)?(.+?)(?:\s+(?:bot|chat|channel|group))?(?:\s+please)?[.!]?$/i.exec(String(t||'').trim());
-  if(!m||!h.rooms||!h.open)return false;
-  var want=m[1].toLowerCase(),rows=[];try{rows=h.rooms()||[];}catch(e){}
-  var hit=rows.filter(function(r){return String(r.label).toLowerCase()===want;})[0]||rows.filter(function(r){return String(r.label).toLowerCase().indexOf(want)===0;})[0];
-  if(!hit)return false;
-  try{h.open(hit);}catch(e){return false;}
-  speak('Here is '+hit.label+'.');return true;
+// Mia moves the app herself: each "Open:" line of her reply comes here from the run. A name is one of
+// the app's bots or chats, anything else with a dot or a scheme is a web address. What could not be
+// opened is told to her with the next thing the person says.
+var openMissed=[];
+function appOpen(target){
+  var h=appHost(),want=String(target||'').trim(),low=want.toLowerCase(),rows=[];
+  if(!want)return false;
+  try{rows=h.rooms?h.rooms()||[]:[];}catch(e){}
+  var hit=rows.filter(function(r){return String(r.label).toLowerCase()===low;})[0];
+  try{
+    if(hit&&h.open)return h.open(hit)!==false;
+    if(/^https?:\/\/\S+$/i.test(want)||/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(want))return !!(h.openPage&&h.openPage(want));
+  }catch(e){}
+  return false;
 }
-// A plain yes or no, said in Flow Tandem while something waits for the person's OK, answers that same
-// request, the one the app shows.
+function appOpens(list){
+  if(!tandem)return;
+  (Array.isArray(list)?list:[]).slice(0,3).forEach(function(t){if(!appOpen(t)&&openMissed.length<6)openMissed.push(str(t,120));});
+}
+function openNote(){
+  if(!openMissed.length)return '';
+  var n='\n\n[The app could not open: '+openMissed.join('; ')+'. Nothing in the app has that exact name, or it is not a web address.]';
+  openMissed=[];return n;
+}
+// The names the app can open, sent with each Tandem turn so Mia asks for one that exists.
+function roomNames(){
+  var rows=[];try{var h=appHost();rows=h.rooms?h.rooms()||[]:[];}catch(e){}
+  return rows.map(function(r){return str(r&&r.label,60);}).filter(Boolean).slice(0,80);
+}
 var YES=/^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|approved?|s[i\u00ed]|dale|adelante|claro|hazlo)(?:\W+(?:please|mia|go ahead|do it|send it|por favor))*\W*$/i,
   NO=/^\W*(?:no|nope|don'?t|do not|not now|cancel|decline|mejor no|no lo hagas)(?:\W+(?:thanks|thank you|mia|please|gracias))*\W*$/i;
 function spokenAnswer(t){
   if(!tandem)return false;
   var a=crewAsks.concat(R?R.asks:[]).filter(function(x){return x.status==='pending';})[0],ok=YES.test(t)?true:NO.test(t)?false:null;
-  if(!a||ok===null)return false;
-  answer(a.id,ok);speak(ok?'OK, approved.':'OK, I said no.');return true;
+  if(ok===null)return false;
+  if(a){answer(a.id,ok);speak(ok?'OK, approved.':'OK, I said no.');return true;}
+  // No approval is waiting: the yes or no is for the next step a bot just suggested, and Mia hands it over.
+  var sug=suggest&&Date.now()-suggest.at<180000?suggest:null;suggest=null;
+  if(!sug)return false;
+  if(!ok){speak('OK, I will leave it.');return true;}
+  direct('Yes. Have '+sug.bot+' do the next step it suggested: '+sug.step,'Yes, go ahead.');return true;
 }
 // The whole answer is said in Flow Tandem, a few sentences at a time, the way it would be on a call.
 function aloud(text){

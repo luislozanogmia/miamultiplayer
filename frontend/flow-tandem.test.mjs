@@ -21,7 +21,7 @@ test('Flow Tandem is Flow with the app on screen: one conversation, one voice, o
   // The stage is out of sight and out of the way of the app.
   assert.match(css, /:host\(\.tandem\)\{pointer-events:none;opacity:0;visibility:hidden;/);
   // The turn goes to Mia through Flow's own send, marked as a Tandem turn.
-  assert.match(js, /if\(tandem\)ev\.metadata\.aiModeTandem=true;/);
+  assert.match(js, /if\(tandem\)\{ev\.metadata\.aiModeTandem=true;/);
   // "Let me drive" on the stage is the way into it.
   assert.match(js, /\$\('drive'\)\.onclick=tandemStart;/);
   assert.doesNotMatch(js, /takeWheel|handBack|driving/);
@@ -30,7 +30,7 @@ test('Flow Tandem is Flow with the app on screen: one conversation, one voice, o
 });
 
 test('in Flow Tandem Mia says the whole answer, a few sentences at a time', () => {
-  assert.match(js, /if\(tandem\)\{say\(read\.say\);aloud\(read\.body\);say\(read\.ask\);\}else\{say\(R\.line\);say\(R\.ask\);\}/);
+  assert.match(js, /if\(tandem\)\{suggest=null;say\(read\.say\);aloud\(read\.body\);say\(read\.ask\);\}else\{say\(R\.line\);say\(R\.ask\);\}/);
   const said = [];
   const aloud = new Function('speak', js.slice(js.indexOf('function plainOf(t){'), js.indexOf('\n', js.indexOf('function plainOf(t){'))) + '\n' + js.slice(js.indexOf('function aloud(text){'), js.indexOf('\n}\n', js.indexOf('function aloud(text){')) + 3) + 'return aloud;')((t) => said.push(t));
   aloud('**Three posts are ready.** The first is about hiring.\nCard: Post one\nText: hidden from the voice\n- The second is short.\n```js\nvar x=1;\n```');
@@ -55,38 +55,63 @@ test('a spoken yes or no answers the request that waits, and anything longer goe
   // Only in Tandem, only while something is pending, and through the same answer a click gives.
   assert.match(answer, /if\(!tandem\)return false;/);
   assert.match(answer, /crewAsks\.concat\(R\?R\.asks:\[\]\)\.filter\(function\(x\)\{return x\.status==='pending';\}\)\[0\]/);
-  assert.match(answer, /if\(!a\|\|ok===null\)return false;\s*answer\(a\.id,ok\);/);
+  assert.match(answer, /if\(ok===null\)return false;\s*if\(a\)\{answer\(a\.id,ok\);/);
   assert.match(js, /if\(spokenAnswer\(t\)\)return;\s*var noise=chatter\(t\);/);
 });
 
-test('"open the LinkedIn bot" moves the app itself, and a name the app does not have goes to Mia', () => {
-  const src = part('function appAsk(t){', '// A plain yes or no');
-  const make = (rooms) => {
+test('Mia moves the app herself: her "Open:" lines are done by the app, and a miss is told to her', () => {
+  const src = part('var openMissed=[];', '// The names the app can open');
+  const make = (rooms, page) => {
     const log = [];
-    const host = rooms ? { rooms: () => rooms, open: (row) => log.push(row.id) } : {};
-    return { log, ask: new Function('appHost', 'speak', src + 'return appAsk;')(() => host, (t) => log.push(t)) };
+    const host = { rooms: () => rooms, open: (row) => { log.push(row.id); }, openPage: page ? (url) => { log.push(url); return true; } : undefined };
+    const api = new Function('appHost', 'str', 'tandem', src + 'return {appOpens:appOpens,openNote:openNote};')(() => host, (t, n) => String(t).slice(0, n), true);
+    return { log, api };
   };
-  const rooms = [{ kind: 'bot', id: 'b1', label: 'LinkedIn' }, { kind: 'bot', id: 'b2', label: 'Disk' }, { kind: 'chat', id: 'c1', label: 'Design review' }];
-  let a = make(rooms);
-  assert.equal(a.ask('Open the LinkedIn bot.'), true);
-  assert.deepEqual(a.log, ['b1', 'Here is LinkedIn.']);
-  a = make(rooms);
-  assert.equal(a.ask('Mia, show me design chat please'), true);
-  assert.deepEqual(a.log, ['c1', 'Here is Design review.']);
-  a = make(rooms);
-  assert.equal(a.ask('abre el disk bot'), true);
-  assert.deepEqual(a.log.slice(0, 1), ['b2']);
-  // Not a name the app has, or not a request to open: it is Mia's to answer.
-  a = make(rooms);
-  assert.equal(a.ask('open the quarterly numbers'), false);
-  assert.equal(a.ask('what did the LinkedIn bot write'), false);
+  const rooms = [{ kind: 'bot', id: 'b1', label: 'LinkedIn' }, { kind: 'chat', id: 'c1', label: 'Design review' }];
+  let a = make(rooms, true);
+  a.api.appOpens(['linkedin', 'Design review', 'https://example.com/pricing', 'example.org']);
+  // Three at most in one reply.
+  assert.deepEqual(a.log, ['b1', 'c1', 'https://example.com/pricing']);
+  assert.equal(a.api.openNote(), '');
+  // A name the app does not have is not guessed at: Mia hears of it on the next turn, once.
+  a = make(rooms, false);
+  a.api.appOpens(['Quarterly numbers', 'example.com']);
   assert.deepEqual(a.log, []);
-  assert.equal(make(null).ask('open the LinkedIn bot'), false);
-  // The app opens it the way its own search does.
+  assert.match(a.api.openNote(), /\[The app could not open: Quarterly numbers; example\.com\./);
+  assert.equal(a.api.openNote(), '');
+  // Nothing the person says is matched on the page: every word goes to Mia.
+  assert.doesNotMatch(js, /appAsk/);
+  assert.match(js, /if\(!shown&&!tandem&&stageAsk\(t\)\)return;/);
+  assert.match(js, /if\(a\.aiMode==='open'\)\{appOpens\(a\.targets\);return;\}/);
+  assert.match(js, /ev\.metadata\.aiModeTandem=true;ev\.metadata\.aiModeRooms=roomNames\(\);/);
+  // The app opens it the way its own search does, and a page in a new tab of its browser.
   const open = app.slice(app.indexOf('function aiModeOpenRoom(row){'), app.indexOf('function aiModePeopleChats(){'));
   assert.match(open, /closeBrowserSidebarDrawer\(\);\s*closeLocalBrowser\(\);\s*closeAutomationsPage\(\);/);
   assert.match(open, /navigateToAgentChat\(chatSearchAgentRecord\(agent\), true\)/);
   assert.match(open, /openHubChannel\(hubChannel\(row\.id\)\)/);
+  assert.match(open, /openAddressInBrowserTab\(url, 'That page could not be opened\.'\)/);
+});
+
+test('a bot that finishes is announced with the next step it suggests, and a spoken yes hands it to Mia', () => {
+  const watch = js.slice(js.indexOf('function watchBots(){'), js.indexOf('function watchStart(){'));
+  assert.match(watch, /var step=str\(meta\.nextStep,160\)/);
+  assert.match(watch, /speak\(bot\.name\+' has finished\.'\+\(step\?' It suggests next: '\+step\+'\. Should it go ahead\?':''\)\)/);
+  const src = part('function spokenAnswer(t){', '// The whole answer is said');
+  const run = (suggest, said, ask) => {
+    const log = [];
+    const fn = new Function('tandem', 'crewAsks', 'R', 'YES', 'NO', 'answer', 'speak', 'direct', 'suggest', src + 'return spokenAnswer;');
+    const yes = /^\W*(?:yes|ok)\W*$/i, no = /^\W*no\W*$/i;
+    const out = fn(true, ask ? [ask] : [], null, yes, no, (id, ok) => log.push(['answer', id, ok]), (t) => log.push(['say', t]), (t) => log.push(['mia', t]), suggest)(said);
+    return { out, log };
+  };
+  const fresh = { bot: 'LinkedIn', step: 'Send the post', at: Date.now() };
+  assert.deepEqual(run(fresh, 'yes').log, [['mia', 'Yes. Have LinkedIn do the next step it suggested: Send the post']]);
+  assert.deepEqual(run(fresh, 'no').log, [['say', 'OK, I will leave it.']]);
+  // An approval that is waiting comes first; an old suggestion or none leaves the words to Mia.
+  assert.deepEqual(run(fresh, 'yes', { id: 'q1', status: 'pending' }).log.slice(0, 1), [['answer', 'q1', true]]);
+  assert.equal(run({ ...fresh, at: Date.now() - 600000 }, 'yes').out, false);
+  assert.equal(run(null, 'yes').out, false);
+  assert.equal(run(fresh, 'what did it write').out, false);
 });
 
 test('with no model picked in Flow, Mia works with the one chosen for her in the app', () => {
@@ -134,7 +159,7 @@ test('in Tandem Mia listens in every bot chat and announces a bot the person dro
   // A bot Mia briefed is followed by followBot, so it is not announced twice.
   assert.match(watch, /if\(!tandem\|\|!ev\|\|botSocks\[id\]\)return;/);
   assert.match(watch, /botAsk\(bot,meta\.askBeforeDo\)/);
-  assert.match(watch, /speak\(bot\.name\+' has finished\.'\)/);
+  assert.match(watch, /speak\(bot\.name\+' has finished\.'/);
   assert.match(src, /watchStart\(\);tandemTell\(\);/);
   assert.equal(src.split('watchStop();').length - 1, 2);
   assert.match(app, /return \{kind:'bot', id:String\(agent\.id\), label:String\(agent\.name\), conversationId:String\(roomId\)\};/);

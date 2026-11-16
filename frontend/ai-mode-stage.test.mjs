@@ -93,7 +93,7 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
 
 test('a drawer at the right edge lists the chats with people, and picking one reads it on the stage as search does', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, model: aiModeModel\}/);
+  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, model: aiModeModel\}/);
   assert.match(app, /function aiModePeopleChats\(\)\{[\s\S]*?channel\.kind !== 'bot'[\s\S]*?member\.kind === 'human'/, 'bots are left out, in a company and in Solo');
   assert.match(app, /function aiModeChatLines\(row\)\{[\s\S]*?loadHubRoomPreview\(roomId, state, activeWorkspaceKey\)/, 'a company chat is read by the loader the sidebar uses');
   assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
@@ -447,7 +447,7 @@ test('a pulled chat turns the bar into its message box, a bot can be put on the 
   // The card of the page Mia is in opens her tab, not the one in front.
   assert.match(js, /else if\(R\.focus==='page'\)\{site\.open=true;pageShow\(\);\}/);
   // "Show <bot> big" is handled on the stage and is not sent to Mia.
-  assert.match(js, /if\(!shown&&\(tandem\?appAsk\(t\):stageAsk\(t\)\)\)return;/);
+  assert.match(js, /if\(!shown&&!tandem&&stageAsk\(t\)\)return;/);
   assert.match(css, /\.work\.big,\.work\.big\.solo\{grid-template-columns:minmax\(0,1fr\);max-width:none\}/);
   // Sounds a transcriber invents are dropped; a word or two while Mia works does not redirect her.
   const at = js.indexOf('var PHANTOM='), end = js.indexOf('function talkStart(){');

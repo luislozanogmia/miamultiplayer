@@ -7362,6 +7362,9 @@ function aiModeHub(conversation, trigger) {
     reports: aiModeHandoffReports(conversation),
     // Flow Tandem: the person is in the normal app and Mia talks; the stage is not on screen.
     tandem: !!(trigger.metadata && trigger.metadata.aiModeTandem === true),
+    // What the app can open by name, as the app listed it for this turn.
+    rooms: trigger.metadata && Array.isArray(trigger.metadata.aiModeRooms)
+      ? trigger.metadata.aiModeRooms.filter((name) => typeof name === 'string').slice(0, 80) : [],
   };
 }
 
@@ -9354,6 +9357,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       conversationId: handoff.conversationId, dispatchId: handoff.id,
     })) : [];
     if (bots.length) publishAiModeSignal({ aiMode: 'handoff', bots });
+    // In Flow Tandem Mia moves the app herself: each "Open:" line of her reply is done by the app.
+    const opens = aiModeRun && trigger.metadata && trigger.metadata.aiModeTandem === true ? aiMode.parseOpens(safeReply) : [];
+    if (opens.length) publishAiModeSignal({ aiMode: 'open', targets: opens });
   }
   return result;
 }

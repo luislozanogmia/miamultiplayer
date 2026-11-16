@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, tandemNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, tandemNote, aboutNote, parseHandoffs, parseOpens, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -371,4 +371,15 @@ test('in Flow Tandem the turn note tells Mia she is on a call: she talks, speaks
   // Without the mark it is Flow's own note.
   assert.doesNotMatch(turnNote(), /Flow Tandem/);
   assert.doesNotMatch(turnNote({ tandem: false }), /Flow Tandem/);
+});
+
+test('in Flow Tandem Mia opens things in the app with "Open:" lines, and is told what can be opened', () => {
+  assert.deepEqual(parseOpens('Here it is.\nOpen: LinkedIn\n- **Open:** https://example.com/pricing\nOpen: LinkedIn\nI will Open: nothing here'),
+    ['LinkedIn', 'https://example.com/pricing']);
+  assert.deepEqual(parseOpens('Open: a\nOpen: b\nOpen: c\nOpen: d'), ['a', 'b', 'c']);
+  assert.deepEqual(parseOpens('No line of that kind.'), []);
+  const note = tandemNote({ tandem: true, rooms: ['LinkedIn', 'Design review'] });
+  assert.match(note, /"Open: <the exact name>" or "Open: <the web address>"/);
+  assert.match(note, /What the app can open by name: LinkedIn; Design review\./);
+  assert.doesNotMatch(tandemNote({ tandem: true }), /What the app can open by name/);
 });

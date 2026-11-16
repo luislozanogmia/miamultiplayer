@@ -19532,7 +19532,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, model: aiModeModel};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, model: aiModeModel};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19582,6 +19582,14 @@
       navigateToAgentChat(chatSearchAgentRecord(agent), true);
     } else if(row.hub) openHubChannel(hubChannel(row.id));
     else loadChatRoom(row.id, 'dm', row.label);
+    return true;
+  }
+  // A web page Mia opens for the person, in a new tab of the app's browser.
+  function aiModeOpenPage(url){
+    var browser = window.miaDesktop && window.miaDesktop.browser;
+    if(!browser || !browser.command) return false;
+    closeAutomationsPage();
+    openAddressInBrowserTab(url, 'That page could not be opened.');
     return true;
   }
   function aiModePeopleChats(){
@@ -21520,7 +21528,7 @@
         if(!ok){ setState('idle'); hide(); return; }
         return recording.start().then(function(){
           setState('recording');
-          show('Recording… click the mic again to stop');
+          show('Recording… click Send to send it, or the mic to stop and edit');
         });
       }).catch(function(error){
         var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
@@ -21528,13 +21536,20 @@
       });
     }
 
-    function onRecorded(){
+    // thenSend: the person clicked Send while recording, so what was said
+    // goes into the box and out through the composer's own send.
+    function onRecorded(thenSend){
       setState('transcribing');
       show('Transcribing…');
       recording.stop().then(function(text){
         setState('idle');
-        if(!text){ show('No speech detected.', {notice:true, autoHide:3000}); return; }
         var input = el('#ccInput');
+        if(!text){
+          show('No speech detected.', {notice:true, autoHide:3000});
+          // Send with words already typed still sends them.
+          if(thenSend && input && input.value.trim()) submitComposerDraft();
+          return;
+        }
         if(input){
           var next = D.insertText(input.value, input.selectionStart, input.selectionEnd, text);
           input.value = next.value;
@@ -21543,6 +21558,7 @@
           input.dispatchEvent(new Event('input', {bubbles:true}));
         }
         hide();
+        if(thenSend) submitComposerDraft();
       }).catch(function(error){ fail((error && error.message) || 'Transcription failed.'); });
     }
 
@@ -21550,6 +21566,16 @@
       if(state === 'recording'){ onRecorded(); return; }
       if(state === 'idle') start();
     });
+    // Send while recording finishes the dictation and sends it in one click.
+    // The mic still stops into the box, for editing before sending. A Send
+    // button that is a Stop button keeps stopping the task.
+    var sendBtn = el('#ccSend');
+    if(sendBtn) sendBtn.addEventListener('click', function(e){
+      if(state === 'transcribing' && !sendBtn.getAttribute('data-stop-task-id')){ e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if(state !== 'recording' || sendBtn.getAttribute('data-stop-task-id')) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      onRecorded(true);
+    }, true);
   })();
 
   /* ============ CHAT: connected model picker ============

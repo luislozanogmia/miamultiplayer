@@ -162,3 +162,14 @@ test('the listener writes down each thing said, first word included, and lets go
   assert.equal(listener.active(), false);
   assert.equal(stopped.length, 1);
 });
+
+test('Send while recording finishes the dictation and sends it, the mic still stops into the box', () => {
+  const block = app.slice(app.indexOf('CHAT: mic dictation'), app.indexOf('CHAT: connected model picker'));
+  // Send is caught before the composer's own handler, only while recording.
+  assert.match(block, /sendBtn\.addEventListener\('click', function\(e\)\{[\s\S]*state !== 'recording' \|\| sendBtn\.getAttribute\('data-stop-task-id'\)\) return;[\s\S]*stopImmediatePropagation\(\);\s*onRecorded\(true\);\s*\}, true\);/);
+  // The words go into the box first, then out through the composer's own send.
+  assert.match(block, /dispatchEvent\(new Event\('input'[\s\S]*hide\(\);\s*if\(thenSend\) submitComposerDraft\(\);/);
+  // The mic keeps today's behaviour: stop, text in the box, nothing sent.
+  assert.match(block, /micBtn\.addEventListener\('click', function\(\)\{\s*if\(state === 'recording'\)\{ onRecorded\(\); return; \}/);
+  assert.match(block, /click Send to send it, or the mic to stop and edit/);
+});

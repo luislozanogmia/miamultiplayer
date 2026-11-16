@@ -172,6 +172,19 @@ function parseHandoffs(reply) {
     .slice(0, MAX_HANDOFFS);
 }
 
+// parseOpens(reply) -> what Mia asked the app to put in front of the person, in Flow Tandem: the
+// name of a bot or a chat, or a web address, one per "Open:" line.
+const OPEN_LINE = /^\s*(?:[-*]\s*)?\**Open:\**\s*(.+)$/i;
+function parseOpens(reply) {
+  const found = [];
+  for (const line of String(reply || '').replace(/\r/g, '').split('\n')) {
+    const hit = OPEN_LINE.exec(line);
+    const target = hit ? clip(hit[1].replace(/[*_`"<>]+/g, ''), 300) : '';
+    if (target && !found.includes(target)) found.push(target);
+  }
+  return found.slice(0, 3);
+}
+
 // handoffText(brief) -> the message the bot gets in its own chat: Mia's brief, then how to
 // bring the work back so the person and Mia can take it in at a glance.
 function handoffText(brief) {
@@ -225,6 +238,7 @@ function matchModel(name, providers) {
 // in the normal app and she is on a call with them: she answers in spoken words, speaks up when
 // something needs them, and makes nothing to look at unless they ask.
 function tandemNote(hub) {
+  const rooms = (hub && Array.isArray(hub.rooms) ? hub.rooms : []).map((name) => clip(name, 60)).filter(Boolean).slice(0, 80);
   return (
     '[Flow Tandem] The person is working in the normal Mia app and you are on a voice call with them, ' +
     'working beside them. They see their chats, bots, files and browser themselves. Nothing you write is ' +
@@ -235,6 +249,12 @@ function tandemNote(hub) {
     'no headings, no canvas, and no addresses or file paths read out letter by letter.\n' +
     '- Make something to look at only when the person asks for it. Then save it as an HTML file and say ' +
     'in one sentence what it is called and where it is.\n' +
+    '- You move the app for the person. To put the chat of a bot, another chat or a web page in front of them, write a ' +
+    'line on its own: "Open: <the exact name>" or "Open: <the web address>". The app opens it and the line ' +
+    'is not read out. Say in a few words what you opened. Do it when they ask ("open the LinkedIn bot", ' +
+    '"show me that page") and when what you are talking about is better seen. Open only what you name here; ' +
+    'if the app could not open it you are told on the next turn.' +
+    (rooms.length ? ' What the app can open by name: ' + rooms.join('; ') + '.' : '') + '\n' +
     '- Speak up. When a bot is back, when something is ready, or when something needs the person, say so ' +
     'and ask what to do next: "LinkedIn is done. Do you want us to send it?" When they answer in a word ' +
     'or two ("yes, send it"), act on it without asking again.\n' +
@@ -614,5 +634,5 @@ function createStagePages({ now = Date.now } = {}) {
 module.exports = {
   CARD_ICONS,
   speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages,
-  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, tandemNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, tandemNote, aboutNote, parseHandoffs, parseOpens, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };
