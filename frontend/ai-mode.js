@@ -19,7 +19,7 @@ function moteArt(name){
   return a?'src="'+esc(a.src)+'" style="filter:'+esc(a.filter)+'"':'src="'+mote(name)+'"';
 }
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261114-ai-mode-17">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-18">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -87,10 +87,10 @@ var MARKUP=
       '<button type="button" class="mic" id="mic" aria-pressed="false" aria-label="Speak to Mia" title="Speak to Mia" hidden><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg></button>'+
       '<button class="send" aria-label="Send"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>'+
     '</form></div>'+
-  '</div>'+
-  '<button class="btn primary back" id="back" hidden>Hand it back to Mia</button>';
+  '</div>';
 
-var host=null,root=null,open=false,drive=false;
+// tandem: Flow Tandem is on. The person is in the normal app, the stage is out of sight, and Mia talks.
+var host=null,root=null,open=false,tandem=false,tandemSince=0,tandemLine='',tandemTalk=false,tandemSubs=[];
 // One run: what the person said and everything Mia has done about it so far.
 var fullOwn=false;
 var s=1,R=null,conv='',sock=null,seq=0,opening=null,botSocks={},crew=[],mindMap={},seedId=0,drawTimer=null;
@@ -1037,7 +1037,7 @@ function onEvent(ev){
   if(meta.askBeforeDo&&meta.askBeforeDo.id){
     var q=meta.askBeforeDo,old=R.asks.filter(function(a){return a.id===q.id;})[0];
     if(old){if(old.status==='pending')old.status=q.status;}
-    else{R.asks.push({id:q.id,line:str(q.line,300),summary:str(q.summary,600),status:q.status||'pending'});if(q.status==='pending')speak('I need your OK before I go on.');}
+    else{R.asks.push({id:q.id,line:str(q.line,300),summary:str(q.summary,600),status:q.status||'pending'});if(q.status==='pending')speak(tandem?'I need your OK: '+str(q.line,160)+'. Say yes or no.':'I need your OK before I go on.');}
     redraw();return;
   }
   if((ev.senderType!=='agent'&&ev.senderType!=='bot')||ev.deletedAt||meta.progress===true||meta.diagnostic===true||!R.sent)return;
@@ -1051,7 +1051,9 @@ function onEvent(ev){
   R.files=R.files.concat((Array.isArray(content.attachments)?content.attachments:[]).filter(function(f){return f&&f.id;}).map(function(f){
     return {name:str(f.filename,80)||'File',url:chat(conv,'/attachments/'+encodeURIComponent(f.id))+'?workspace='+encodeURIComponent(workspace())};
   }));
-  say(R.line);say(R.ask);redraw();
+  // In Flow she says a line and shows the rest; in Flow Tandem she says all of it.
+  if(tandem){say(read.say);aloud(read.body);say(read.ask);}else{say(R.line);say(R.ask);}
+  redraw();
   // A line said mid-run is saved like a reply; the run is over only when nothing of it is still going.
   var my=R;call(chat(conv,'/dispatches/active')).then(function(r){
     if(my!==R)return;var going=Array.isArray(r.data.dispatches)?r.data.dispatches:[];
@@ -1080,7 +1082,7 @@ function botAsk(bot,q){
     if(q.status&&q.status!=='pending')return;
     if(crewAsks.length>=12)crewAsks.shift();
     crewAsks.push({id:q.id,by:bot.name,line:str(q.line,300),summary:str(q.summary,600),status:'pending'});
-    speak(bot.name+' needs your OK before it goes on.');
+    speak(tandem?bot.name+' needs your OK: '+str(q.line,160)+'. Say yes or no.':bot.name+' needs your OK before it goes on.');
   }
   redraw();
 }
@@ -1101,7 +1103,7 @@ function followBot(b){
     bot.reply=text.slice(0,20000);bot.running=false;
     // Its report is the first paragraph it wrote, cut to what fits a card.
     bot.report=str(text.replace(/[*_`#>]+/g,'').split(/\n\s*\n|\n(?=\s*Card:)/i)[0].replace(/\s+/g,' '),420);
-    if(!bot.seen&&!ownReview())speak(bot.name+' has finished. Want to see it?');
+    if(!bot.seen&&!ownReview())speak(bot.name+(tandem?' has finished. Do you want me to go over it?':' has finished. Want to see it?'));
     redraw();
   },function(a){
     if(!open||!a)return;
@@ -1110,7 +1112,7 @@ function followBot(b){
 }
 // Mia looks at a finished bot's work by herself: she says the bot is back, checks what it brought
 // against the job, and comes back only with what needs the person. She waits while the person is
-// writing, talking, driving, looking at an earlier view, part way through a deck, or owes her an answer, and until then the
+// writing, talking, looking at an earlier view, part way through a deck, or owes her an answer, and until then the
 // panel offers the same by hand. The person steps in by saying anything, or stops her.
 var own=true,ownTimer=null;try{own=localStorage.getItem('miaAiModeOwn')!=='0';}catch(e){}
 function ownShow(){var b=$('own');b.textContent=own?'Mia reviews on her own':'Mia asks before reviewing';b.setAttribute('aria-pressed',own?'true':'false');}
@@ -1120,7 +1122,8 @@ function ownReview(){
   if(!own||!open)return false;
   var back=crew.filter(function(b){return !b.running&&b.reply&&!b.seen&&!b.failed;});
   if(!back.length)return false;
-  var held=drive||seeing()||ink.on||earState==='on'||earState==='wait'||$('box').value.trim()||(R&&(R.running||R.ask||(!R.decided&&R.picks&&Object.keys(R.picks).length)));
+  // In Flow Tandem nothing is on the stage to wait for: she waits only while the person talks or she works.
+  var held=tandem?earState==='on'||earState==='wait'||!!(R&&R.running):seeing()||ink.on||earState==='on'||earState==='wait'||$('box').value.trim()||(R&&(R.running||R.ask||(!R.decided&&R.picks&&Object.keys(R.picks).length)));
   if(held){ownTimer=setTimeout(ownReview,4000);return false;}
   var names=back.map(function(b){return b.name;}),who=names.length>1?names.slice(0,-1).join(', ')+' and '+names[names.length-1]:names[0];
   back.forEach(function(b){b.seen=true;});
@@ -1144,8 +1147,7 @@ function newChat(){
   if(R&&R.running)halt('');
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   hush();inkSet(false);seedId++;
-  s=1;R=null;seq=0;drive=false;past=[];view=-1;peek=null;drawerOn=false;found=[];mindSet({});
-  host.classList.remove('driving');$('back').hidden=true;
+  s=1;R=null;seq=0;past=[];view=-1;peek=null;drawerOn=false;found=[];mindSet({});
   draw();openChat(true).catch(function(){});$('box').focus();
 }
 function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k])botSocks[k].close();}catch(e){}});botSocks={};crew=[];crewAsks=[];}
@@ -1297,7 +1299,7 @@ function inkWire(){
 }
 function direct(t,shown){
   startAudio();
-  if(!shown&&stageAsk(t))return;
+  if(!shown&&(tandem?appAsk(t):stageAsk(t)))return;
   var marked=inkNote();
   if(marked){shown=shown||t;t+=marked;}
   if(ink.on)inkSet(false);
@@ -1326,6 +1328,7 @@ function direct(t,shown){
       // What the person saw themselves say, so it reads the same when this chat is opened again.
       ev.metadata={aiModeSaid:str(shown||t,2000)};
       if(pick)ev.metadata.chatModelSelection=pick;
+      if(tandem)ev.metadata.aiModeTandem=true;
       return call(chat(id,'/events'),ev);
     });
   };
@@ -1359,16 +1362,63 @@ function answer(id,ok){
   a.status=ok?'approved':'declined';draw();
   call('/api/ask-before-do/'+encodeURIComponent(id),{approved:ok}).then(function(r){if(r.status>=400){a.status='gone';draw();}},function(){a.status='gone';draw();});
 }
-// Taking the wheel is a real intervention: Mia stops, the app is the person's, and she picks up from what they left.
-function takeWheel(){
-  drive=true;hush();halt('take-over');
-  host.classList.add('driving');$('back').hidden=false;sitePlace();
-  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
+// Flow Tandem: the same Mia, the same chat and the same voice, with the normal app on screen in place
+// of the stage. The stage stays built but out of sight and out of the way, Mia keeps working, and the
+// app draws a small card for her. "Let me drive" on the stage comes here.
+function tandemTell(){var st=tandemState();tandemSubs.forEach(function(f){try{f(st);}catch(e){}});}
+function tandemState(){
+  return {on:tandem,since:tandemSince,line:tandemLine,note:earNote,hearing:earState,working:!!(R&&R.running),talking:busy,
+    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices};
 }
-function handBack(){
-  drive=false;host.classList.remove('driving');$('back').hidden=true;sitePlace();
+function tandemStart(){
+  if(tandem)return;
+  var fresh=!open;
+  tandem=true;tandemSince=Date.now();tandemLine='';earNote='';
+  if(fresh)enter();
+  host.classList.add('tandem');sitePlace();
+  try{if(root.activeElement)root.activeElement.blur();}catch(e){}
+  if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
+  // Tandem is a call, so the mic is open for it even when hands-free is off in Flow.
+  tandemTalk=!talkOn&&!!earParts();if(tandemTalk)talkStart();
+  if(!fresh){hush();speak('I am with you while you work. Just talk.');}
+  tandemTell();
+}
+// Back to the stage, with the same conversation.
+function tandemStage(){
+  if(!tandem)return;
+  tandem=false;host.classList.remove('tandem');
+  if(tandemTalk&&!talkKept())talkStop();tandemTalk=false;
   if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
-  direct('(I took over and did part of this myself in the app. Look at how things stand now, keep what I did, and continue from there.)','You took the wheel, then handed it back.');
+  sitePlace();draw();setTimeout(function(){if(open&&!tandem)$('box').focus();},200);
+  tandemTell();
+}
+// The card's mic button: one click mutes the mic or turns it back on.
+function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMute();tandemTell();}
+// "Open the LinkedIn bot", said in Flow Tandem, moves the app itself the way a click in the sidebar would.
+function appAsk(t){
+  var h=appHost(),m=/^(?:mia[,\s]+)?(?:please\s+)?(?:open|show(?:\s+me)?|go to|take me to|abre|muestra|ve a)\s+(?:the\s+|my\s+|el\s+|la\s+|mi\s+)?(.+?)(?:\s+(?:bot|chat|channel|group))?(?:\s+please)?[.!]?$/i.exec(String(t||'').trim());
+  if(!m||!h.rooms||!h.open)return false;
+  var want=m[1].toLowerCase(),rows=[];try{rows=h.rooms()||[];}catch(e){}
+  var hit=rows.filter(function(r){return String(r.label).toLowerCase()===want;})[0]||rows.filter(function(r){return String(r.label).toLowerCase().indexOf(want)===0;})[0];
+  if(!hit)return false;
+  try{h.open(hit);}catch(e){return false;}
+  speak('Here is '+hit.label+'.');return true;
+}
+// A plain yes or no, said in Flow Tandem while something waits for the person's OK, answers that same
+// request, the one the app shows.
+var YES=/^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|approved?|s[i\u00ed]|dale|adelante|claro|hazlo)(?:\W+(?:please|mia|go ahead|do it|send it|por favor))*\W*$/i,
+  NO=/^\W*(?:no|nope|don'?t|do not|not now|cancel|decline|mejor no|no lo hagas)(?:\W+(?:thanks|thank you|mia|please|gracias))*\W*$/i;
+function spokenAnswer(t){
+  if(!tandem)return false;
+  var a=crewAsks.concat(R?R.asks:[]).filter(function(x){return x.status==='pending';})[0],ok=YES.test(t)?true:NO.test(t)?false:null;
+  if(!a||ok===null)return false;
+  answer(a.id,ok);speak(ok?'OK, approved.':'OK, I said no.');return true;
+}
+// The whole answer is said in Flow Tandem, a few sentences at a time, the way it would be on a call.
+function aloud(text){
+  var t=plainOf(String(text||'').replace(/^\s*(?:card|image|text|option|icon|figure|meter|tone|action):.*$/gim,' ')).slice(0,1600),parts=t.match(/[^.!?]+[.!?]*\s*/g)||[],line='';
+  parts.forEach(function(p){if(line&&(line+p).length>560){speak(line.trim());line='';}line+=p;});
+  if(line.trim())speak(line.trim());
 }
 // A website on the stage: the Mia browser's own page, in a window the person can move. The page is a
 // native view, so it only exists in the desktop app; in a plain browser tab links open as they always did.
@@ -1387,7 +1437,7 @@ function siteBox(){
 // The page follows the window; while the window is being moved only its see-through frame shows.
 function sitePlace(){
   var n=pane();if(!n)return;
-  var el=$('site'),show=site.open&&open&&!drive;
+  var el=$('site'),show=site.open&&open&&!tandem;
   // A card's page belongs to its card: away from it (another step, a new direction) it waits out of sight.
   if(site.card&&!site.wide&&!root.getElementById('frontPage'))show=false;
   // At the front of the stage the window sits in the item's place and follows it as the stage scrolls.
@@ -1398,7 +1448,7 @@ function sitePlace(){
     if(bottom-top<140)show=false;else b={x:d.left,y:top,w:d.width,h:bottom-top};
   }
   el.hidden=!show;
-  if(!show){n.stage(open&&!drive?false:null);return;}
+  if(!show){n.stage(open&&!tandem?false:null);return;}
   b=b||siteBox();el.classList.toggle('docked',site.docked);el.style.left=b.x+'px';el.style.top=b.y+'px';el.style.width=b.w+'px';el.style.height=b.h+'px';
   el.classList.toggle('moving',site.moving);
   $('siteWide').setAttribute('aria-pressed',site.wide?'true':'false');
@@ -1422,9 +1472,10 @@ function modelList(){
 }
 function modelKept(){try{return localStorage.getItem('miaAiModeModel')||'';}catch(e){return '';}}
 function modelPick(){
-  var k=modelKept();if(!k)return null;
-  var m=modelList().filter(function(e){return e.provider+'|'+e.model===k;})[0];
-  return m?{provider:m.provider,model:m.model,reasoningEffort:'high',speed:'normal',fast:false}:null;
+  // With no pick made here, Mia works with the model chosen for her in the app.
+  var k=modelKept(),h=appHost(),m=k&&modelList().filter(function(e){return e.provider+'|'+e.model===k;})[0];
+  if(m)return {provider:m.provider,model:m.model,reasoningEffort:'high',speed:'normal',fast:false};
+  try{return h.model?h.model()||null:null;}catch(e){return null;}
 }
 function modelShow(on){
   $('modelBar').hidden=!on;$('modelBtn').setAttribute('aria-expanded',on?'true':'false');
@@ -1432,7 +1483,7 @@ function modelShow(on){
   $('blurBar').hidden=true;$('blurBtn').setAttribute('aria-expanded','false');phoneShow(false);
   var k=modelKept();
   var list=modelList(),twice=function(e){return list.filter(function(x){return x.name===e.name;}).length>1;};
-  $('model').innerHTML='<option value="">Mia\'s pick</option>'+(list.length?list.map(function(e){
+  $('model').innerHTML='<option value="">Same as in the app</option>'+(list.length?list.map(function(e){
     var v=e.provider+'|'+e.model;
     return '<option value="'+esc(v)+'"'+(v===k?' selected':'')+'>'+esc(e.name+(twice(e)?' \u00b7 '+e.providerLabel:''))+'</option>';
   }).join(''):'<option disabled>Connect Claude or ChatGPT in Mia to choose one</option>');
@@ -1497,7 +1548,7 @@ function phoneWire(){
 function siteState(st){
   var tabs=st&&Array.isArray(st.tabs)?st.tabs:[],tab=tabs.filter(function(t){return t.active;})[0];
   // The page Mia is working in comes to the stage by itself.
-  if(open&&!drive&&R&&R.running){
+  if(open&&!tandem&&R&&R.running){
     var hers=tabs.filter(function(t){return t.botActivity;})[0];
     if(hers){
       if(!site.open&&!R.picked&&!hasCanvas()){site.open=true;R.focus='page';draw();}
@@ -1684,14 +1735,19 @@ function siteWire(){
 // the words are on the screen, and the person is offered to connect one.
 var voices=0,voice=0,speaking=null,speakId=0,lines=[],busy=false;
 // Lines are said one after another; when she gets ahead of her voice the older waiting line is dropped.
+// The stage's sound button does not silence her in Flow Tandem: there the card has her voice button.
+function hushed(){return quiet||(muted&&!tandem);}
 function speak(t){
-  if(muted||quiet||!t||drive||earState==='on')return;
-  lines.push(String(t).slice(0,600));if(lines.length>2)lines.shift();
+  if(!t)return;
+  // With no voice to say it, Flow Tandem's card still shows the line.
+  if(tandem&&(quiet||!voices))tandemLine=String(t).slice(0,300);
+  if(hushed()||earState==='on')return;
+  lines.push(String(t).slice(0,600));if(lines.length>(tandem?8:2))lines.shift();
   if(!busy)sayNext();
 }
 function sayNext(){
   var t=lines.shift(),my=speakId;
-  if(!t||muted||quiet||!open){busy=false;return;}
+  if(!t||hushed()||!open){busy=false;return;}
   busy=true;
   function done(){if(my===speakId)sayNext();}
   if(voices&&ac){
@@ -1699,7 +1755,8 @@ function sayNext(){
       .then(function(r){if(!r.ok)throw new Error('speech');return r.arrayBuffer();})
       .then(function(b){return ac.decodeAudioData(b);})
       .then(function(buf){
-        if(my!==speakId||muted||quiet||!open)return;
+        if(my!==speakId||hushed()||!open)return;
+        if(tandem)tandemLine=t.slice(0,300);
         var src=ac.createBufferSource();src.buffer=buf;src.connect(ac.destination);src.onended=done;src.start();speaking=src;
       }).catch(function(){if(my===speakId){lines=[];busy=false;voiceCheck();}});
     return;
@@ -1711,7 +1768,7 @@ function sayNext(){
 var introSpoke=false;
 function welcome(){
   if(introSpoke){introSpoke=false;return;}
-  speak('Welcome to Flow.');
+  speak(tandem?'I am with you while you work. Just talk.':'Welcome to Flow.');
 }
 // The intro plays before AI mode is open, so its welcome is said here, in the same voice.
 // Returns a way to stop it, for a person who stays in Mia.
@@ -1818,19 +1875,19 @@ function hush(){
 // Speaking to Mia: one press starts the mic, the next sends what was said to her as a direction.
 // The words are written down on this computer by the same recorder the chat box uses.
 // Her voice and the stage's own sound stop while the mic is open, so it hears only the person.
-var ear=null,earState='';
+var ear=null,earState='',earNote='';
 function boxHint(){var c=chatOn();if(c)return c.root?'Reply in thread':'Message '+c.said;return ink.on?(ink.marks.length?'Say what to do with what you marked':'Draw on what you mean'):findMode()?'Search your views, chats and artifacts':R&&R.running?'Guide or redirect':s===2?'Say what is next':'Say what you want';}
 function earParts(){
   var D=window.MiaDictation,media=navigator.mediaDevices,Context=window.AudioContext||window.webkitAudioContext;
   return window.MiaSpeech&&D&&D.createRecorder&&media&&window.MediaRecorder&&Context?{D:D,media:media,Context:Context}:null;
 }
 function earShow(state,note){
-  earState=state;
+  earState=state;earNote=note||'';
   var mic=$('mic');mic.classList.toggle('on',state==='on');mic.disabled=!talkOn&&state==='wait';mic.setAttribute('aria-pressed',state==='on'?'true':'false');
   // Hands-free says where it is at the top right; the bar below is then for searching.
   if(talkOn){$('earsSay').textContent=note||(state==='on'?'I am listening\u2026':state==='wait'?'Writing it down\u2026':talkMuted?'Mic is muted':'Just talk');$('box').placeholder=boxHint();}
   else $('box').placeholder=note||(state==='on'?'Listening\u2026 press the mic again to send':state==='wait'?'Writing down what you said\u2026':boxHint());
-  if(master)master.gain.setTargetAtTime(muted||state==='on'?0:1,ac.currentTime,state==='on'?0.25:0.8);
+  if(master)master.gain.setTargetAtTime(muted||tandem||state==='on'?0:1,ac.currentTime,state==='on'?0.25:0.8);
   hold(slow&&!!state);
 }
 // The speech model writes sounds it hears as notes, "(keyboard clicking)"; those are not the person's words.
@@ -1920,6 +1977,7 @@ function talkStart(){
       if(!t||!open)return;
       if(/^\W*(stop|para|alto|detente)\W*$/i.test(t)){hush();halt('');return;}
       if(/^\W*(mia\W+)?(stand\W?by|en espera)(\W+mia)?\W*$/i.test(t)){standBy();return;}
+      if(spokenAnswer(t))return;
       var noise=chatter(t);
       if(noise){if(noise>1)earShow('','I heard \u201c'+str(t,40)+'\u201d and kept working. Say a full sentence to redirect me, or \u201cstop\u201d.');return;}
       direct(t.slice(0,2000));
@@ -1950,7 +2008,7 @@ function startAudio(){
   var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
   ac=new AC();master=ac.createGain();master.gain.value=0;master.connect(ac.destination);
   // Every change of loudness eases from where it is, so the wind never starts or stops at once.
-  master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
+  master.gain.setTargetAtTime(muted||tandem?0:1,ac.currentTime,1);
   var wf=ac.createBiquadFilter();wf.type='bandpass';wf.frequency.value=300;wf.Q.value=0.8;
   var wg=ac.createGain();wg.gain.value=0.04;noise().connect(wf);wf.connect(wg);wg.connect(master);
   // A gust swells and settles to a floor that is still heard, and the next one starts before the last has gone.
@@ -1960,7 +2018,7 @@ function startAudio(){
     setTimeout(gust,(up+down+1+Math.random()*4)*1000);})();
 }
 function plink(px,sc){
-  if(!ac||muted||!open)return;var t=ac.currentTime,g=ac.createGain(),o=ac.createOscillator(),base=520+Math.random()*380;
+  if(!ac||muted||tandem||!open)return;var t=ac.currentTime,g=ac.createGain(),o=ac.createOscillator(),base=520+Math.random()*380;
   o.type='sine';o.frequency.setValueAtTime(base,t);o.frequency.exponentialRampToValueAtTime(base*2.1,t+0.05);
   g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.07*sc,t+0.006);g.gain.exponentialRampToValueAtTime(0.0001,t+0.11);
   o.connect(g);
@@ -2043,7 +2101,7 @@ function build(){
   $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=function(){if(talkOn)talkMute();else earToggle();};$('talk').onclick=talkToggle;inkWire();
-  $('drive').onclick=takeWheel;$('back').onclick=handBack;
+  $('drive').onclick=tandemStart;
   $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
   siteWire();
   // How blurry the background is stays as the person left it on this computer.
@@ -2135,14 +2193,14 @@ function build(){
     else if(turn){e.preventDefault();turn.click();}
     // Left and right step through the earlier views when nothing is being typed.
     else if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&!$('box').value&&!ink.on&&!(e.target&&e.target.closest&&e.target.closest('.site'))&&stops().length){e.preventDefault();step(e.key==='ArrowLeft'?-1:1);}
-    else if(e.key==='Escape'&&!drive){if(ink.on)inkSet(false);else if((findOn&&(!talkOn||$('box').value))||found.length){$('box').value='';findSet(talkOn);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
+    else if(e.key==='Escape'&&!tandem){if(ink.on)inkSet(false);else if((findOn&&(!talkOn||$('box').value))||found.length){$('box').value='';findSet(talkOn);}else if(drawerOn){drawerOn=false;logDraw();}else if(backToNow())draw();else if(s===2&&R&&R.focus)focus('',true);else leave();}
   });
 }
 function enter(){
   if(open)return;
   if(!host)build();
-  open=true;s=1;R=null;conv='';seq=0;drive=false;past=[];view=-1;peek=null;drawerOn=false;findOn=false;found=[];mindSet({});
-  host.classList.remove('driving');$('back').hidden=true;
+  open=true;s=1;R=null;conv='';seq=0;past=[];view=-1;peek=null;drawerOn=false;findOn=false;found=[];mindSet({});
+  host.classList.toggle('tandem',tandem);
   host.hidden=false;hold(false);draw();
   site.open=false;site.wide=false;site.x=null;$('web').hidden=!pane();sitePlace();
   $('mic').hidden=!earParts();$('talk').hidden=!earParts();talkShow();
@@ -2150,11 +2208,11 @@ function enter(){
   if(pane()&&!webOff)webOff=web.onState(siteState);
   if(!pageTimer)pagePoll();
   requestAnimationFrame(function(){$('stage').classList.add('on');$('hud').classList.add('on');$('intent').classList.add('on');});
-  startAudio();if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
+  startAudio();if(master)master.gain.setTargetAtTime(muted||tandem?0:1,ac.currentTime,1);
   ask='';askNote='';voiceAskDraw();
   voiceCheck().then(function(){if(open&&s===1)welcome();});
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
-  setTimeout(function(){if(open)$('box').focus();},400);
+  setTimeout(function(){if(open&&!tandem)$('box').focus();},400);
   openChat().catch(function(){});
 }
 // Leaving ends the run: nothing keeps working on a stage nobody is watching.
@@ -2165,7 +2223,7 @@ function leave(){
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
-  host.classList.remove('driving');$('back').hidden=true;drive=false;
+  host.classList.remove('tandem');tandem=false;tandemTalk=false;tandemTell();
   site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');
   setTimeout(function(){if(!open){host.hidden=true;unmount($('cv'));$('cv').innerHTML='';$('cv')._h='';mindSet({});}},1600);
@@ -2189,5 +2247,6 @@ function intro(){
     if(r==='try')enter();
   });
 }
-window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();}};
+window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();},
+  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,on:function(f){tandemSubs.push(f);}}};
 })();

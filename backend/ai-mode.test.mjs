@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages, isAiModeConversation, turnNote, tandemNote, aboutNote, parseHandoffs, handoffText, matchModel, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 } = require('./ai-mode');
 
 const THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Tree.jpg/320px-Tree.jpg';
@@ -355,4 +355,20 @@ test('Mia is told that a question gets an answer and the view on the stage stays
   assert.match(text, /A question gets an answer, not a new view\./);
   assert.match(text, /with no cards, no canvas, no decisions and ' \+\s*'no Next line/);
   assert.match(text, /a deck ' \+\s*'they have not sent can still be answered/);
+});
+
+test('in Flow Tandem the turn note tells Mia she is on a call: she talks, speaks up, and shows nothing unless asked', () => {
+  const note = turnNote({ tandem: true });
+  assert.equal(note, tandemNote({ tandem: true }));
+  assert.match(note, /^\[Flow Tandem\]/);
+  assert.match(note, /voice call/);
+  assert.match(note, /Do you want us to send it\?/);
+  assert.match(note, /HTML file/);
+  // Nothing of the stage is asked for: no cards, no deck, no canvas of her own.
+  assert.doesNotMatch(note, /deck of|on the stage|nine cards/i);
+  // The same bots and the same hand-offs as in Flow.
+  assert.match(note, /delegate_task/);
+  // Without the mark it is Flow's own note.
+  assert.doesNotMatch(turnNote(), /Flow Tandem/);
+  assert.doesNotMatch(turnNote({ tandem: false }), /Flow Tandem/);
 });

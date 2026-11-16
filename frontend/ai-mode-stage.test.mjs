@@ -93,7 +93,7 @@ test('"New chat" in the drawer starts another of the app\'s own chats and clears
 
 test('a drawer at the right edge lists the chats with people, and picking one reads it on the stage as search does', async () => {
   const app = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend\}/);
+  assert.match(app, /search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, model: aiModeModel\}/);
   assert.match(app, /function aiModePeopleChats\(\)\{[\s\S]*?channel\.kind !== 'bot'[\s\S]*?member\.kind === 'human'/, 'bots are left out, in a company and in Solo');
   assert.match(app, /function aiModeChatLines\(row\)\{[\s\S]*?loadHubRoomPreview\(roomId, state, activeWorkspaceKey\)/, 'a company chat is read by the loader the sidebar uses');
   assert.match(js, /try\{chatRows=appHost\(\)\.chats\(\)\|\|\[\];\}catch\(e\)\{chatRows=\[\];\}/);
@@ -114,7 +114,8 @@ test('a bot\'s tile opens the chat with it, and "Show me" still opens what it br
 test('Mia\'s voice has a mute of its own, apart from the sound and from the person\'s mic', () => {
   assert.match(js, /id="quiet"/);
   assert.match(js, /id="earsVoice"[^>]*aria-label="Mute Mia\\'s voice"/);
-  assert.match(js, /function speak\(t\)\{\s*if\(muted\|\|quiet\|\|/, 'she says nothing while her voice is off');
+  assert.match(js, /function hushed\(\)\{return quiet\|\|\(muted&&!tandem\);\}/);
+  assert.match(js, /if\(hushed\(\)\|\|earState==='on'\)return;/, 'she says nothing while her voice is off');
   assert.match(js, /function quietSet\(\)\{[^}]*localStorage\.setItem\('miaAiModeQuiet'/, 'the choice is kept for the next visit');
   assert.match(js, /R\.ask&&\(muted\|\|quiet\)\?R\.ask:R\.line/, 'a question she cannot say is written');
   assert.doesNotMatch(js.slice(js.indexOf('function quietSet'), js.indexOf('function hush')), /talk\.stop|master/, 'it leaves the mic and the other sounds alone');
@@ -145,19 +146,19 @@ test('decisions come as a deck gone through one at a time, and the answers go to
 test('Mia reviews a finished bot by herself, waits while the person is busy, and has a switch', () => {
   const own = js.slice(js.indexOf('function ownReview('), js.indexOf('// A background worker Mia started'));
   assert.match(own, /if\(!own\|\|!open\)return false;/);
-  assert.match(own, /var held=drive\|\|seeing\(\)\|\|ink\.on\|\|earState==='on'\|\|earState==='wait'\|\|\$\('box'\)\.value\.trim\(\)\|\|\(R&&\(R\.running\|\|R\.ask\|\|/);
+  assert.match(own, /var held=tandem\?earState==='on'\|\|earState==='wait'\|\|!!\(R&&R\.running\):seeing\(\)\|\|ink\.on\|\|earState==='on'\|\|earState==='wait'\|\|\$\('box'\)\.value\.trim\(\)\|\|\(R&&\(R\.running\|\|R\.ask\|\|/);
   assert.match(own, /if\(held\)\{ownTimer=setTimeout\(ownReview,4000\);return false;\}/);
   // Each finished bot is reviewed once, and the turn says it was Mia's own.
   assert.match(own, /back\.forEach\(function\(b\)\{b\.seen=true;\}\);\s*direct\('\[On your own\] '/);
   assert.match(own, /R\.own=true;/);
-  assert.match(js, /if\(!bot\.seen&&!ownReview\(\)\)speak\(bot\.name\+' has finished\. Want to see it\?'\);/);
+  assert.match(js, /if\(!bot\.seen&&!ownReview\(\)\)speak\(bot\.name\+\(tandem\?' has finished\. Do you want me to go over it\?':' has finished\. Want to see it\?'\)\);/);
   assert.match(js, /localStorage\.setItem\('miaAiModeOwn',own\?'1':'0'\)/);
   assert.match(js, /id="own" aria-pressed="true"/);
   assert.match(js, /run\.own\?'Mia, on her own'/);
 });
 
 test('a returning person hears the greeting alone, not what Flow is', () => {
-  assert.match(js, /function welcome\(\)\{\s*if\(introSpoke\)\{introSpoke=false;return;\}\s*speak\('Welcome to Flow\.'\);\s*\}/);
+  assert.match(js, /function welcome\(\)\{\s*if\(introSpoke\)\{introSpoke=false;return;\}\s*speak\(tandem\?'I am with you while you work\. Just talk\.':'Welcome to Flow\.'\);\s*\}/);
 });
 
 test('Mia never speaks in the browser\u2019s own voice; with none connected she is silent and offers to connect ElevenLabs', () => {
@@ -446,7 +447,7 @@ test('a pulled chat turns the bar into its message box, a bot can be put on the 
   // The card of the page Mia is in opens her tab, not the one in front.
   assert.match(js, /else if\(R\.focus==='page'\)\{site\.open=true;pageShow\(\);\}/);
   // "Show <bot> big" is handled on the stage and is not sent to Mia.
-  assert.match(js, /if\(!shown&&stageAsk\(t\)\)return;/);
+  assert.match(js, /if\(!shown&&\(tandem\?appAsk\(t\):stageAsk\(t\)\)\)return;/);
   assert.match(css, /\.work\.big,\.work\.big\.solo\{grid-template-columns:minmax\(0,1fr\);max-width:none\}/);
   // Sounds a transcriber invents are dropped; a word or two while Mia works does not redirect her.
   const at = js.indexOf('var PHANTOM='), end = js.indexOf('function talkStart(){');

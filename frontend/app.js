@@ -1376,9 +1376,10 @@
     return 'mia.chat-model-selection.v1:' + owner + ':' + workspace + (chatScope ? ':' + encodeURIComponent(chatScope) : '');
   }
 
-  function readCachedChatModelSelection(){
+  // With no scope given this is the open chat's choice; '' asks for the one Mia and every non-bot room share.
+  function readCachedChatModelSelection(scope){
     try {
-      var cached = JSON.parse(localStorage.getItem(chatModelSelectionCacheKey()) || 'null');
+      var cached = JSON.parse(localStorage.getItem(chatModelSelectionCacheKey(undefined, scope)) || 'null');
       if(!cached || cached.version !== CHAT_MODEL_SELECTION_CACHE_VERSION) return null;
       if(!cached.provider || !cached.model) return null;
       return {
@@ -19531,7 +19532,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, model: aiModeModel};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19554,6 +19555,32 @@
   // The chats with people, as the sidebar lists them: a company's channels,
   // groups and direct messages, or Solo's direct messages. Chats with bots
   // open from the bot itself.
+  // Flow works with the model the person chose for Mia in the app, unless they pick another one in Flow.
+  function aiModeModel(){
+    var pick = readCachedChatModelSelection('');
+    return pick ? {provider: pick.provider, model: pick.model, reasoningEffort: pick.reasoningEffort, speed: pick.speed, fast: pick.speed === 'fast'} : null;
+  }
+  // Every bot and chat the sidebar can open, for "open the LinkedIn bot" said in Flow Tandem.
+  function aiModeRooms(){
+    var bots = chatSearchDirectorySnapshot().agents.filter(function(agent){ return agent && agent.id && agent.id !== 'gateway' && agent.name; }).map(function(agent){
+      return {kind:'bot', id:String(agent.id), label:String(agent.name)};
+    });
+    return bots.concat(aiModePeopleChats());
+  }
+  // Opens it the way a click on its row in the app's search does.
+  function aiModeOpenRoom(row){
+    if(!row || !row.id) return false;
+    closeBrowserSidebarDrawer();
+    closeLocalBrowser();
+    closeAutomationsPage();
+    if(row.kind === 'bot'){
+      var agent = chatSearchDirectorySnapshot().agents.filter(function(candidate){ return String(candidate.id || '') === row.id; })[0];
+      if(!agent) return false;
+      navigateToAgentChat(chatSearchAgentRecord(agent), true);
+    } else if(row.hub) openHubChannel(hubChannel(row.id));
+    else loadChatRoom(row.id, 'dm', row.label);
+    return true;
+  }
   function aiModePeopleChats(){
     if(hubWorkspace()){
       return (hubChat.channels || []).filter(function(channel){ return channel.kind !== 'bot'; }).map(function(channel){

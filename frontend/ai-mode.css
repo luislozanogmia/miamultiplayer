@@ -368,10 +368,8 @@ div.bot{cursor:default;opacity:1}
 a.file{color:var(--accent-text)}
 a.file:hover{border-color:var(--accent)}
 
-/* The person has the wheel: the stage steps aside and the app is theirs until they hand it back. */
-:host(.driving){pointer-events:none}
-:host(.driving) .stage{opacity:0;transition-duration:.5s}
-.back{position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);pointer-events:auto;height:40px;padding:0 20px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:5}
+/* Flow Tandem: the stage steps aside and the normal app is on screen, with Mia on the call. */
+:host(.tandem){pointer-events:none;opacity:0;visibility:hidden;transition:opacity .5s,visibility 0s .5s}
 /* On a phone the controls drop down under the bar, so none of them runs off the screen. */
 @media(max-width:620px){
   .hud .tools{position:absolute;top:calc(100% - 4px);right:max(12px,env(safe-area-inset-right,0px));left:max(12px,env(safe-area-inset-left,0px));flex-wrap:wrap;justify-content:flex-end;gap:6px;padding:8px;border:1px solid var(--rule);border-radius:14px;background:rgba(20,18,15,.94);backdrop-filter:blur(6px)}
@@ -411,7 +409,7 @@ a.file:hover{border-color:var(--accent)}
 .site-tab.on .pic{border-color:var(--accent-text);box-shadow:0 0 0 1px var(--accent-text),0 10px 24px rgba(0,0,0,.4)}
 .site-tab .pic{position:relative}
 .site-page{flex:1;min-width:0;min-height:0;margin:0 6px 6px;border-radius:9px;background:rgba(255,255,255,.04)}
-:host(.driving) .site{display:none}
+:host(.tandem) .site{display:none}
 @media(prefers-reduced-motion:reduce){.site-bar.loading form{animation:none}}
 
 /* How soft the pictures and words behind the work are. */

@@ -7360,6 +7360,8 @@ function aiModeHub(conversation, trigger) {
       .map((bot) => ({ name: bot.name, about: bot.description || bot.instructions })),
     models: Object.values(providers).flatMap((provider) => provider.models),
     reports: aiModeHandoffReports(conversation),
+    // Flow Tandem: the person is in the normal app and Mia talks; the stage is not on screen.
+    tandem: !!(trigger.metadata && trigger.metadata.aiModeTandem === true),
   };
 }
 

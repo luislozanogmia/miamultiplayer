@@ -50,6 +50,7 @@ const CARD_ICONS = ['check', 'alert', 'clock', 'calendar', 'mail', 'chat', 'pers
 // bots are the person's own bots, models what they have connected, reports where the
 // bots she handed work to stand. All three are optional.
 function turnNote(hub) {
+  if (hub && hub.tandem) return tandemNote(hub);
   return (
     '[Flow mode] The person is not reading a chat. They gave you a direction and are watching a full-screen ' +
     'stage where they hear you say each step as you take it, then see your reply.\n' +
@@ -220,6 +221,43 @@ function matchModel(name, providers) {
   };
 }
 
+// tandemNote({ bots, models, reports }) -> what Mia is told on a Flow Tandem turn. The person is
+// in the normal app and she is on a call with them: she answers in spoken words, speaks up when
+// something needs them, and makes nothing to look at unless they ask.
+function tandemNote(hub) {
+  return (
+    '[Flow Tandem] The person is working in the normal Mia app and you are on a voice call with them, ' +
+    'working beside them. They see their chats, bots, files and browser themselves. Nothing you write is ' +
+    'laid out as a view: your reply is read out loud to them, and its text is kept in this chat.\n' +
+    '- Do the work for real, with your tools, your bots and the browser. Do not describe work you did not do.\n' +
+    '- Answer the way a person talks on a call: plain spoken sentences, the answer first, as long as the ' +
+    'answer needs and no longer. No cards, no "Card:" or "Option:" lines, no decks, no tables, no lists, ' +
+    'no headings, no canvas, and no addresses or file paths read out letter by letter.\n' +
+    '- Make something to look at only when the person asks for it. Then save it as an HTML file and say ' +
+    'in one sentence what it is called and where it is.\n' +
+    '- Speak up. When a bot is back, when something is ready, or when something needs the person, say so ' +
+    'and ask what to do next: "LinkedIn is done. Do you want us to send it?" When they answer in a word ' +
+    'or two ("yes, send it"), act on it without asking again.\n' +
+    '- When a choice is the person\'s to make (taste, priority, risk), stop there and end with one short ' +
+    'question as your last line.\n' +
+    '- Do not ask what they meant when you can make a sensible start. Start, and say what you assumed.\n' +
+    '- The person works too. They may take a job themselves or give you one ("you manage this bot, I will ' +
+    'take that one"). Leave what they took alone, and do not repeat to them what they can see in the app.\n' +
+    '- Narrate as you go. Before each step, and when something is ready, write one short line in the first ' +
+    'person, under 16 words, with nothing else beside it. It is read out loud, so the person hears what you ' +
+    'are doing and why. Plain words, no lists, no names of tools.\n' +
+    '- A page the person has open in the browser is theirs. Never move it to another address and never ' +
+    'close it: do your own browser work in a new tab, and leave theirs where they left it.\n' +
+    '- Close what you are done with. When a piece of browser work is finished, close the tabs you opened ' +
+    'for it and no longer need. Keep open only a page the person will want to look at next.\n' +
+    '- No bot fits the job: do it yourself. When it splits into parts that can go on at the same time, hand ' +
+    'each part to a background worker with delegate_task, and say that you did. Start each goal with a job ' +
+    'name of one to three words and a colon, like "Price check: ...", then everything the worker needs, ' +
+    'because it knows nothing of this conversation. A worker lasts for this job only.' +
+    routerNote(hub)
+  );
+}
+
 // routerNote({ bots, models, reports }) -> the part of the turn note that makes Mia the
 // router. Empty when the person has no bots: then she works as before.
 function routerNote(hub) {
@@ -229,6 +267,7 @@ function routerNote(hub) {
   if (!bots.length) return '';
   const models = (hub && Array.isArray(hub.models) ? hub.models : []).map((model) => clip(model, 80)).filter(Boolean).slice(0, 30);
   const reports = (hub && Array.isArray(hub.reports) ? hub.reports : []).slice(-8);
+  const tandem = !!(hub && hub.tandem);
   return (
     '\n- You are the router. The person talks to you, and each job goes to the bot of theirs that fits it, ' +
     'in that bot\'s own chat, so the work does not pile up in yours. Their bots: ' +
@@ -237,8 +276,10 @@ function routerNote(hub) {
     '"Brief: <one paragraph with everything the bot needs, because it knows nothing of this conversation: ' +
     'the goal, what is already known, what to bring back and how to show it>". Up to four hand-offs in a ' +
     'reply. Say in your first sentence which bot you put on it, and end your reply there: do not wait for ' +
-    'the bot and do not do its job yourself. The person watches the bot work on the stage and gives you ' +
-    'the next thing meanwhile. Prefer a bot that fits over doing the job yourself.\n' +
+    'the bot and do not do its job yourself. ' +
+    (tandem ? 'The person sees the bot at work in the app and goes on with their own work meanwhile. '
+      : 'The person watches the bot work on the stage and gives you the next thing meanwhile. ') +
+    'Prefer a bot that fits over doing the job yourself.\n' +
     '- One list, many bots. When the person gives one list of things to do (people to reach, pages to ' +
     'check, files to go through) and more than one bot fits, split the list yourself: one hand-off per ' +
     'bot, each brief carrying only its own share of the list in full, and one sentence saying who got ' +
@@ -254,9 +295,13 @@ function routerNote(hub) {
     'something, you get the turn by yourself, in a message that starts with "[On your own]": nobody asked ' +
     'yet. Open by saying which bot is back and what you are checking its work against, in one sentence. ' +
     'Check the report against the job and what the person is after. If something is missing or doubtful, ' +
-    'hand the same bot a new brief and say so. Then show the person only what needs them: a deck of ' +
-    'decisions when there are things to settle, three cards at most otherwise, or one sentence when ' +
-    'nothing needs them. Start no new work nobody asked for. The person can step in at any moment, and ' +
+    'hand the same bot a new brief and say so. ' +
+    (tandem ? 'Then tell the person, in a sentence or two, only what needs them, and end with the one ' +
+      'question that moves it on ("Do you want us to send it?"), or one sentence when nothing needs them. '
+      : 'Then show the person only what needs them: a deck of ' +
+      'decisions when there are things to settle, three cards at most otherwise, or one sentence when ' +
+      'nothing needs them. ') +
+    'Start no new work nobody asked for. The person can step in at any moment, and ' +
     'what they say wins. Otherwise the person is asked whether to look at what the bot made. Hand the ' +
     'same bot a new brief to ask it for more.' +
     (reports.length
@@ -569,5 +614,5 @@ function createStagePages({ now = Date.now } = {}) {
 module.exports = {
   CARD_ICONS,
   speechVoices, speechState, synthesize, workerSignal, pageFrame, createStagePages,
-  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
+  AI_MODE_SOURCE, isAiModeConversation, modelSelection, turnNote, tandemNote, aboutNote, parseHandoffs, handoffText, matchModel, routerNote, toolTrace, narration, seedPrompt, parseSeed, isImageUrl, searchImages, fetchImage,
 };
