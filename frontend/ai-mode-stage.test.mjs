@@ -188,3 +188,22 @@ test('a card carries named links that open on the stage, and the deck lights the
   // Something said from an earlier view leaves the person on that view.
   assert.match(js, /view=away\?past\.indexOf\(away\):-1;/);
 });
+
+test('a site opened from the decision in front is shown live in that card of that deck, and nowhere else', () => {
+  const run = new Function('pane', 'site', 'var esc=String,itemView=function(it){return {url:"https://example.com",site:"example.com",src:"x"};},' +
+    'picHtml=function(){return "PIC";},picBox=function(){return "BOX";},cardWords=function(){return "";};' +
+    js.slice(js.indexOf('var DECIDE='), js.indexOf('// The one in front is kept on the run')) + 'return deckHtml;');
+  const mine = {}, other = {}, items = ['c0', 'c1'].map(key => ({ key, card: { decide: true } }));
+  const site = { open: true, card: 'c1', deckRun: mine };
+  const leaves = (deckRun, native) => run(() => native, site)(items, {}, false, deckRun).split('<article').slice(1);
+  const live = leaves(mine, {});
+  assert.doesNotMatch(live[0], /id="frontPage"/);
+  assert.match(live[0], /class="pic visit" href="https:\/\/example\.com"/);
+  assert.match(live[1], /data-key="c1"><div class="pic site-live" id="frontPage">/);
+  // The same card on another turn's deck, or with no browser to show it in, keeps its picture.
+  assert.ok(leaves(other, {}).every(l => !/frontPage/.test(l)));
+  assert.ok(leaves(mine, null).every(l => !/frontPage/.test(l)));
+  // Turning to another card closes it, and the front card's picture and links open it.
+  assert.match(js, /el\.children\[at\]\.dataset\.key!==site\.card\)\)\{deckSiteOff\(\);/);
+  assert.match(js, /closest\('\.leaf\.on a\.visit,\.leaf\.on a\.lnk'\)/);
+});

@@ -242,6 +242,7 @@ div.bot{cursor:default;opacity:1}
 .front.card .pic.visit .go,.leaf.card .pic.visit .go{position:absolute;left:12px;bottom:12px;padding:6px 11px;border:1px solid var(--rule-strong);border-radius:999px;background:rgba(20,18,15,.82);font:500 12px/1 var(--sans);color:var(--ink)}
 .front.card .pic.visit:hover .go,.leaf.card .pic.visit:hover .go{border-color:var(--accent-text)}
 .front.card.on-site .pic{aspect-ratio:auto;height:min(58vh,540px)}
+.leaf.card .pic.site-live{aspect-ratio:auto;height:min(52vh,480px)}
 .front.card .card-t{padding:16px 18px 18px}
 .front.card .card-t b{font-size:19px}
 .front.card .card-t p{font-size:15px}

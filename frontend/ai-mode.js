@@ -389,12 +389,15 @@ function frontHtml(it){
 // arrow or a dot. Each takes one answer, and the answers go back to Mia together.
 var DECIDE=[['yes','Approve'],['no','Not approve'],['work','Keep working'],['more','Show me more']];
 function isDeck(items){return items.some(function(it){return it.key!=='page'&&it.card.decide;});}
-function deckHtml(items,picks,locked){
+// A site opened from the decision in front is shown live in that card's own frame; the browser's bar
+// above it goes back, widens it over the stage, and closes it back to the card.
+function deckSite(run,key){return !!pane()&&site.open&&!!site.card&&site.card===key&&site.deckRun===run;}
+function deckHtml(items,picks,locked,run){
   var n=items.length,done=items.filter(function(it){return picks[it.key];}).length;
   var arrow=function(by,d){return '<button class="deck-go" data-turn="'+by+'" aria-label="'+(by<0?'The one before':'The next one')+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+d+'"/></svg></button>';};
   return '<div class="deck" id="deck"><div class="leaves" id="leaves">'+items.map(function(it,i){
     var v=itemView(it),pick=picks[it.key]||'';
-    return '<article class="leaf card'+(v.bot?' of-bot':'')+(pick?' decided':'')+'">'+(v.url&&v.site&&v.src&&!v.bot?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':v.bot||v.src||v.draw?picBox(v):'')+cardWords(v,'<small>'+(i+1)+' of '+n+'</small>')+
+    return '<article class="leaf card'+(v.bot?' of-bot':'')+(pick?' decided':'')+'" data-key="'+it.key+'">'+(deckSite(run,it.key)?'<div class="pic site-live" id="frontPage"></div>':v.url&&v.site&&v.src&&!v.bot?'<a class="pic visit" href="'+esc(v.url)+'" target="_blank" rel="noopener" title="Open '+esc(v.site)+'">'+picHtml(v)+'<span class="go">Open '+esc(v.site)+'</span></a>':v.bot||v.src||v.draw?picBox(v):'')+cardWords(v,'<small>'+(i+1)+' of '+n+'</small>')+
       (it.card.decide?'<div class="decide">'+DECIDE.map(function(d){
         return '<button class="btn'+(pick===d[0]?' primary':'')+'" data-pick="'+d[0]+'" data-of="'+it.key+'" aria-pressed="'+(pick===d[0]?'true':'false')+'"'+(locked?' disabled':'')+'>'+d[1]+'</button>';
       }).join('')+'</div>':'')+'</article>';
@@ -409,7 +412,11 @@ function deckMark(){
   var run=seeing()||R,at=run?run.leaf||0:0;
   [].forEach.call(el.children,function(c,i){c.classList.toggle('on',i===at);});
   [].forEach.call(root.querySelectorAll('.deck .dot'),function(d,i){d.classList.toggle('on',i===at);});
+  // A site open in a card goes with that card: turning to another one closes it.
+  if(site.deckRun&&(site.deckRun!==run||!el.children[at]||el.children[at].dataset.key!==site.card)){deckSiteOff();setTimeout(draw,0);}
+  else if(site.deckRun&&pane())sitePlace();
 }
+function deckSiteOff(){if(site.deckRun){site.deckRun=null;site.card='';site.open=false;}}
 function deckTo(i,smooth){
   var el=$('leaves'),run=seeing()||R;if(!el||!run)return;
   i=Math.max(0,Math.min(el.children.length-1,i));run.leaf=i;
@@ -431,7 +438,7 @@ function deckScrolled(el){
 function deckItems(run){return run===R?stageItems:readCards(readCanvas(run.body||'').rest).cards.map(function(c,i){return {key:'c'+i,card:c};});}
 function deckPick(key,pick){
   // A deck on an earlier view is answered there, once; the one in front waits while Mia works.
-  var run=seeing()||R;if(!run||(run===R?R.running:run.decided||!run.past||run.plain))return;
+  var run=seeing()||R;if(!run||(R&&R.running)||(run!==R&&(run.decided||!run.past||run.plain)))return;
   if(run.decided){run.decided=false;run.picks={};}
   run.picks=run.picks||{};
   if(run.picks[key]===pick)delete run.picks[key];else run.picks[key]=pick;
@@ -441,10 +448,11 @@ function deckPick(key,pick){
 }
 // The answers go to Mia in one direction. The deck stays up, answered, while she acts on them.
 function deckSend(){
-  var run=seeing()||R;if(!run||(run===R?R.running:run.decided||!run.past||run.plain))return;
+  var run=seeing()||R;if(!run||(R&&R.running)||(run!==R&&(run.decided||!run.past||run.plain)))return;
   var picks=run.picks||{},leaf=run.leaf||0,names={};DECIDE.forEach(function(d){names[d[0]]=d[1];});
   var lines=deckItems(run).filter(function(it){return it.card&&it.card.decide&&picks[it.key];}).map(function(it,i){return (i+1)+'. '+it.card.title+': '+names[picks[it.key]];});
   if(!lines.length)return;
+  deckSiteOff();
   direct('My answers to the decisions you showed me:\n'+lines.join('\n')+'\nAct on them. Carry out what I approved. Drop what I did not approve. Where I said keep working, go on with it and come back when it is ready. '+
     'Where I asked for more, show me more on that one. Leave the ones I did not answer open.',lines.length===1?lines[0].slice(3):'My '+lines.length+' answers: '+lines.map(function(l){return l.slice(3);}).join('; '));
   if(run.past)run.decided=true;else{R.picks=picks;R.decided=true;R.leaf=leaf;}
@@ -467,7 +475,7 @@ function focus(key,picked){
   draw();
 }
 // The web address a card stands for, and whether its page is the one live at the front.
-var stageItems=[];
+var stageItems=[],stageNow=null;
 function siteOf(key){
   var it=stageItems.filter(function(i){return i.key===key;})[0],v=it&&it.key!=='page'?itemView(it):null;
   return v&&v.url&&v.site?v.url:'';
@@ -514,9 +522,9 @@ function resultHtml(){
   shotWants.forEach(function(w){w.url='https://'+w.page;});
   if(!R.past)stageItems=items.slice();
   // Answers sent are shown on the deck they were given on, which no longer takes any.
-  var deck=isDeck(items)?deckHtml(items,R.decided&&!kept&&!R.past?{}:R.picks||{},R.past?!!R.decided||!!R.plain:R.running||(!!R.decided&&kept)):'';
+  var deck=isDeck(items)?deckHtml(items,R.decided&&!kept&&!R.past?{}:R.picks||{},R.past?!!R.decided||!!R.plain||!!(stageNow&&stageNow.running):R.running||(!!R.decided&&kept),R):'';
   // A card whose own page is live at the front is that page; it is not listed a second time.
-  if(pageOn()&&!siteLive(R.focus)&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
+  if(pageOn()&&!site.deckRun&&!siteLive(R.focus)&&(!drawn.html||R.focus==='page'))items.unshift({key:'page'});
   if(deck)items=items.filter(function(it){return it.key==='page';});
   var front=items.filter(function(it){return it.key===R.focus;})[0];
   return from+(front?'<div class="sm"><div class="shelf">'+items.filter(function(it){return it!==front;}).map(thumbHtml).join('')+'</div>'+frontHtml(front)+'</div>'
@@ -574,7 +582,7 @@ function filesHtml(){
 }
 // The stage for one run: the one going on now, or an earlier one the person stepped back to.
 function stageHtml(seen){
-  var rail=botsHtml(),now=R;
+  var rail=botsHtml(),now=R;stageNow=now;
   if(seen)R=seen;
   try{
     var side=seen?filesHtml():R.asks.map(askHtml).join('')+choiceHtml()+doneHtml()+miniHtml()+filesHtml();
@@ -780,7 +788,7 @@ function ended(){
   R.running=false;R.top=true;settle();
   if(own&&!ownTimer)ownTimer=setTimeout(ownReview,4000);
   // The work is done: everything she made is laid out together, the page among it.
-  if(!R.picked){R.focus='';if(pane())site.open=false;}
+  if(!R.picked){R.focus='';if(pane()&&!site.deckRun)site.open=false;}
 }
 // What the run leaves in the chat: an approval it needs, and the reply.
 function onEvent(ev){
@@ -1049,7 +1057,7 @@ function direct(t,shown){
     var was=R||past[past.length-1],keep=was?was.body||was.keep||'':'';
     // A page the person opened or chose to keep open is theirs: it stays up through the next run.
     var mine=!!(R&&R.picked&&site.open);
-    shelve(R);if(site.card){site.card='';site.open=false;}R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
+    shelve(R);if(site.card){site.card='';site.open=false;site.deckRun=null;}R=newRun(shown||t);R.keep=keep;R.at=Date.now()-2000;seed(shown||t);
     if(mine){R.picked=true;R.focus='page';}
   }
   // Said from an earlier view, it goes to Mia and the person stays where they are; "Back to now" shows her answer.
@@ -1250,7 +1258,7 @@ function siteShow(url){
 }
 function siteOpen(url){
   if(!pane())return false;
-  site.open=true;site.card='';
+  site.open=true;site.card='';site.deckRun=null;
   if(R&&s===2){R.focus='page';R.picked=true;draw();}else sitePlace();
   // A link opens in a tab of its own, so the page the person left in the browser stays.
   if(url)siteDo('new').then(function(){return siteDo('navigate',{value:url});});else siteDo('state');
@@ -1258,7 +1266,7 @@ function siteOpen(url){
 }
 function siteClose(){
   site.open=false;
-  if(R&&s===2){R.picked=true;if(R.focus==='page'||R.focus===site.card)R.focus='';site.card='';draw();}else sitePlace();
+  if(R&&s===2){R.picked=true;if(R.focus==='page'||R.focus===site.card)R.focus='';site.card='';site.deckRun=null;draw();}else sitePlace();
 }
 // The page as a picture. The desktop app holds the page; it hands a picture of the one Mia is in to
 // this computer's Mia, and every stage shows that picture, so a stage in a plain browser tab sees the
@@ -1666,6 +1674,14 @@ function build(){
     // A decision at the edge of the deck is turned to, not answered or followed.
     var leaf=e.target&&e.target.closest&&e.target.closest('.leaf');
     if(leaf&&!leaf.classList.contains('on')){e.preventDefault();deckTo([].indexOf.call(leaf.parentNode.children,leaf),true);return;}
+    // The picture or a link of the decision in front opens that page live in the card's own frame.
+    var vis=e.target&&e.target.closest&&e.target.closest('.leaf.on a.visit,.leaf.on a.lnk');
+    if(vis&&pane()){
+      e.preventDefault();var href=vis.href;
+      site.card=vis.closest('.leaf').dataset.key;site.deckRun=seeing()||R;site.open=true;site.wide=false;
+      if(vis.classList.contains('visit'))siteShow(href);else siteDo('new').then(function(){return siteDo('navigate',{value:href});});
+      draw();return;
+    }
     // A link in her reply or on a card opens on the stage, in the desktop app.
     var a=e.target&&e.target.closest&&e.target.closest('a[href]');
     if(a&&/^https?:/i.test(a.getAttribute('href')||'')&&siteOpen(a.href)){e.preventDefault();return;}
