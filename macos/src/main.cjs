@@ -24,6 +24,7 @@ const { createRequire } = require("node:module");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
+const { findApp } = require("./app-address.cjs");
 const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
@@ -2180,6 +2181,8 @@ function createWindow() {
       statePath: path.join(app.getPath("userData"), "miaos-browser-state.json"),
       safeStorage,
       workspaceRoot: miaosWorkspacePath(),
+      // `app:name` in the address bar or from a bot: the person's own app folders, then the company apps installed here.
+      resolveApp: name => findApp(name, { miaFolder: miaosWorkspacePath(), appsDir: path.join(app.getPath("userData"), "team-apps") }),
       // Development only: a shorter wait before background tabs sleep.
       tabSleepAfterMs: app.isPackaged ? undefined : Number(process.env.MIAOS_TAB_SLEEP_MS) || undefined,
       onActorEvent: createActorDiagnostics({

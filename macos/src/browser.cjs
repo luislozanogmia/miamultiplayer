@@ -11,6 +11,8 @@ const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
 const { validClerkNonce } = require("./clerk-nonce.cjs");
 const { safeBrowserPageUrl } = require("../../frontend/safe-page-url.js");
+const { appAddress, isAppAddress, parseAppAddress } = require("./app-address.cjs");
+const { appWebPreferences, configureAppContents, createWebLinkGate, prepareAppSession } = require("./app-sandbox.cjs");
 const { PAGE_HELPERS, cleanAnchor, readScript, scrollScript } = require("./space-anchor.cjs");
 
 const { createActorRuntime } = require("./browser-actors.cjs");
@@ -186,6 +188,8 @@ function normalizeGroupRecord(item) {
 function createBrowser(window, trustedOrigin, log, options = {}) {
   const tabs = new Map();
   const onClerkAuthCallback = options.onClerkAuthCallback;
+  // Finds the app an `app:name` address names, or throws a sentence to show.
+  const resolveApp = options.resolveApp;
   const shellContents = window.webContents;
   let workProposal = null;
   const workStarts = new Map();
@@ -820,6 +824,8 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   }, { useSystemPicker: true });
 
   function normalizeStoredTarget(value) {
+    // An app's address is kept as it is; the app is looked for when the tab loads.
+    if (isAppAddress(value)) return appAddress(parseAppAddress(value));
     if (isLocalFileTarget(value)) return normalizeLocalFileTarget(value, workspaceRoot);
     return normalizeTarget(value);
   }
@@ -1391,8 +1397,59 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (typeof tab.errorTimer.unref === "function") tab.errorTimer.unref();
   }
 
+  // `app:name`: one of the person's apps as a tab. Its page runs in that app's
+  // own sandbox (its partition and files, none of the browser's sign-ins), so a
+  // tab takes a new view when it goes to an app or back to the web, and its
+  // back and forward list starts again there. Only Mia's own toolbar, a bot's
+  // browser call and a tab Mia restores come here: a web page can't open one.
+  function replaceView(tab) {
+    const old = tab.view, wc = old.webContents;
+    clearPendingLoadError(tab);
+    tab.sequence++; tab.snapshots.clear(); tab.vacuumElements = []; tab.timing = null; tab.waking = false;
+    window.contentView.removeChildView(old);
+    if (!wc.isDestroyed()) wc.close();
+    attachView(tab);
+  }
+  function setTabApp(tab, found) {
+    const before = tab.app ? tab.app.identity.partition : "";
+    tab.app = found || null;
+    if (before !== (found ? found.identity.partition : "")) replaceView(tab);
+  }
+  function findAppForTab(value) {
+    if (typeof resolveApp !== "function") throw new Error("Apps can't be opened in this window.");
+    return resolveApp(parseAppAddress(value));
+  }
+  function openApp(tab, value) {
+    const found = findAppForTab(value);
+    prepareAppSession(session.fromPartition(found.identity.partition), found.identity, found.root);
+    setTabApp(tab, found);
+    const target = found.address;
+    tab.asleep = null;
+    tab.url = target;
+    tab.title = found.name;
+    tab.error = "";
+    clearPendingLoadError(tab);
+    tab.favicon = null;
+    layout();
+    persistTabs();
+    trackBrowserOperation(tab.view.webContents, tab.view.webContents.loadURL(`${found.identity.origin}/`),
+      () => browserWorkSettled(tab), { kind: (tab.botWork || 0) > 0 ? "bot page load" : "page load" }).catch(error => reportLoadError(tab, target, error));
+    publish();
+    return target;
+  }
+  // A bot that asks for an app that isn't here is told which apps are, before a tab is made.
+  function requireAppForProtocol(value) {
+    if (!isAppAddress(value)) return;
+    try { findAppForTab(value); } catch (error) { throw protocolError("APP_NOT_FOUND", error.message); }
+  }
+  // Where a bot's or the person's own address goes: an app, or the web.
+  function openAddress(tab, value) {
+    return isAppAddress(value) ? openApp(tab, value) : navigate(tab, value);
+  }
+
   function navigate(tab, value) {
     const target = normalizeTarget(value);
+    if (tab.app) setTabApp(tab, null);
     tab.asleep = null;
     tab.url = target;
     tab.error = "";
@@ -1409,6 +1466,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
 
   function openLocalFile(tab, value, { anyRoot = false } = {}) {
     const target = normalizeLocalFileTarget(value, workspaceRoot, { anyRoot });
+    if (tab.app) setTabApp(tab, null);
     // Remembered so a sleeping tab Mia opened outside the workspace can wake.
     tab.anyRootFile = anyRoot;
     tab.asleep = null;
@@ -1634,7 +1692,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // Same page: same address, ignoring a trailing slash and the #fragment.
   function botTabAtAddress(actor, value) {
     let target;
-    try { target = normalizeTarget(value); } catch (_) { return null; }
+    try { target = isAppAddress(value) ? appAddress(parseAppAddress(value)) : normalizeTarget(value); } catch (_) { return null; }
     const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
     return [...tabs.values()]
       .filter(tab => botOwnsTab(actor, tab) && key(tab.url) === key(target))
@@ -1659,7 +1717,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (method === "tab_close") return;
     // 2. The same page in a bot's tab, while that bot is on it.
     const key = address => String(address || "").replace(/#.*$/, "").replace(/\/+$/, "");
-    const taken = MIA_EDITS.has(method) && /^https?:/i.test(tab.url || "") && [...tabs.values()].find(other => other !== tab
+    const taken = MIA_EDITS.has(method) && /^(https?:|app:)/i.test(tab.url || "") && [...tabs.values()].find(other => other !== tab
       && tabController(other).kind === "bot" && key(other.url) === key(tab.url)
       && (botWorkPending(other) || Date.now() - (other.botWorkAt || 0) < BOT_ON_PAGE_MS));
     if (taken) {
@@ -1668,7 +1726,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     }
     // 3. A tab Mia did not open for this conversation needs a look first.
     // An empty tab has nothing of the person's on it.
-    if (!/^(https?|file):/i.test(tab.url || "")) return;
+    if (!/^(https?|file|app):/i.test(tab.url || "")) return;
     if (tab.miaSession === session || miaTaskTabs.get(session)?.has(tab.id)) return;
     if (params.for_this_request === true) {
       if (!miaTaskTabs.has(session)) miaTaskTabs.set(session, new Set());
@@ -2562,6 +2620,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (method === "tab_open") {
       // A bot asking for a page it already has open gets that tab back
       // instead of a duplicate.
+      if (params.url) requireAppForProtocol(params.url);
       const existing = actor && params.url ? botTabAtAddress(actor, params.url) : null;
       if (existing) {
         existing.botUsedAt = ++botUseCounter;
@@ -2575,7 +2634,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       if (actor) placeInBotGroup(tab, actor);
       else tab.miaSession = actorSession;
       touch(tab);
-      if (params.url) navigate(tab, params.url);
+      if (params.url) openAddress(tab, params.url);
       await waitForProtocolPage(tab, params.wait || "load", params.signal);
       return protocolTabResult(tab);
     }
@@ -2668,7 +2727,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (method !== "navigate") await wakeForBot(tab, params.signal);
     if (method === "navigate") {
       if (!params.url) throw protocolError("INVALID_PARAMS", "url is required.");
-      navigate(tab, params.url);
+      requireAppForProtocol(params.url);
+      openAddress(tab, params.url);
       await waitForProtocolPage(tab, params.wait || "none", params.signal);
       return protocolTabResult(tab);
     }
@@ -2679,7 +2739,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     }
     if (method === "vacuum") {
       if (params.url) {
-        navigate(tab, params.url);
+        requireAppForProtocol(params.url);
+        openAddress(tab, params.url);
         await waitForProtocolPage(tab, params.wait || "load", params.signal);
       }
       if (actor && !botOwnsTab(actor, tab)) throw protocolError("TAB_NOT_FOUND", "This tab is no longer assigned to this bot.");
@@ -2922,7 +2983,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     tab.asleep = null; tab.usedAt = Date.now(); tab.waking = true;
     const wc = tab.view.webContents, target = tab.url;
     try {
-      if (saved.entries.length && typeof wc.navigationHistory.restore === "function") {
+      if (isAppAddress(target)) openApp(tab, target);
+      else if (saved.entries.length && typeof wc.navigationHistory.restore === "function") {
         trackBrowserOperation(wc, wc.navigationHistory.restore({ entries: saved.entries, index: saved.index }),
           () => browserWorkSettled(tab), { kind: "page load" }).catch(error => reportLoadError(tab, target, error));
       } else if (isLocalFileTarget(target)) openLocalFile(tab, target, { anyRoot: tab.anyRootFile === true });
@@ -2949,7 +3011,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   // A tab's page: its view and everything Mia listens for on it. A sleeping
   // tab gets a fresh, empty one, which has no page process until it loads.
   function attachView(tab) {
-    const view = new WebContentsView({ webPreferences: {
+    // An app's page gets the app sandbox's own view: no preload, its own partition.
+    const appTab = tab.app || null;
+    const view = new WebContentsView({ webPreferences: appTab ? appWebPreferences(appTab.identity.partition) : {
       session: profile, sandbox: true, contextIsolation: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false,
       // Completes window.chrome and navigator.userAgentData the way real
@@ -3030,7 +3094,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       }).catch(() => { tab.clerkCallbackPending = false; });
       return true;
     };
-    wc.setWindowOpenHandler(({ url, disposition }) => {
+    // An app stays on its own pages. A web link it opens becomes a tab beside
+    // it, and only when the person just used the app (app-sandbox.cjs).
+    if (appTab) configureAppContents(wc, {
+      host: appTab.identity.host,
+      openFromApp: createWebLinkGate(url => { try { newTab(url, { after: tab.id }); } catch (_) { /* Deny non-web targets. */ } }),
+    });
+    else wc.setWindowOpenHandler(({ url, disposition }) => {
       if (handOffClerkCallback(url)) return { action: "deny" };
       // A page a bot or Mia is driving may hand off through a popup (a flight
       // site's "Continue to book" opens the airline). It never becomes a
@@ -3108,8 +3178,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         if (!wc.isDestroyed()) wc.removeListener("destroyed", closePopup);
       });
     });
-    wc.on("will-navigate", guard);
-    wc.on("will-redirect", guard);
+    if (!appTab) {
+      wc.on("will-navigate", guard);
+      wc.on("will-redirect", guard);
+    }
     wc.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
       if (mainFrame) clearPresenceTargets(tab);
       if (mainFrame && !inPlace) {
@@ -3161,7 +3233,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     });
     const navigated = (_event, url, isMainFrame = true) => {
       if (!isMainFrame) return;
-      tab.url = url;
+      // An app's tab keeps the app's address, whichever of its pages shows.
+      tab.url = appTab ? appTab.address : url;
       if (!tab.restoreMediaPending) {
         if (tab.restoredMediaPlaybackGuard && !wc.isDestroyed()) {
           wc.removeListener("media-started-playing", tab.restoredMediaPlaybackGuard);
@@ -3171,7 +3244,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       }
       tab.error = ""; persistTabs(); layout(); publish();
     };
-    wc.on("did-navigate", (_event, url) => { navigated(_event, url); recordVisit(url, tab.title); });
+    wc.on("did-navigate", (_event, url) => { navigated(_event, url); if (!appTab) recordVisit(url, tab.title); });
     wc.on("did-navigate-in-page", (event, url, mainFrame) => {
       if (mainFrame) {
         tab.sequence++;
@@ -3216,6 +3289,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     });
   }
   function newTab(value, options = {}) {
+    // A link or a popup of a page comes through here too, and never opens an app.
+    if (value && isAppAddress(value) && options.allowApp !== true) throw new Error("Use an HTTP or HTTPS address without embedded credentials.");
     if (value) normalizeStoredTarget(value);
     const groupId = groups.has(options.groupId) ? options.groupId
       : options.groupId === undefined && groups.has(tabs.get(options.after)?.groupId) ? tabs.get(options.after).groupId : null;
@@ -3248,13 +3323,16 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     tab.usedAt = Date.now();
     if (value && options.asleep === true) {
       // Opens asleep: its page loads when it comes to the front or a bot uses it.
-      tab.url = isLocalFileTarget(value) ? value : normalizeTarget(value);
+      tab.url = isLocalFileTarget(value) ? value : normalizeStoredTarget(value);
       tab.asleep = { entries: [], index: 0 };
       try { tab.favicon = historyIcons.get(historyHost(tab.url)) || null; } catch (_) { /* no icon yet */ }
       if (tab.id === activeId && !restoring) wakeTab(tab);
     } else if (value) {
       if (isLocalFileTarget(value)) openLocalFile(tab, value);
-      else navigate(tab, value);
+      else if (isAppAddress(value)) {
+        // An app that is gone leaves the tab, with the reason on it.
+        try { openApp(tab, value); } catch (error) { tab.url = normalizeStoredTarget(value); showLoadError(tab, tab.url, error.message, false); }
+      } else navigate(tab, value);
     }
     layout(); persistTabs(); publish();
     if (tab.id === activeId) focusTabWebContents(tab);
@@ -3405,7 +3483,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     items.push(
       { type: "separator" },
       { label: "Reload", enabled: !!tab.url, click: menuAction(() => { tab.error = ""; tab.view.webContents.reload(); }) },
-      { label: "Duplicate", enabled: !!tab.url, click: menuAction(() => newTab(tab.url, { after: tabId })) },
+      { label: "Duplicate", enabled: !!tab.url, click: menuAction(() => newTab(tab.url, { after: tabId, allowApp: true })) },
       { type: "separator" },
       { label: "Save Page as Artifact", enabled: /^https?:/i.test(tab.url || ""), click: menuAction(() => {
         savePageCopy(tab).then(
@@ -3581,9 +3659,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (!entry) return null;
     const after = tabs.has(entry.afterId) ? { after: entry.afterId } : {};
     try {
-      return newTab(entry.url, { title: entry.title, groupId: groups.has(entry.groupId) ? entry.groupId : null, ...after });
+      return newTab(entry.url, { title: entry.title, groupId: groups.has(entry.groupId) ? entry.groupId : null, allowApp: true, ...after });
     } catch (_) {
-      return newTab(entry.url, { title: entry.title, groupId: null });
+      return newTab(entry.url, { title: entry.title, groupId: null, allowApp: true });
     }
   }
   function closedTabMenuItems() {
@@ -4102,7 +4180,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         // A page the person opens may take their focus as it loads.
         tab.personPressedAt = Date.now() + PERSON_LOAD_MS;
         if (isLocalFileTarget(command.value)) openLocalFile(tab, command.value);
-        else navigate(tab, command.value);
+        else openAddress(tab, command.value);
       }
       // The size a page is drawn at, from half to three times its own.
       if (command.action === "zoom" && Number.isFinite(command.factor)) {
@@ -4234,7 +4312,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     }
     for (const savedTab of restored.tabs) {
       // Saved tabs come back asleep; only the one in front loads.
-      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false, asleep: true,
+      newTab(savedTab.url, { id: savedTab.id, title: savedTab.title, media: savedTab.media, activate: false, asleep: true, allowApp: true,
         groupId: renamed.get(savedTab.groupId) || savedTab.groupId, private: savedTab.private === true });
     }
     normalizeGroups();

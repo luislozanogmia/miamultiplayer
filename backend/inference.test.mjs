@@ -485,6 +485,15 @@ test('Mia and bots are told to show folders through the app, never through open 
   assert.match(fs.readFileSync(new URL('./miaos-ghost-cli.py', import.meta.url), 'utf8'), /"ghost_folder_open": "folder_open",/);
 });
 
+test('Mia and bots are told to open an app in the Mia browser by its name', async () => {
+  for (const policy of [inference.appOwnedToolPolicy({ botWorker: false }), inference.appOwnedToolPolicy({ botWorker: true })]) {
+    assert.ok(policy.includes(inference.MIAOS_APP_OPEN_POLICY), 'one shared instruction for Mia and every bot');
+    assert.equal(policy.split(inference.MIAOS_APP_OPEN_POLICY).length, 2, 'said once');
+    assert.match(policy, /ghost-cli call ghost_tab_open --arguments '\{"instance_id":"miaos","url":"app:name-of-the-app"\}'/);
+  }
+  assert.match(inference.MIAOS_APP_OPEN_POLICY, /the error lists the apps that are there/);
+});
+
 test('bot context keeps durable instructions while Hermes owns structured conversation context', () => {
   const prompt = inference.buildBotContext({
     name: 'News briefing',

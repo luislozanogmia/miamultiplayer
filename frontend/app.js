@@ -8516,6 +8516,8 @@
     if(!input) throw new Error('Enter an address or search.');
     // Local files go to the browser as typed; it opens only files in the Mia folder.
     if(/^file:\/\//i.test(input) || input.charAt(0) === '/') return input;
+    // app:name is one of the person's apps; the browser finds it and opens it as a tab.
+    if(/^app:(?!\/\/)\s*\S/i.test(input)) return input;
     var explicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
     var localAddress = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
     var domainAddress = /^[\w.-]+\.\w+(?::\d+)?(?:[/?#]|$)/i.test(input);

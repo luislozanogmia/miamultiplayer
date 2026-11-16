@@ -293,6 +293,12 @@ function appSessionRecord(ses, host) {
   return record;
 }
 
+// Points an app's session at the folder it serves. The Apps page and a browser
+// tab of the same app go through here, so both run in one session with one set of data.
+function prepareAppSession(ses, identity, root) {
+  appSessionRecord(ses, identity.host).root = root;
+}
+
 // Where a web link from an app goes: an https page opens in Mia's browser, where
 // the person is signed in. So it takes real use of that app just before: `input`
 // is filled from input the browser process saw, which a page can't fake, and one
@@ -436,7 +442,7 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
   return {
     // Opens or re-opens an app from a folder. Returns the key its tab goes by.
     open(identity, root) {
-      appSessionRecord(session.fromPartition(identity.partition), identity.host).root = root;
+      prepareAppSession(session.fromPartition(identity.partition), identity, root);
       let pane = panes.get(identity.key);
       const fresh = !pane;
       if (!pane) pane = create(identity, root);
@@ -470,6 +476,6 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
 module.exports = {
   APP_CSP, APP_PARTITION_PREFIX, APP_SCHEME, APP_SCHEME_PRIVILEGES,
   appFileResponse, appIdentity, appResponseHeaders, appWebPreferences, configureAppContents, configureAppSession,
-  createAddressCheck, createAppPanes, createWebLinkGate, isInside, isPrivateAddress, localAppRoot, requestAllowed,
+  createAddressCheck, createAppPanes, createWebLinkGate, isInside, isPrivateAddress, localAppRoot, prepareAppSession, requestAllowed,
   requestSegments, resolveAppFile, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot,
 };

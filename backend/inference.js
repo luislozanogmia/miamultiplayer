@@ -202,6 +202,14 @@ const MIAOS_BOT_TOOLSETS = Object.freeze(
     : ['web', 'todo', 'clarify', 'terminal']
 );
 
+// An app the person made or installed opens in Mia's browser by its name, so a
+// bot can read and use it like any page. Same text for Mia and every bot.
+const MIAOS_APP_OPEN_POLICY = `
+One of the user's apps (a folder with an index.html in the Mia folder, or a company app installed on this computer) opens in the Mia browser by name:
+ghost-cli call ghost_tab_open --arguments '{"instance_id":"miaos","url":"app:name-of-the-app"}'
+Spaces, dashes, underscores and capitals in the name don't matter. Then read and use it like any page, with the tab_id it returned. If no app has that name, the error lists the apps that are there; never guess a file path or a localhost address for an app.
+`.trim();
+
 const MIAOS_BOT_WEB_POLICY = `
 Mia brokered web-access policy: when the user asks for current, latest, or
 public web information, call web_search and use the returned sources. When the
@@ -248,7 +256,7 @@ function appOwnedToolPolicy(options = {}) {
     // Bot turns start from a compact operating prompt. The runtime still
     // exposes the restricted bot tool profile; this text supplies only the
     // app-owned browser boundary instead of injecting the full Mia harness.
-    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE, MIAOS_FOLDER_OPEN_POLICY]
+    return [MIAOS_BOT_COMPACT_TOOL_POLICY, MIAOS_BOT_BROWSER_NUDGE, MIAOS_APP_OPEN_POLICY, MIAOS_FOLDER_OPEN_POLICY]
       .filter(Boolean).join('\n\n');
   }
   return [loadMiaGhostSkill(), loadMiaBotCreationSkill()].filter(Boolean).join('\n\n');
@@ -301,6 +309,7 @@ function loadMiaGhostSkill() {
       return [
         MIAOS_BROWSER_TURN_POLICY,
         MIAOS_GHOST_FALLBACK,
+        MIAOS_APP_OPEN_POLICY,
         MIAOS_FOLDER_OPEN_POLICY,
         'The browser module is bundled and app-owned.',
         body,
@@ -314,6 +323,7 @@ function loadMiaGhostSkill() {
   return [
     MIAOS_BROWSER_TURN_POLICY,
     MIAOS_GHOST_FALLBACK,
+    MIAOS_APP_OPEN_POLICY,
     MIAOS_FOLDER_OPEN_POLICY,
     'The browser module is bundled and app-owned.',
   ].join('\n\n');
@@ -1243,6 +1253,7 @@ module.exports = {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_WEB_POLICY,
   MIAOS_BOT_COMPACT_TOOL_POLICY,
+  MIAOS_APP_OPEN_POLICY,
   MIAOS_FOLDER_OPEN_POLICY,
   appOwnedToolPolicy,
   MIAOS_AGENT_MAX_TURNS,
