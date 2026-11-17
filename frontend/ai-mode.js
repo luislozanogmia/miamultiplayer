@@ -1382,7 +1382,12 @@ function direct(t,shown){
       ev.metadata={aiModeSaid:str(shown||t,2000)};
       if(pick)ev.metadata.chatModelSelection=pick;
       ev.metadata.aiModeRooms=roomNames();if(tandem)ev.metadata.aiModeTandem=true;
-      return call(chat(id,'/events'),ev);
+      return call(chat(id,'/events'),ev).then(function(r){
+        // Said here, so Mia's row in the app opens this chat next.
+        var h=window.miaAiModeHost;
+        if(r&&r.status<300&&h&&h.spoke)try{h.spoke(id);}catch(e){}
+        return r;
+      });
     });
   };
   send(t).then(function(r){

@@ -7158,7 +7158,9 @@
   function rememberAgentChat(roomId){
     var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
     var ownerId = agentChatOwnerId(conversation);
-    if(!ownerId) return;
+    if(ownerId) setAgentChat(ownerId, roomId);
+  }
+  function setAgentChat(ownerId, roomId){
     var chats = rememberedAgentChats();
     chats[ownerId] = roomId;
     var key = agentChatsStorageKey(), value = JSON.stringify(chats);
@@ -19650,7 +19652,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, model: aiModeModel};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, spoke: aiModeSpoke, model: aiModeModel};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19677,6 +19679,21 @@
   function aiModeModel(){
     var pick = readCachedChatModelSelection('');
     return pick ? {provider: pick.provider, model: pick.model, reasoningEffort: pick.reasoningEffort, speed: pick.speed, fast: pick.speed === 'fast'} : null;
+  }
+  // What the person says in Flow or Flow Tandem goes into a chat with Mia. That
+  // chat is now the one they last used with her, so her sidebar row opens it.
+  function aiModeSpoke(conversationId){
+    var id = String(conversationId || '');
+    if(!id || rememberedAgentChats().gateway === id) return;
+    setAgentChat('gateway', id);
+    if((chatWs.nativeConversations || []).some(function(conversation){ return conversation.id === id; })){ renderChatSidebar(); return; }
+    // A chat Flow just made is not in the list yet.
+    var workspaceKey = activeWorkspaceKey;
+    loadNativeConversations().then(function(list){
+      if(activeWorkspaceKey !== workspaceKey) return;
+      applyNativeConversationList(list);
+      renderChatSidebar();
+    }).catch(function(){});
   }
   // Every bot and chat the sidebar can open, for Mia to open by name in Flow Tandem.
   function aiModeRooms(){
