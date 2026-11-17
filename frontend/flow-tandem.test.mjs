@@ -121,9 +121,12 @@ test('Mia moves the app herself: her "Open:" lines are done by the app, and a mi
 
 test('a bot that finishes is announced with the next step it suggests, and a spoken yes hands it to Mia', () => {
   const watch = js.slice(js.indexOf('function watchBots(){'), js.indexOf('function watchStart(){'));
-  assert.match(watch, /var step=got\.next;/);
+  assert.match(watch, /reportSay\(bot\.name,own\?'':str\(row\.label,60\),got\.next\);/);
   assert.match(js, /next:str\(meta\.nextStep,160\)/);
-  assert.match(watch, /speak\(bot\.name\+' has finished\.'\+\(step\?' It suggests next: '\+step\+'\. Should it go ahead\?':''\)\)/);
+  const say = part('function reportSay(name,chat,step){', '// A company keeps its chats');
+  // Only Flow Tandem takes a spoken yes, so only there is the step kept and the question asked.
+  assert.match(say, /suggest=step&&tandem\?\{bot:name,step:step,at:now\}:null;/);
+  assert.match(say, /speak\(name\+' has finished'\+\(chat\?' in '\+chat:''\)\+'\.'\+\(step\?' It suggests next: '\+step\+'\.'\+\(tandem\?' Should it go ahead\?':''\):''\)\);/);
   const src = part('function spokenAnswer(t){', '// The whole answer is said');
   const run = (suggest, said, ask) => {
     const log = [];
@@ -179,18 +182,69 @@ test('the card says where the call stands in one line and keeps no state of its 
   assert.ok(html.indexOf('ai-mode.js?v=') < html.indexOf('flow-tandem.js?v='));
 });
 
-test('in Tandem Mia listens in every bot chat and announces a bot the person drove', () => {
+test('in Flow and in Flow Tandem Mia listens in the chats the person chose and announces a bot the person drove', () => {
   const src = js;
   const watch = src.slice(src.indexOf('function watchBots(){'), src.indexOf('function watchStart(){'));
-  assert.match(watch, /if\(!tandem\)return;/);
-  assert.match(watch, /row\.kind==='bot'\?row\.conversationId:''/);
+  assert.match(watch, /if\(!open\)return;/);
+  assert.match(watch, /var id=reportsOn\(row\)\?row\.conversationId:'';/);
   // A bot Mia briefed is followed by followBot, so it is not announced twice.
-  assert.match(watch, /var got=tandem&&!botSocks\[id\]\?botEvent\(ev,since\):null;/);
+  assert.match(watch, /var got=open&&!botSocks\[id\]\?botEvent\(ev,since\):null;/);
   assert.match(watch, /botAsk\(bot,got\.ask\)/);
-  assert.match(watch, /speak\(bot\.name\+' has finished\.'/);
   assert.match(src, /watchStart\(\);tandemTell\(\);/);
-  assert.equal(src.split('watchStop();').length - 1, 2);
+  assert.match(part('function enter(', 'function leave('), /openChat\(\)\.catch\(function\(\)\{\}\);\n  watchStart\(\);/, 'listening starts with Flow, not only with Tandem');
+  assert.doesNotMatch(part('function tandemStage(', 'function tandemMic('), /watchStop/, 'going back to the stage keeps her listening');
   assert.match(app, /return \{kind:'bot', id:String\(agent\.id\), label:String\(agent\.name\), conversationId:String\(roomId\)\};/);
+});
+
+test('one choice, the same in Flow and in Flow Tandem, says whose finished work Mia reports', () => {
+  const src = part('var REPORTS=', '// A finished bot is said once');
+  const run = (kept, calls) => {
+    const store = {miaAiModeReports: kept}, log = [];
+    const f = new Function('localStorage', 'log', 'var host=null,open=true;function watchStop(){log.push("stop");}function watchStart(){log.push("start");}function tandemTell(){log.push("tell");}function $(){return {options:[]};}'
+      + src + ';return (' + calls + ');');
+    return [f({getItem: k => store[k], setItem: (k, v) => { store[k] = v; }}, log), store.miaAiModeReports, log];
+  };
+  const rows = '[{kind:"bot"},{kind:"chat",mia:true},{kind:"chat"}].map(reportsOn)';
+  assert.deepEqual(run(undefined, '[reports,' + rows + ']')[0], ['bots', [true, false, false]], 'every bot of the person, until they choose');
+  assert.deepEqual(run('crew', rows)[0], [false, false, false], 'followBot alone reports the bots Mia started');
+  assert.deepEqual(run('mia', rows)[0], [true, true, false]);
+  assert.deepEqual(run('all', rows)[0], [true, true, true]);
+  assert.equal(run('nonsense', 'reports')[0], 'bots');
+  // A new choice is kept, the chats listened in are picked again, and the Tandem card is told.
+  assert.deepEqual(run('bots', '(reportsSet("all"),reports)'), ['all', 'all', ['stop', 'start', 'tell']]);
+  assert.deepEqual(run('bots', '(reportsSet("everything"),reports)'), ['bots', 'bots', []]);
+  assert.match(src, /REPORTS=\[\['crew','Bots Mia started'\],\['bots','All your bots'\],\['mia','Chats with Mia'\],\['all','Every chat'\]\]/);
+  // Both faces draw the same list from the same place.
+  assert.match(js, /reports:reports,reportChoices:REPORTS\}/);
+  assert.match(js, /report:reportHeard,\n  tandem:\{start:tandemStart,/);
+  assert.match(js, /state:tandemState,reports:reportsSet,/);
+  assert.match(card, /\$\('flowTandemReports'\)\.onchange=function\(\)\{api\(\)\.reports\(this\.value\);\};/);
+  assert.match(card, /\(st\.reportChoices\|\|\[\]\)\.forEach/);
+});
+
+test('a bot that finishes in a company chat is handed to Flow once, by the app', () => {
+  const src = app.slice(app.indexOf('  var hubBotsWorking = {};'), app.indexOf('  function aiModeChatLines(row){'));
+  const run = (calls, kind = 'chat') => {
+    const got = [];
+    const f = new Function('window', 'hubChannel', 'hubChannelLabel', src + calls);
+    f({MiaAiMode: {report: r => got.push(r)}}, id => id === 'gone' ? null : {id, kind}, () => '# plans');
+    return got;
+  };
+  const now = new Date().toISOString(), bot = {author_type: 'bot', author_name: 'Scout', id: 7, created_at: now};
+  const row = more => JSON.stringify({...bot, ...more});
+  const told = [{kind: 'chat', bot: 'Scout', chat: '# plans', mia: false}];
+  assert.deepEqual(run(`aiModeHubReport('c',${row()},true);`), told, 'a reply that arrives finished');
+  assert.deepEqual(run(`aiModeHubReport('c',${row({status: 'working'})},true);`), [], 'not while it works');
+  assert.deepEqual(run(`aiModeHubReport('c',${row({status: 'working'})},true);aiModeHubReport('c',${row()},false);aiModeHubReport('c',${row()},false);`), told, 'once, when its run ends; a later change is not a report');
+  assert.deepEqual(run(`aiModeHubReport('c',${row()},false);`), [], 'a change to a finished reply');
+  assert.deepEqual(run(`aiModeHubReport('c',${row({deleted: true})},true);`), []);
+  assert.deepEqual(run(`aiModeHubReport('c',${row({author_type: 'user'})},true);`), [], 'people are not bots');
+  assert.deepEqual(run(`aiModeHubReport('c',${row({created_at: '2026-01-01T00:00:00Z'})},true);`), [], 'a chat catching up is old news');
+  assert.deepEqual(run(`aiModeHubReport('gone',${row()},true);`), []);
+  assert.equal(run(`aiModeHubReport('c',${row()},true);`, 'bot')[0].kind, 'bot', 'the bot\'s own chat counts as a bot');
+  const heard = part('function reportHeard(r){', '// Mia looks at a finished bot');
+  assert.match(heard, /if\(!open\|\|!r\|\|!reportsOn\(r\)\)return;/);
+  assert.match(app, /conversationId:String\(dm\.roomId \|\| ''\),\n\s+mia:\(dm\.members \|\| \[\]\)\.some\(function\(member\)\{ return member\.kind !== 'human' && member\.agentId === 'gateway'; \}\)/);
 });
 
 test('a bot Mia briefed and a bot the person drives are read by one function, and the app list is read in one place', () => {

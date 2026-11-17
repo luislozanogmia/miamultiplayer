@@ -19,7 +19,7 @@ function moteArt(name){
   return a?'src="'+esc(a.src)+'" style="filter:'+esc(a.filter)+'"':'src="'+mote(name)+'"';
 }
 var MARKUP=
-  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-19">'+
+  '<link rel="stylesheet" href="ai-mode.css?v=20261116-ai-mode-20">'+
   '<div class="stage" id="stage">'+
     '<canvas id="rain" aria-hidden="true"></canvas>'+
     '<div class="mind" id="mind" aria-hidden="true"></div>'+
@@ -37,6 +37,7 @@ var MARKUP=
       '<button class="btn ghost" id="quiet" aria-pressed="false">Mia\'s voice on</button>'+
       '<button class="btn ghost" id="voiceSet" hidden>Connect a voice</button>'+
       '<button class="btn ghost" id="own" aria-pressed="true" title="When a bot finishes, Mia checks its work first and shows you only what needs you">Mia reviews on her own</button>'+
+      '<select class="btn ghost" id="reports" aria-label="Whose finished work Mia tells you about" title="Whose finished work Mia tells you about"></select>'+
       '<button class="btn ghost" id="mute">Sound on</button>'+
       '<button class="btn ghost" id="full" hidden>Full screen</button>'+
       '<button class="btn ghost" id="phoneBtn" aria-expanded="false" hidden>Phone</button>'+
@@ -1156,12 +1157,53 @@ function followBot(b){
     bot.reply=text.slice(0,20000);bot.running=false;
     // Its report is the first paragraph it wrote, cut to what fits a card.
     bot.report=str(text.replace(/[*_`#>]+/g,'').split(/\n\s*\n|\n(?=\s*Card:)/i)[0].replace(/\s+/g,' '),420);
+    reportSaid[bot.name.toLowerCase()]=Date.now();
     if(!bot.seen&&!ownReview())speak(bot.name+(tandem?' has finished. Do you want me to go over it?':' has finished. Want to see it?'));
     redraw();
   },function(a){
     if(!open||!a)return;
     if(a.phase==='start'){bot.running=true;bot.line=str(a.label,40)||'Working';redraw();}
   });
+}
+// Whose finished work Mia tells the person about: one choice, the same in Flow and in Flow Tandem.
+// Each one adds to the one before it: the bots she put on the work, every bot in its own chat, bots
+// in the chats she is in, bots in every chat.
+var REPORTS=[['crew','Bots Mia started'],['bots','All your bots'],['mia','Chats with Mia'],['all','Every chat']];
+var reports='bots';try{var reportsKept=localStorage.getItem('miaAiModeReports');if(REPORTS.some(function(r){return r[0]===reportsKept;}))reports=reportsKept;}catch(e){}
+function reportsShow(){
+  var pick=$('reports');
+  if(!pick.options.length)REPORTS.forEach(function(r){var o=document.createElement('option');o.value=r[0];o.textContent='Reports: '+r[1];pick.appendChild(o);});
+  pick.value=reports;
+}
+function reportsSet(v){
+  if(v===reports||!REPORTS.some(function(r){return r[0]===v;}))return;
+  reports=v;try{localStorage.setItem('miaAiModeReports',v);}catch(e){}
+  if(host)reportsShow();
+  // The chats she listens in are picked again for the new choice.
+  watchStop();if(open)watchStart();
+  tandemTell();
+}
+// Whether a bot's own chat (kind bot) or a chat with people in it (kind chat) is one she reports on.
+function reportsOn(row){
+  if(!row||reports==='crew')return false;
+  return row.kind==='bot'||(row.kind==='chat'&&(reports==='all'||(reports==='mia'&&!!row.mia)));
+}
+// A finished bot is said once, wherever it was heard: the same bot inside a few seconds is the same work.
+var reportSaid={};
+function reportSay(name,chat,step){
+  var key=name.toLowerCase(),now=Date.now();
+  if(now-(reportSaid[key]||0)<15000)return;
+  reportSaid[key]=now;
+  // The next step the bot suggests, the one the app offers in its message box, is said too. Only
+  // Flow Tandem takes a spoken yes for it.
+  suggest=step&&tandem?{bot:name,step:step,at:now}:null;
+  speak(name+' has finished'+(chat?' in '+chat:'')+'.'+(step?' It suggests next: '+step+'.'+(tandem?' Should it go ahead?':''):''));
+}
+// A company keeps its chats, so there is none here to listen in: the app hears a bot finish there
+// and hands it over.
+function reportHeard(r){
+  if(!open||!r||!reportsOn(r))return;
+  reportSay(str(r.bot,40)||'A bot',r.kind==='chat'?str(r.chat,60):'','');
 }
 // Mia looks at a finished bot's work by herself: she says the bot is back, checks what it brought
 // against the job, and comes back only with what needs the person. She waits while the person is
@@ -1426,7 +1468,7 @@ function answer(id,ok){
 function tandemTell(){var st=tandemState();tandemSubs.forEach(function(f){try{f(st);}catch(e){}});}
 function tandemState(){
   return {on:tandem,since:tandemSince,line:tandemLine,note:earNote,hearing:earState,working:!!(R&&R.running),talking:busy,
-    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices};
+    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices,reports:reports,reportChoices:REPORTS};
 }
 function tandemStart(){
   if(tandem)return;
@@ -1445,7 +1487,6 @@ function tandemStart(){
 function tandemStage(){
   if(!tandem)return;
   tandem=false;host.classList.remove('tandem');
-  watchStop();
   if(tandemTalk&&!talkKept())talkStop();tandemTalk=false;
   if(master)master.gain.setTargetAtTime(muted?0:1,ac.currentTime,1);
   sitePlace();draw();setTimeout(function(){if(open&&!tandem)$('box').focus();},200);
@@ -1453,24 +1494,22 @@ function tandemStage(){
 }
 // The card's mic button: one click mutes the mic or turns it back on.
 function tandemMic(){if(!talkOn){tandemTalk=!talkKept();talkStart();}else talkMute();tandemTell();}
-// In Flow Tandem the person drives bots too, in the app. Mia listens in every bot's chat, so a bot the
-// person briefed is announced like one she briefed, and its question for an OK is asked out loud. A bot
-// Mia put on the work is followed by followBot, and this stays silent for it.
+// The person drives bots too, in the app. In Flow and in Flow Tandem Mia listens in the chats the
+// person chose (reportsOn), so a bot the person briefed is announced like one she briefed, and its
+// question for an OK is asked. A bot Mia put on the work is followed by followBot, and this stays
+// silent for it.
 var watchSocks={},watchTimer=null,suggest=null;
 function watchBots(){
-  if(!tandem)return;
+  if(!open)return;
   appRooms().forEach(function(row){
-    var id=row&&row.kind==='bot'?row.conversationId:'';
+    var id=reportsOn(row)?row.conversationId:'';
     if(!id||id===conv||watchSocks[id]||Object.keys(watchSocks).length>=24)return;
-    var bot={name:str(row.label,40)||'Bot'},since=Date.now()-2000;
+    var own=row.kind==='bot',bot={name:own?str(row.label,40)||'Bot':'A bot'},since=Date.now()-2000;
     watchSocks[id]=listen(id,function(ev){
-      var got=tandem&&!botSocks[id]?botEvent(ev,since):null;
+      var got=open&&!botSocks[id]?botEvent(ev,since):null;
       if(!got)return;
       if(got.ask){botAsk(bot,got.ask);return;}
-      // The next step the bot suggests, the one the app offers in its message box, is said too.
-      var step=got.next;
-      suggest=step?{bot:bot.name,step:step,at:Date.now()}:null;
-      speak(bot.name+' has finished.'+(step?' It suggests next: '+step+'. Should it go ahead?':''));
+      reportSay(bot.name,own?'':str(row.label,60),got.next);
     },function(){});
   });
 }
@@ -2224,6 +2263,7 @@ function build(){
   $('voiceSet').onclick=function(){ask='setup';askNote='';voiceAskDraw();};
   $('voiceAsk').addEventListener('click',function(e){var b=e.target.closest('[data-va]');if(b&&!b.disabled)voiceAskDo(b.dataset.va);});
   $('voiceAsk').addEventListener('keydown',function(e){e.stopPropagation();if(e.key==='Enter'&&e.target.id==='voiceKey')voiceSave();else if(e.key==='Escape'&&ask==='setup')voiceAskDo('back');});$('own').onclick=ownSet;ownShow();
+  $('reports').onchange=function(){reportsSet(this.value);};reportsShow();
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=function(){if(talkOn)talkMute();else earToggle();};$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=tandemStart;
@@ -2343,6 +2383,7 @@ function enter(){
   if(still){drops=[{x:.2,d:.3,t:-1500},{x:.5,d:.6,t:-1500},{x:.8,d:.9,t:-1500}];frame(1);}else next();
   setTimeout(function(){if(open&&!tandem)$('box').focus();},400);
   openChat().catch(function(){});
+  watchStart();
 }
 // Leaving ends the run: nothing keeps working on a stage nobody is watching.
 function leave(){
@@ -2376,6 +2417,6 @@ function intro(){
     if(r==='try')enter();
   });
 }
-window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();},
-  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,on:function(f){tandemSubs.push(f);}}};
+window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();},report:reportHeard,
+  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,reports:reportsSet,on:function(f){tandemSubs.push(f);}}};
 })();

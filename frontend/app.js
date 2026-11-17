@@ -6849,12 +6849,14 @@
           return;
         }
         if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[row]);render[roomId]=true;}
+        aiModeHubReport(roomId,row,true);
         var fromOther=row.author_type!=='system' && row.author_id!==subject;
         if(!fromOther)return;
         if(roomId===chatWs.activeRoomId && appInForeground()){markHubRead(roomId);return;}
         channel.unread=Number(channel.unread||0)+1;
         notifyDesktopChatMessage(roomId,window.MiaHubChat.message(row));
       } else if(event.kind==='message_updated' && event.message){
+        aiModeHubReport(roomId,event.message,false);
         if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[event.message]);render[roomId]=true;}
         if(event.message.deleted)refreshChannels=true;
       } else if(event.kind==='dispatch' && event.dispatch){
@@ -19792,7 +19794,27 @@
     var me = String(currentUser || '').toLowerCase();
     return ((chatWs.rooms && chatWs.rooms.dms) || []).filter(function(dm){
       return (dm.members || []).some(function(member){ return member.kind === 'human' && String(member.email || '').toLowerCase() !== me; });
-    }).map(function(dm){ return {kind:'chat', id:dm.id, label:dmLabel(dm), sub:'Direct message'}; });
+    }).map(function(dm){
+      // Its chat, so Flow can hear a bot finish there, and whether Mia is one of its members.
+      return {kind:'chat', id:dm.id, label:dmLabel(dm), sub:'Direct message', conversationId:String(dm.roomId || ''),
+        mia:(dm.members || []).some(function(member){ return member.kind !== 'human' && member.agentId === 'gateway'; })};
+    });
+  }
+  // A bot's reply in a company chat, told to Flow once, when its run ends: a reply that arrives
+  // finished, or one that was working and no longer is. A later change to it (a reaction, an edit)
+  // is not a report.
+  var hubBotsWorking = {};
+  function aiModeHubReport(roomId, row, arrived){
+    if(!row || row.author_type !== 'bot') return;
+    var id = String(row.id);
+    if(row.status === 'working' && !row.deleted){ hubBotsWorking[id] = true; return; }
+    var worked = !!hubBotsWorking[id];
+    delete hubBotsWorking[id];
+    var mode = window.MiaAiMode, channel = hubChannel(roomId);
+    // A reply that only arrives now but was written a while ago (a chat catching up) is old news.
+    var at = Date.parse(row.created_at);
+    if(row.deleted || !(worked || arrived && !(Date.now() - at > 120000)) || !channel || !mode || !mode.report) return;
+    mode.report({kind: channel.kind === 'bot' ? 'bot' : 'chat', bot: String(row.author_name || ''), chat: hubChannelLabel(channel), mia: false});
   }
   // A company chat's newest page, read the way the sidebar reads it for its
   // preview: who wrote each message, and what it says. Nothing is marked read.
