@@ -3126,12 +3126,14 @@ async function ensureNativeBotConversation(bot) {
     }
   }
   cronSync.migrateBotAutomations(bot);
-  // A company's automation posts to the bot's chat in that company instead.
-  const needsAutomationDestination = bot.automations.some((automation) => !automationTeamWorkspace(automation)
+  // An automation keeps posting to the chat it was made in while that chat is
+  // live; a company's automation posts to the bot's chat in that company.
+  const keepsDestination = (automation) => automationTeamWorkspace(automation) || automationOriginChat(bot, automation);
+  const needsAutomationDestination = bot.automations.some((automation) => !keepsDestination(automation)
     && (automation.deliveryConversationId !== conversation.id
       || automation.deliveryCompanyId !== conversation.companyId));
   if (needsAutomationDestination) {
-    bot.automations = bot.automations.map((automation) => (automationTeamWorkspace(automation) ? automation : {
+    bot.automations = bot.automations.map((automation) => (keepsDestination(automation) ? automation : {
       ...automation,
       deliveryConversationId: conversation.id,
       deliveryCompanyId: conversation.companyId,
@@ -7848,6 +7850,13 @@ function stampAutomationWorkspaces(record, existing, req) {
     const previous = before.get(next.id);
     const kept = previous ? automationTeamWorkspace(previous) : team;
     if (kept) next.teamWorkspace = kept;
+    // Where it posts is Mia's too: an edit keeps the chat it was made in.
+    if (previous) {
+      for (const key of ['deliveryConversationId', 'deliveryCompanyId', 'originChatRestored']) {
+        if (previous[key] !== undefined) next[key] = previous[key];
+        else delete next[key];
+      }
+    }
     return next;
   });
 }
@@ -7859,16 +7868,33 @@ function automationVisibleHere(bot, automation, req) {
   if (!team) return !requestTeamWorkspace(req) && botVisibleInWorkspace(bot, req);
   return team === requestTeamWorkspace(req) && sameOwner(bot, req && req.userEmail) && isActiveWorkspaceUser(ownerOf(bot));
 }
-// The bot's chat an automation posts to: its chat in the automation's
-// company, or its main chat. automationChatNow only looks; automationChat
-// makes the company chat when it is missing.
+// The chat an automation was made in, while it is still one of this bot's
+// live chats in the automation's workspace: its runs keep posting there, so
+// the conversation that set it up keeps the context.
+function automationOriginChat(bot, automation) {
+  const id = automation && automation.deliveryConversationId;
+  const companyId = automation && automation.deliveryCompanyId;
+  if (!bot || !id || !companyId) return null;
+  let conversation = null;
+  try { conversation = nativeConversationRepository.getConversation({ companyId: String(companyId), id: String(id) }); } catch (_) { return null; }
+  const metadata = (conversation && conversation.metadata) || {};
+  if (!conversation || conversation.archivedAt || conversation.type !== 'bot' || metadata.botId !== bot.id || metadata.botArchived === true) return null;
+  return (metadata.teamWorkspace || '') === automationTeamWorkspace(automation) ? conversation : null;
+}
+// The bot's chat an automation posts to: the chat it was made in, else its
+// chat in the automation's company, else its main chat. automationChatNow
+// only looks; automationChat makes the company chat when it is missing.
 function automationChatNow(bot, automation) {
+  const origin = automationOriginChat(bot, automation);
+  if (origin) return origin;
   const team = automationTeamWorkspace(automation);
   if (!team) return nativeBotConversation(bot);
   return nativeBotConversations(bot).find((conversation) => conversation.metadata
     && conversation.metadata.teamWorkspace === team && conversation.metadata.conversationMode !== 'fresh') || null;
 }
 async function automationChat(bot, automation) {
+  const origin = automationOriginChat(bot, automation);
+  if (origin) return origin;
   const team = automationTeamWorkspace(automation);
   if (!team) return ensureNativeBotConversation(bot);
   return nativeHandoffBotConversation(bot, { metadata: { teamWorkspace: team } }, ownerOf(bot));
@@ -7879,7 +7905,7 @@ function repairAutomationTeamWorkspaces(bot) {
   if (!bot || workspaceIdForRecord(bot) !== 'solo' || !Array.isArray(bot.automations)) return false;
   let changed = false;
   for (const automation of bot.automations) {
-    if (!automation || automationTeamWorkspace(automation) || !automation.id) continue;
+    if (!automation || !automation.id || automation.originChatRestored) continue;
     const row = conn.prepare(
       `SELECT company_id AS companyId, conversation_id AS conversationId FROM events
         WHERE json_extract(metadata, '$.automationProposal.automationId') = ?
@@ -7888,9 +7914,14 @@ function repairAutomationTeamWorkspaces(bot) {
     ).get(String(automation.id));
     const conversation = row && nativeConversationRepository.getConversation({ companyId: row.companyId, id: row.conversationId, includeDeleted: true });
     const metadata = (conversation && conversation.metadata) || {};
-    const team = metadata.botId === bot.id ? teamWorkspaceForNewAutomation(bot, metadata.teamWorkspace) : '';
-    if (!team) continue;
-    automation.teamWorkspace = team;
+    if (!conversation || metadata.botId !== bot.id) continue;
+    const team = teamWorkspaceForNewAutomation(bot, metadata.teamWorkspace);
+    if (team && !automationTeamWorkspace(automation)) automation.teamWorkspace = team;
+    // Mia used to move every automation to the bot's main chat; send it back
+    // to the chat it was made in, once.
+    automation.deliveryConversationId = conversation.id;
+    automation.deliveryCompanyId = conversation.companyId;
+    automation.originChatRestored = true;
     changed = true;
   }
   return changed;

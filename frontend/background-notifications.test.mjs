@@ -141,6 +141,7 @@ test('a failed active-runs request is not announced as finished runs', async () 
   const running = [{ id: 'run-1', name: 'Daily news', conversationId: 'bot-a' }];
   context.chatWs.automationRuns = running;
   context.chatInfo = { open: false };
+  context.hubWorkspace = () => false;
   load(context, 'loadActiveAutomationRuns');
 
   context.chatWs.knownAutomationRuns = running;

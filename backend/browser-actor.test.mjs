@@ -90,6 +90,30 @@ test('an automation belongs to one workspace: Mia keeps its mark and shows it on
   assert.equal(fresh.automations[0].teamWorkspace, undefined, 'only a bot of your own list works in a company\'s My Bots chat');
 });
 
+test('an automation keeps posting to the chat it was made in while that chat is live', () => {
+  const h = route();
+  const team = 'hub_' + 'a'.repeat(32);
+  const chats = new Map([
+    ['made-here', { id: 'made-here', companyId: 'solo:o', type: 'bot', metadata: { botId: 'admin-bot', teamWorkspace: team, conversationMode: 'fresh' } }],
+    ['solo-chat', { id: 'solo-chat', companyId: 'solo:o', type: 'bot', metadata: { botId: 'admin-bot' } }],
+    ['archived', { id: 'archived', companyId: 'solo:o', type: 'bot', archivedAt: '2026-11-17', metadata: { botId: 'admin-bot' } }],
+    ['other-bot', { id: 'other-bot', companyId: 'solo:o', type: 'bot', metadata: { botId: 'gtm' } }],
+  ]);
+  h.context.nativeConversationRepository = { getConversation: ({ id }) => chats.get(id) || null };
+  const bot = { id: 'admin-bot', owner: 'o', workspaceId: 'solo' };
+  const at = (id, extra = {}) => ({ deliveryConversationId: id, deliveryCompanyId: 'solo:o', ...extra });
+  assert.equal(h.context.automationChatNow(bot, at('made-here', { teamWorkspace: team })).id, 'made-here', 'a "New conversation" chat keeps its automation');
+  assert.equal(h.context.automationOriginChat(bot, at('made-here')), null, 'not when the chat is in another workspace');
+  assert.equal(h.context.automationOriginChat(bot, at('solo-chat')).id, 'solo-chat');
+  assert.equal(h.context.automationOriginChat(bot, at('archived')), null, 'an archived chat falls back');
+  assert.equal(h.context.automationOriginChat(bot, at('other-bot')), null, 'only this bot\'s chats');
+  assert.equal(h.context.automationOriginChat(bot, at('gone')), null, 'a deleted chat falls back');
+  const before = { ...bot, automations: [{ id: 'w', ...at('made-here', { teamWorkspace: team }) }] };
+  const edited = { ...bot, automations: [{ id: 'w', deliveryConversationId: 'elsewhere' }] };
+  h.context.stampAutomationWorkspaces(edited, before, { headers: {}, query: {} });
+  assert.equal(edited.automations[0].deliveryConversationId, 'made-here', 'an edit cannot move where it posts');
+});
+
 test('browser actor route distinguishes authorized Mia and bot sessions from unresolved or denied sessions', () => {
   const h = route();
   h.sessions.set('mia-session', { companyId: 'company', conversationId: 'mia-private', browserActiveUntil: Date.now() + 60_000 });

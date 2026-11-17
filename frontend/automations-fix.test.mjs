@@ -37,7 +37,7 @@ test('editing sits as a pencil beside the status; an automation with no steps ke
   vm.runInContext(slice('automationsDetailHtml'), ctx);
   const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});
   const head = html.slice(0, html.indexOf('<div class="automations-needs">'));
-  assert.match(head, /<span class="automations-row-side">Needs you<\/span><button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">/, 'the pencil follows the status in the header');
+  assert.match(head, /<span class="automations-row-side">Needs you<\/span><button type="button" class="automations-run-now" id="automationsRunNow"[^>]*>[\s\S]*?<\/button><button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">/, 'the pencil follows the status and Run now in the header');
   assert.doesNotMatch(html, /automations-actions/, 'no bottom button when there are steps');
   assert.equal((html.match(/id="automationsEdit"/g) || []).length, 1);
   const empty = ctx.automationsDetailHtml({ ...row, status: 'scheduled', steps: [] }, { id: 'auto-1', prompt: '' }, {});

@@ -154,7 +154,8 @@ test('automation panel renders durable bot schedules separately from running wor
   assert.match(source, /function automationScheduleText\(automation\)[\s\S]*automation\.frequency === 'interval'[\s\S]*Every /);
   assert.match(source, /function automationBotsForPanel\(isMia, agent\)[\s\S]*entries\.push\(\{bot:bot, automation:automation\}\)/);
   assert.match(source, /automationRuns:\s*\[\],\s*\/\/ active Hermes cron sessions only/);
-  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active\?workspace=' \+ encodeURIComponent\(localChatWorkspaceKey\(\)\)\)/);
+  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active\?workspace=' \+ encodeURIComponent\(localChatWorkspaceKey\(\)\) \+ team\)/);
+  assert.match(source, /var team = hubWorkspace\(\) \? '&team=' \+ encodeURIComponent\(activeWorkspaceKey\) : '';/, 'a company screen asks for that company\'s automations');
   assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*if\(changed\)\{[\s\S]*renderChatSidebar\(\)/);
   assert.match(source, /function activeAutomationRunsForPanel\(isMia, agent\)[\s\S]*chatWs\.automationRuns/);
   const paneStart = source.indexOf('function renderChatInfoPane(){');
@@ -347,8 +348,8 @@ test('active automation API is sourced from Hermes cron sessions and workspace s
   const server = await readFile(serverUrl, 'utf8');
   assert.match(server, /app\.get\('\/api\/automations\/active', requireAuth/);
   assert.match(server, /cronSync\.listActiveBotCronRuns\(conn\)/);
-  assert.match(server, /botVisibleInWorkspace\(run\.bot, req\)/);
-  assert.match(server, /const conversation = nativeBotConversation\(run\.bot\)/);
+  assert.match(server, /automationVisibleHere\(run\.bot, run\.automation, req\)/, 'a run shows only in the workspace its automation belongs to');
+  assert.match(server, /const conversation = automationChatNow\(run\.bot, run\.automation\)/, 'a run points at the chat its automation posts to');
   assert.match(server, /conversationId: conversation \? conversation\.id : null/);
   assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn, \{[\s\S]*globalInstructionsForBot/);
 });
