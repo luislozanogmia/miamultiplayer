@@ -7,7 +7,10 @@
 // only the signed-in requester can answer, so the model cannot talk its way
 // past this. The one line on the card is the model's own words. Scheduled runs
 // have nobody to ask, so there a blocked action is skipped and reported as a
-// "needs you" step, and the run carries on without waiting.
+// "needs you" step, and the run carries on without waiting. A scheduled run
+// follows its owner's setting: with ask-before-do off it is not gated at all,
+// and with it on the run asks on a card in the bot's own chat and waits there
+// like a chat turn; only a run with no such chat falls back to "needs you".
 
 const http = require('node:http');
 const crypto = require('node:crypto');
@@ -184,7 +187,10 @@ const ANSWERS = {
   expired: 'The user did not answer, so nothing ran. Tell them what is waiting. They can ask for it again.',
 };
 
-function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
+// scheduledRun(sessionId) -> null when the session is not a live scheduled run,
+// else { scope, enabled, requester, conversationId, present }. present is
+// absent when the run has no chat that can show a card.
+function createGateState({ answerWindowMs = ANSWER_WINDOW_MS, scheduledRun = null } = {}) {
   const scopes = new Map();
   const sessions = new Map();
   const requests = new Map();
@@ -220,9 +226,7 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
     return status;
   }
 
-  return {
-    // Called once per user turn, before the turn is submitted.
-    bindTurn(session, { scope, conversationId, enabled, requester, present }) {
+  function bind(session, { scope, conversationId, enabled, requester, present }) {
       const state = scopes.get(scope) || { blocked: new Map(), unlocked: new Set(), repeatable: new Set() };
       for (const approval of [...open.values()]) if (approval.scope === scope) settle(approval, 'declined');
       dropRequests(state);
@@ -237,7 +241,33 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
         sessions.set(id, scope);
       }
       while (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
-    },
+  }
+
+  // A scheduled run binds once, on its first gated call, and keeps that scope
+  // (and any yes given in it) for the rest of the run. The setting is read on
+  // every call, so turning ask-before-do off mid-run applies at once.
+  // -> { allow: true } | { allow: false, message } | null (not a scheduled run)
+  async function decideScheduled(id, what) {
+    let run = null;
+    try { run = scheduledRun ? await scheduledRun(id) : null; } catch (_) { run = null; }
+    if (!run || !run.scope) return id.startsWith('cron_') ? { allow: false, message: scheduledRunMessage(what) } : null;
+    if (run.enabled === false) return { allow: true };
+    if (typeof run.present !== 'function') return { allow: false, message: scheduledRunMessage(what) };
+    const state = scopes.get(run.scope);
+    if (!state) {
+      bind({ sessionId: id }, run);
+    } else if (sessions.get(id) !== run.scope) {
+      sessions.delete(id);
+      sessions.set(id, run.scope);
+      while (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
+    }
+    if (state) state.enabled = true;
+    return null;
+  }
+
+  return {
+    // Called once per user turn, before the turn is submitted.
+    bindTurn: bind,
     // Browser work has already resolved the real native target. Keep the tool
     // call suspended and consume this answer for this operation only.
     async authorizeBrowser({ sessionId, summary }) {
@@ -248,10 +278,19 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
       const status = await showApproval(state, String(summary || 'this browser action'));
       return status === 'approved' && scopes.get(state.scope) === state && state.epoch === epoch;
     },
+    // What /decide answers: a scheduled run is looked up and bound first.
+    async decideAny(body) {
+      const id = String((body && body.sessionId) || '');
+      if (id.startsWith('cron_') || !sessions.has(id)) {
+        const scheduled = await decideScheduled(id, String((body && body.summary) || 'this action').slice(0, 1200));
+        if (scheduled) return scheduled;
+      }
+      return this.decide(body);
+    },
     decide({ sessionId, summary, fingerprint, repeatKey }) {
       const id = String(sessionId || '');
       const what = String(summary || 'this action').slice(0, 1200);
-      if (id.startsWith('cron_')) return { allow: false, message: scheduledRunMessage(what) };
+      if (id.startsWith('cron_') && !sessions.has(id)) return { allow: false, message: scheduledRunMessage(what) };
       const state = scopes.get(sessions.get(id));
       // Delegated work and unknown sessions have no user to answer them.
       if (!state) return { allow: false, message: noUserMessage(what) };
@@ -312,11 +351,12 @@ function createGateState({ answerWindowMs = ANSWER_WINDOW_MS } = {}) {
   };
 }
 
+// options.scheduledRun: see createGateState.
 async function createAskBeforeDoGate(options) {
   const state = createGateState(options);
   const token = crypto.randomBytes(32).toString('base64url');
   const expected = Buffer.from(`Bearer ${token}`);
-  const routes = { '/decide': state.decide, '/request': state.requestApproval };
+  const routes = { '/decide': (body) => state.decideAny(body), '/request': state.requestApproval };
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     const supplied = Buffer.from(String(req.headers.authorization || ''));
