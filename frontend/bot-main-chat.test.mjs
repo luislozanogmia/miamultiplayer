@@ -39,6 +39,7 @@ function harness(conversations, activeWorkspaceKey = 'solo', stored = {}){
     'nativeConversationKind', 'nativeConversationToRoom', 'isNativeMiaConversation',
     'agentChatsStorageKey', 'rememberedAgentChats', 'agentChatOwnerId', 'rememberAgentChat', 'setAgentChat', 'aiModeSpoke',
     'applyNativeConversationList', 'nativeConversationInView', 'nativeConversationIdForChatKey', 'conversationHistoryTimestamp',
+    'latestOwnerConversation',
   ].map(fn).join('\n'), context);
   context.applyNativeConversationList(conversations);
   return context;
@@ -46,14 +47,22 @@ function harness(conversations, activeWorkspaceKey = 'solo', stored = {}){
 
 const bot = (id, createdAt, metadata) => ({ id, type: 'bot', name: 'Outreach', createdAt, updatedAt: createdAt, metadata: { botId: 'bot-1', ...metadata } });
 
-test('a bot\'s sidebar row opens its main chat, not an older "New conversation" chat', () => {
-  const context = harness([
-    bot('older-fresh', '2026-09-28T00:00:00.000Z', { conversationMode: 'fresh' }),
-    bot('main', '2026-09-30T00:00:00.000Z', {}),
-    bot('newer-fresh', '2026-10-01T00:00:00.000Z', { conversationMode: 'fresh' }),
-  ]);
+const said = (conversation, lastEventAt) => ({ ...conversation, lastEventAt });
+
+test('a bot\'s sidebar row opens the chat with its newest message, so the preview and the chat that opens match', () => {
+  const chats = [
+    said(bot('older-fresh', '2026-09-28T00:00:00.000Z', { conversationMode: 'fresh' }), '2026-09-29T00:00:00.000Z'),
+    said(bot('main', '2026-09-30T00:00:00.000Z', {}), '2026-10-05T00:00:00.000Z'),
+    said(bot('newer-fresh', '2026-10-01T00:00:00.000Z', { conversationMode: 'fresh' }), '2026-10-02T00:00:00.000Z'),
+  ];
+  const context = harness(chats);
   assert.deepEqual(context.chatWs.allAgents.map((agent) => [agent.id, agent.roomId]), [['bot-1', 'main']]);
   assert.equal(context.nativeConversationIdForChatKey('agent:bot-1'), 'main');
+  chats[2] = said(chats[2], '2026-10-06T00:00:00.000Z');
+  assert.equal(harness(chats).chatWs.allAgents[0].roomId, 'newer-fresh', 'a newer message in a "New conversation" chat moves the row there');
+  const live = harness(chats);
+  live.chatWs.byRoom['older-fresh'] = { lastTs: Date.parse('2026-10-07T00:00:00.000Z') };
+  assert.equal(live.latestOwnerConversation('bot-1').id, 'older-fresh', 'a message that just arrived counts before the list reloads');
 });
 
 const mia = (id, createdAt, metadata) => ({ id, type: 'agent', name: 'Mia', createdAt, updatedAt: createdAt, metadata: { agentId: 'gateway', ...metadata } });
@@ -67,20 +76,20 @@ test('a new chat stays on the sidebar row after you open it, for Mia and bots, a
     bot('bot-new', '2026-10-01T00:00:00.000Z', { conversationMode: 'fresh' }),
   ];
   const context = harness(chats, 'solo', stored);
-  assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-main');
-  assert.equal(context.chatWs.allAgents[0].roomId, 'main');
+  assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-new', 'a chat just started is the newest');
+  assert.equal(context.chatWs.allAgents[0].roomId, 'bot-new');
 
   context.rememberAgentChat('mia-new');
   context.rememberAgentChat('bot-new');
-  assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-new');
-  assert.equal(context.chatWs.allAgents[0].roomId, 'bot-new');
-
   const reloaded = harness(chats, 'solo', stored);
-  assert.equal(reloaded.chatWs.gatewayAgent.roomId, 'mia-new');
+  assert.equal(reloaded.chatWs.gatewayAgent.roomId, 'mia-new', 'kept across a reload');
   assert.equal(reloaded.chatWs.allAgents[0].roomId, 'bot-new');
 
-  reloaded.rememberAgentChat('mia-main');
-  assert.equal(harness(chats, 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-main', 'opening the old chat from History moves the row back');
+  const answered = chats.map((chat) => chat.id === 'mia-main' ? said(chat, '2026-10-06T00:00:00.000Z') : chat);
+  assert.equal(harness(answered, 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-main', 'a newer message in the old chat moves the row back');
+  const tied = chats.map((chat) => said(chat, '2026-10-06T00:00:00.000Z'));
+  harness(tied, 'solo', stored).rememberAgentChat('mia-main');
+  assert.equal(harness(tied, 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-main', 'a tie goes to the chat you last had open');
 });
 
 test('a remembered chat that is gone, or belongs to another bot, falls back to the main chat', () => {
@@ -101,39 +110,20 @@ test('every workspace remembers its own chats', () => {
   assert.equal(harness([], team, stored).agentChatsStorageKey(), 'miaAgentChats:person@example.test:' + team);
 });
 
-// A company row opens the chat last used with Mia or the bot, and shows that
-// same chat's latest line and time: the row and what it opens are one lookup.
-test('a company row stands for the chat last used with Mia or the bot', async () => {
-  const workspace = 'hub_' + 'a'.repeat(32);
-  const chat = (id, metadata) => ({ id, type: metadata.botId ? 'bot' : 'agent', metadata: { teamWorkspace: workspace, ...metadata } });
-  const remembered = {};
-  const opened = [];
-  const context = {
-    activeWorkspaceKey: workspace,
-    chatWs: { nativeConversations: [
-      chat('bot-main', { botId: 'bot-a' }), chat('bot-new', { botId: 'bot-a', conversationMode: 'fresh' }),
-      chat('other-new', { botId: 'bot-b', conversationMode: 'fresh' }),
-      chat('mia-main', { agentId: 'gateway' }), chat('mia-new', { agentId: 'gateway', conversationMode: 'fresh' }),
-    ] },
-    rememberedAgentChats: () => remembered,
-    isNativeMiaConversation: conversation => conversation.metadata.agentId === 'gateway',
-    loadChatRoom: async id => { opened.push(id); },
-  };
-  vm.createContext(context);
-  for (const name of ['currentTeamChat', 'teamBotChat', 'teamMiaChat', 'openTeamBotChat', 'openTeamMiaChat']) vm.runInContext(fn(name), context);
-  const bot = { id: 'bot-a', name: 'Team bot' };
-  assert.equal(context.teamBotChat(bot).id, 'bot-main');
-  assert.equal(context.teamMiaChat().id, 'mia-main');
-  assert.equal(context.teamBotChat({ id: 'bot-b' }), null, 'a new conversation nobody opened stays in History');
-  Object.assign(remembered, { 'bot-a': 'bot-new', gateway: 'mia-new' });
-  assert.equal(context.teamBotChat(bot).id, 'bot-new');
-  assert.equal(context.teamMiaChat().id, 'mia-new');
-  await context.openTeamBotChat(bot);
-  await context.openTeamMiaChat();
-  assert.deepEqual(opened, ['bot-new', 'mia-new']);
-  // a remembered chat that is gone, or another bot's, falls back to the main chat
-  remembered['bot-a'] = 'other-new';
-  assert.equal(context.teamBotChat(bot).id, 'bot-main');
+test('a company bot row shows and opens the same chat: the one with the newest message', () => {
+  const start = source.indexOf('  function openTeamBotChat(bot){');
+  const body = source.slice(start, source.indexOf('if(existing)return', start));
+  assert.match(body, /var existing=teamBotChat\(bot\);/);
+  assert.match(fn('teamBotChat'), /return latestOwnerConversation\(String\(bot\.id\)\);/);
+  assert.match(fn('teamMiaChat'), /return latestOwnerConversation\('gateway'\);/);
+  const team = 'hub_' + 'c'.repeat(32);
+  const context = harness([
+    said(bot('team-main', '2026-11-01T00:00:00.000Z', { teamWorkspace: team }), '2026-11-17T18:00:00.000Z'),
+    said(bot('team-new', '2026-11-15T00:00:00.000Z', { teamWorkspace: team, conversationMode: 'fresh' }), '2026-11-17T19:00:00.000Z'),
+    said(bot('solo-main', '2026-11-01T00:00:00.000Z', {}), '2026-11-17T20:00:00.000Z'),
+  ], team);
+  context.chatWs.nativeConversations = context.chatWs.nativeConversations || [];
+  assert.equal(context.latestOwnerConversation('bot-1').id, 'team-new', 'only this company\'s chats count');
 });
 
 test('a new company bot chat forwards its signed-in Hub token for membership verification', async () => {
@@ -155,7 +145,10 @@ test('a new company bot chat forwards its signed-in Hub token for membership ver
     loadNativeConversations: async () => [],
   };
   vm.createContext(context);
-  for (const name of ['currentTeamChat', 'teamBotChat', 'openTeamBotChat', 'createNativeAgentConversation']) vm.runInContext(fn(name), context);
+  vm.runInContext(fn('openTeamBotChat'), context);
+  vm.runInContext(fn('teamBotChat'), context);
+  vm.runInContext(fn('createNativeAgentConversation'), context);
+  context.latestOwnerConversation = () => null;
   await context.openTeamBotChat({ id: 'bot-a', name: 'Team bot' });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].path, '/api/conversations?workspace=solo');
@@ -279,7 +272,7 @@ test('what is said in Flow or Flow Tandem makes that chat the one Mia\'s row ope
   const stored = {};
   const main = mia('mia-main', '2026-09-01T00:00:00.000Z', {});
   const flow = mia('mia-flow', '2026-11-16T00:00:00.000Z', { conversationMode: 'fresh', source: 'ai-mode' });
-  const context = harness([main, flow], 'solo', stored);
+  const context = harness([said(main, '2026-11-17T00:00:00.000Z'), flow], 'solo', stored);
   assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-main');
   let drawn = 0;
   context.renderChatSidebar = () => { drawn += 1; };
@@ -289,7 +282,7 @@ test('what is said in Flow or Flow Tandem makes that chat the one Mia\'s row ope
   assert.equal(drawn, 1);
   context.aiModeSpoke('mia-flow');
   assert.equal(drawn, 1, 'saying more in the same chat changes nothing');
-  assert.equal(harness([main, flow], 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-flow', 'kept across a reload');
+  assert.equal(harness([said(main, '2026-11-17T00:00:00.000Z'), said(flow, '2026-11-17T01:00:00.000Z')], 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-flow', 'kept across a reload');
 
   // A chat Flow has just made is fetched, then the row points at it.
   const later = harness([main], 'solo', {});

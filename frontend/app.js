@@ -5745,7 +5745,7 @@
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
-  // The chat you last had open with a bot in this team, else its main chat,
+  // The bot's chat in this team with the newest message (teamBotChat),
   // made the first time you open it.
   function openTeamBotChat(bot){
     var existing=teamBotChat(bot);
@@ -5763,17 +5763,7 @@
   // In a company, Mia is your own 1:1 chat, never in a channel and never
   // @-mentioned. Each company has its own Mia chat, apart from Solo's.
   function teamMiaChat(){
-    return currentTeamChat('gateway',(chatWs.nativeConversations||[]).filter(function(conversation){
-      return isNativeMiaConversation(conversation) && (conversation.metadata||{}).teamWorkspace===activeWorkspaceKey;
-    }));
-  }
-  // The chat a company row stands for, as in Solo: the one last open with Mia
-  // or that bot, else its main chat. The row opens it and shows its latest
-  // line and time, so a "New conversation" in use is not hidden behind an old one.
-  function currentTeamChat(ownerId,chats){
-    var lastChat=rememberedAgentChats()[ownerId];
-    return chats.filter(function(conversation){ return conversation.id===lastChat; })[0]
-      || chats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0] || null;
+    return latestOwnerConversation('gateway');
   }
   function openTeamMiaChat(){
     var existing=teamMiaChat();
@@ -6290,12 +6280,10 @@
   function companyCopyFilesReviewed(copy,reviews){
     return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
   }
-  // A bot row in a team opens your private chat with it for this team.
-  // A company bot's row opens its ongoing chat on this computer, if any.
+  // The bot's chat its company row shows and opens: the one with the newest
+  // message, so the preview and the chat that opens match.
   function teamBotChat(bot){
-    return currentTeamChat(String(bot.id),(chatWs.nativeConversations||[]).filter(function(conversation){
-      return (conversation.metadata||{}).botId===bot.id;
-    }));
+    return latestOwnerConversation(String(bot.id));
   }
   function teamBotRow(bot,pinned){
     var chat=teamBotChat(bot);
@@ -7685,6 +7673,29 @@
     var team = conversation && conversation.metadata && conversation.metadata.teamWorkspace || '';
     return hubWorkspace() ? !!conversation && (conversation.type === 'bot' || isNativeMiaConversation(conversation)) && team === activeWorkspaceKey : !team;
   }
+  // A bot's or Mia's row shows the newest message across all of its chats in
+  // this view (main chat, "New conversation" chats, the chat an automation
+  // posts to) and opens the chat that message is in, so the preview and the
+  // chat that opens always match. A tie goes to the chat you last had open.
+  function latestOwnerConversation(ownerId, conversations){
+    var remembered = rememberedAgentChats()[ownerId];
+    var best = null, bestTs = -1;
+    (conversations || chatWs.nativeConversations || []).forEach(function(conversation){
+      if(!conversation || agentChatOwnerId(conversation) !== String(ownerId) || !nativeConversationInView(conversation)) return;
+      if(conversation.metadata && conversation.metadata.botArchived === true) return;
+      var ts = conversationHistoryTimestamp(conversation);
+      if(ts > bestTs || (ts === bestTs && conversation.id === remembered)){ best = conversation; bestTs = ts; }
+    });
+    return best;
+  }
+  // Solo rows read agent.roomId; point each at its newest chat before drawing.
+  function followAgentsToLatestChat(){
+    (chatWs.allAgents || []).concat(chatWs.gatewayAgent ? [chatWs.gatewayAgent] : []).forEach(function(agent){
+      var latest = agent && latestOwnerConversation(String(agent.id));
+      if(!latest || latest.id === agent.roomId) return;
+      agent.roomId = latest.id; agent.nativeConversationId = latest.id; agent.conversationId = latest.id;
+    });
+  }
   function applyNativeConversationList(conversations){
     var listWorkspace = conversations && conversations.workspaceKey;
     setMiaServiceUnavailable(false);
@@ -7718,9 +7729,10 @@
     // A bot's sidebar row opens the chat you last had open with it, else its
     // main chat; chats started with "New conversation" live in History and only
     // stand in when nothing else exists.
-    var agentChats = rememberedAgentChats();
+    // The row follows the chat with the newest message (latestOwnerConversation).
     function currentAgentRoom(main, ownerId, candidates){
-      return candidates.filter(function(room){ return room.id === agentChats[ownerId]; })[0] || main;
+      var latest = latestOwnerConversation(ownerId, candidates.map(function(room){ return room.nativeConversation; }));
+      return (latest && candidates.filter(function(room){ return room.id === latest.id; })[0]) || main;
     }
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
@@ -18635,6 +18647,7 @@
     var botsGroup = el('#chatBotsGroup');
     if(botsGroup) botsGroup.hidden = hubWorkspace();
     if(hubWorkspace()) return renderHubSidebar();
+    followAgentsToLatestChat();
     var pinnedWrap = el('#chatPinned');
     var botsWrap = el('#chatBots');
     var allWrap = el('#chatAllConversations');
