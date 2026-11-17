@@ -1,7 +1,7 @@
 (function(root, factory){
-  if(typeof module === 'object' && module.exports) module.exports = factory(undefined, require('./team-files.js'), require('./team-workflows.js'));
-  else factory(root, root.MiaTeamFiles, root.MiaTeamWorkflows);
-})(typeof window !== 'undefined' ? window : this, function(root, tf, wf){
+  if(typeof module === 'object' && module.exports) module.exports = factory(undefined, require('./team-files.js'), require('./team-workflows.js'), require('./apps-page.js'));
+  else factory(root, root.MiaTeamFiles, root.MiaTeamWorkflows, root.MiaAppsPage);
+})(typeof window !== 'undefined' ? window : this, function(root, tf, wf, ap){
   'use strict';
 
   /* ============ pure helpers (exported for tests, no DOM/window needed) ============ */
@@ -282,14 +282,18 @@
     bot_shared: 'Added a bot', bot_unshared: 'Removed a bot', bot_execution_handoff: 'Handed off a bot run',
     bot_version_proposed: 'Proposed a bot change', bot_version_published: 'Approved a bot change',
     bot_version_rejected: 'Rejected a bot change', bot_editor_added: 'Added a bot editor',
-    bot_editor_removed: 'Removed a bot editor', team_approved: 'Company approved'
+    bot_editor_removed: 'Removed a bot editor', team_approved: 'Company approved',
+    app_created: 'Published an app', app_version_proposed: 'Sent an app version for approval', app_version_self_approved: 'Published an app version',
+    app_version_approved: 'Approved an app version', app_version_rejected: 'Rejected an app version', app_archived: 'Archived an app',
+    app_live_cleared: 'Deleted the file of a live app', app_pending_cleared: 'Deleted the file of an app version waiting for approval'
   };
 
   function teamActivityEvents(events, members){
     var emails = Object.create(null);
     (members || []).forEach(function(m){ emails[m.clerk_user_id] = m.email; });
     return (events || []).map(function(e){
-      var target = e.target ? (String(e.target).indexOf('@') !== -1 ? e.target : emails[e.target] || 'Former member') : '';
+      // An app event's target is the app, not a person.
+      var target = e.target && !/^app:/.test(String(e.target)) ? (String(e.target).indexOf('@') !== -1 ? e.target : emails[e.target] || 'Former member') : '';
       return {at: hubTime(e.at), actor: e.actor_email || emails[e.actor] || 'Former member',
         action: TEAM_AUDIT_LABELS[e.event] || String(e.event || '').replace(/_/g, ' '), target: target, detail: ''};
     });
@@ -545,11 +549,11 @@
       case 'app-approve': {
         var version = item.pending || {};
         return version.kind === 'link'
-          ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every colleague’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
-          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every colleague’s computer. Only approve an app you trust. Published by ' + (item.publisher && item.publisher.name || 'a former colleague') + '. The virus scan can’t fully see inside an app bundle, so review it first.', confirmLabel: 'Approve for everyone'};
+          ? {title: 'Approve ' + item.name + ' for everyone?', body: 'This opens on every colleague’s computer, in their Mia browser with their own sign-ins. ' + ap.senderLine(item, version) + ' Only approve an address you trust.', detail: version.url, confirmLabel: 'Approve for everyone'}
+          : {title: 'Approve ' + item.name + ' for everyone?', body: 'This runs on every colleague’s computer. Only approve an app you trust. ' + ap.senderLine(item, version) + ' The virus scan can’t fully see inside an app bundle, so review it first.', confirmLabel: 'Approve for everyone'};
       }
       case 'app-reject': return {title: 'Reject version ' + Number(item.pending && item.pending.version) + ' of ' + item.name + '?',
-        body: 'It won’t reach the company. ' + (item.live ? 'The live version stays live. ' : '') + 'The publisher can send a new version.', confirmLabel: 'Reject', danger: true};
+        body: 'It won’t reach the company. ' + (item.live ? 'The live version stays live. ' : '') + hubAppSender(item, item.pending).name.replace(/^[a-z]/, function(ch){ return ch.toUpperCase(); }) + ' sent it and can send a new version.', confirmLabel: 'Reject', danger: true};
       case 'app-archive': return {title: 'Archive ' + item.name + '?', body: 'It leaves the catalog for everyone, and colleagues can no longer open it from there. Its file is not deleted.', confirmLabel: 'Archive', danger: true};
       case 'session-end': return {title: 'End ' + (item.name || 'this session') + '?',
         body: 'This closes the session for everyone in it. Their tabs stay open on their own computers. Older versions of Mia ignore this, so someone on an older version may reopen it.',
@@ -697,9 +701,12 @@
   function hubFact(label, value, className){
     return value ? '<dt>' + esc(label) + '</dt><dd' + (className ? ' class="' + className + '"' : '') + '>' + esc(value) + '</dd>' : '';
   }
+  // Who sent this version, which on a suggested edit is not the app's publisher.
+  function hubAppSender(app, version){ return ap.sentBy(app, version); }
   function hubAppFacts(app, version, readiness){
-    var size = hubAppVersionSize(version);
-    return '<dl class="hub-facts">' + hubFact('Published by', app.publisher && app.publisher.name || 'A former colleague') +
+    var size = hubAppVersionSize(version), sender = hubAppSender(app, version);
+    return '<dl class="hub-facts">' + hubFact('App published by', app.publisher && app.publisher.name || 'A former colleague') +
+      hubFact('This version sent by', sender.name + (sender.publisher ? '' : sender.known ? ' · a suggested edit, not from the publisher' : ''), sender.publisher ? '' : 'hub-ready-warn') +
       hubFact('Kind', version.kind === 'link' ? 'Web address' : 'App file') +
       hubFact(size.label, size.value, version.kind === 'link' ? 'hub-address' : '') +
       hubFact('Note', version.note) +
@@ -720,9 +727,11 @@
         '<div class="hub-item-actions">' + hubButton('Review', 'app-review', app.id) + hubButton('Approve for everyone', 'app-approve', app.id, {tone: 'primary', version: pending.version, disabled: versionBusy || !readiness.approve}) +
         hubButton('Reject', 'app-reject', app.id, {version: pending.version, disabled: versionBusy}) + '</div></div>';
     }
-    if(rejected) html += '<div class="hub-item-meta" style="margin-top:8px">Version ' + Number(rejected.version) + ' was rejected. The publisher can send a new version.</div>';
+    if(rejected) html += '<div class="hub-item-meta" style="margin-top:8px">Version ' + Number(rejected.version) + ', sent by ' + esc(hubAppSender(app, rejected).name) + ', was rejected. They can send a new version.</div>';
     if(live) html += '<div class="hub-item-meta" style="margin-top:8px">Live: version ' + Number(live.version) + '</div>' + hubAppFacts(app, live);
-    html += '<div class="hub-item-actions">' + hubButton('Archive', 'app-archive', app.id, {tone: 'danger', disabled: !!busy['app-archive:' + app.id]}) + '</div></div>';
+    var history = st.history && st.history[app.id];
+    if(history) html += ap.historyHtml(esc, app, history);
+    html += '<div class="hub-item-actions">' + hubButton(history ? 'Hide history' : 'History', 'app-history', app.id) + hubButton('Archive', 'app-archive', app.id, {tone: 'danger', disabled: !!busy['app-archive:' + app.id]}) + '</div></div>';
     return html;
   }
   function renderHubApps(st){
@@ -945,6 +954,11 @@
             var scans = {};
             bundles.forEach(function(app, index){ scans[app.pending.fileId] = verdicts[index]; });
             state.apps.apps = list; state.apps.scans = scans;
+            // An open history follows the list: a decision or a new version adds a line.
+            Object.keys(state.apps.history).forEach(function(id){
+              if(appById(id)) loadAppHistory(id);
+              else delete state.apps.history[id];
+            });
           };
         });
       });
@@ -966,6 +980,23 @@
         }, afterApp((decision === 'approve' ? 'Approved ' : 'Rejected version ' + version + ' of ') + app.name), appFail);
       };
     });
+    state.apps.history = {};
+    function loadAppHistory(id){
+      var shown = state.apps.history[id];
+      var entry = state.apps.history[id] = {loading: true, versions: shown && shown.versions};
+      return call('GET', base + '/apps/' + id + '/versions').then(function(reply){
+        if(state.apps.history[id] === entry) state.apps.history[id] = {versions: ap.normalizeHistory(reply)};
+      }, function(error){
+        if(state.apps.history[id] === entry) state.apps.history[id] = {error: ap.historyError(error)};
+      }).then(function(){ changed('apps'); });
+    }
+    actions['app-history'] = function(id){
+      if(state.apps.history[id]){ delete state.apps.history[id]; changed('apps'); return Promise.resolve(); }
+      if(!appById(id)) return Promise.resolve();
+      var loading = loadAppHistory(id);
+      changed('apps');
+      return loading;
+    };
     actions['app-review'] = function(id){
       if(options.openReview && appById(id)) options.openReview(id);
       return Promise.resolve();

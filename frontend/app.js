@@ -9659,7 +9659,7 @@
   // its own tab beside the page's.
   var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
   var appsPage = {open:false, tabClosed:!!closedPageTabs.apps, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
-    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, copying:{}, previews:{}, teamId:'', me:'', isAdmin:false};
+    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, copying:{}, previews:{}, history:{}, teamId:'', me:'', isAdmin:false};
   var appsUploaders = {};
   var appsScanTimer = null;
 
@@ -9836,6 +9836,11 @@
       if(teamId !== appsTeamId()) return;
       appsPage.catalog = window.MiaAppsPage.normalizeCatalog(reply);
       appsPage.catalogError = '';
+      // An open history follows the catalog: a decision or a new version adds a line.
+      Object.keys(appsPage.history).forEach(function(id){
+        if(appsPage.catalog.some(function(app){ return app.id === id; })) loadAppHistory(teamId, id);
+        else delete appsPage.history[id];
+      });
       checkAppsScans(teamId);
     }).catch(function(){
       if(teamId === appsTeamId()) appsPage.catalogError = "Your company's apps could not be loaded. Check your connection, then try again.";
@@ -10096,6 +10101,21 @@
       renderAppsPage();
     });
   }
+  // Who sent each version of a company app and who decided it.
+  function loadAppHistory(teamId, id){
+    var shown = appsPage.history[id];
+    var entry = appsPage.history[id] = {loading: true, versions: shown && shown.versions};
+    return hubCall('GET', '/v1/teams/' + teamId + '/apps/' + id + '/versions').then(function(reply){
+      if(appsPage.history[id] === entry) appsPage.history[id] = {versions: window.MiaAppsPage.normalizeHistory(reply)};
+    }, function(error){
+      if(appsPage.history[id] === entry) appsPage.history[id] = {error: window.MiaAppsPage.historyError(error)};
+    }).then(renderAppsPage);
+  }
+  function toggleAppHistory(id){
+    if(appsPage.history[id]) delete appsPage.history[id];
+    else if(appsPage.teamId && appsPage.catalog.some(function(app){ return app.id === id; })) loadAppHistory(appsPage.teamId, id);
+    renderAppsPage();
+  }
   function decideTeamApp(id, decision){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
     if(!window.MiaAppsPage.isWaitingForReview(app)) return;
@@ -10143,6 +10163,7 @@
       'data-app-open-team': openTeamApp,
       'data-app-publish': publishLocalApp,
       'data-app-copy': copyTeamApp,
+      'data-app-history': toggleAppHistory,
       'data-app-approve': function(id){ decideTeamApp(id, 'approve'); },
       'data-app-reject': function(id){ decideTeamApp(id, 'reject'); },
       'data-app-archive': archiveTeamApp,

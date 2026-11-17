@@ -3956,6 +3956,18 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .apps-review-files{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto;font-size:12px;}
 .apps-review-files li{display:flex;justify-content:space-between;gap:12px;padding:3px 0;}
 .apps-review-path{min-width:0;overflow-wrap:anywhere;color:var(--sand-text-primary);}
+/* An app's history: who sent each version and who decided it. Also in admin.css. */
+.app-history{margin:0 6px 10px 46px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:10px;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.app-history-head{font-size:12px;font-weight:600;color:var(--sand-text-primary);}
+.app-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto;}
+.app-history-row{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px;}
+.app-history-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;}
+.app-history-version{font-weight:600;color:var(--sand-text-primary);}
+.app-history-state,.app-history-who,.app-history-note{color:var(--sand-text-secondary);}
+.app-history-pending{color:var(--sand-text-primary);font-weight:600;}
+.app-history-who,.app-history-detail{overflow-wrap:anywhere;}
+.app-history-detail{color:var(--sand-text-primary);user-select:text;}
+.app-history-note{font-size:12px;}
 .apps-pane-note{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;font-size:12px;color:var(--sand-text-primary);background:var(--sand-bg-base);border-bottom:1px solid var(--sand-border-default);overflow-wrap:anywhere;}
 .apps-pane-note[hidden]{display:none;}
 .bench-toast.bench-toast-action{pointer-events:auto;cursor:pointer;}

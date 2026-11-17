@@ -426,3 +426,65 @@ test('a reviewer is told who suggested an edit, and a link app has no copy to ed
   assert.doesNotMatch(page.bodyHtml(state({ teamId: TEAM, catalog: [link] }), esc), /data-app-copy/);
   assert.match(page.bodyHtml(state({ teamId: TEAM, catalog: [catalogApp({ live })], copying: { [APP]: {} } }), esc), /Copying…/);
 });
+
+test('approving names who sent the version, and a suggested link shows its sender in the review', () => {
+  const live = bundle({ state: 'approved', proposedBy: 'kim', proposedByName: 'Kim' });
+  const own = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, pending: bundle({ proposedBy: 'kim', proposedByName: 'Kim' }) });
+  assert.match(page.approveMessage(own), /Sent by Kim, who published this app\./);
+  const edit = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, live, pending: bundle({ version: 2, state: 'pending', proposedBy: 'lee', proposedByName: 'Lee' }) });
+  assert.match(page.approveMessage(edit), /suggested edit sent by Lee, not by Kim, who published the app\./);
+  const link = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, live, pending: { version: 2, state: 'pending', kind: 'link', url: 'https://example.com/new', proposedBy: 'lee', proposedByName: '<b>Lee</b>' } });
+  assert.match(page.approveMessage(link), /https:\/\/example\.com\/new[\s\S]*suggested edit sent by <b>Lee<\/b>, not by Kim/);
+  const html = page.bodyHtml(state({ teamId: TEAM, me: 'admin', isAdmin: true, catalog: [link] }), esc);
+  assert.match(html, /Version 2, an edit suggested by &lt;b&gt;Lee&lt;\/b&gt;, is this address:/);
+  assert.match(page.senderLine(catalogApp({ publisher: { id: 'kim', name: 'Kim' } }), { version: 1 }), /Mia could not tell who sent this version\. The app was published by Kim\./);
+  assert.deepEqual(page.sentBy(catalogApp({ publisher: { id: 'kim', name: 'Kim' } }), { proposedBy: 'kim' }), { known: true, publisher: true, name: 'Kim' });
+});
+
+test('a history answer is read carefully: bad rows dropped, long text cut, at most 50 kept', () => {
+  assert.deepEqual(page.normalizeHistory(null), []);
+  assert.deepEqual(page.normalizeHistory({ versions: 'no' }), []);
+  const rows = page.normalizeHistory({ versions: [null, { version: 0 }, { version: '2' },
+    { version: 2, kind: 'link', url: 'javascript:alert(1)', state: 'odd', note: ' n '.repeat(200), proposedBy: 'lee', proposedByName: ' Lee ', proposedAt: 5, decidedBy: 7, decidedAt: -1 }] });
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].version, rows[0].kind, rows[0].url, rows[0].state, rows[0].proposedByName, rows[0].proposedAt, rows[0].decidedBy, rows[0].decidedAt], [2, 'link', '', '', 'Lee', 5, '', 0]);
+  assert.ok(rows[0].note.length <= 300);
+  assert.equal(page.normalizeHistory({ versions: Array.from({ length: 80 }, (_, i) => ({ version: 80 - i })) }).length, 50);
+});
+
+test('the history list says who sent each version, what became of it and who decided', () => {
+  const app = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, live: bundle({ version: 4, state: 'approved' }) });
+  const when = (seconds) => 'day ' + seconds;
+  const versions = page.normalizeHistory({ versions: [
+    { version: 6, state: 'pending', proposedBy: 'lee', proposedByName: '<b>Lee</b>', proposedAt: 60, note: 'Fix <totals>' },
+    { version: 5, state: 'superseded', proposedBy: 'lee', proposedByName: 'Lee', proposedAt: 50 },
+    { version: 4, state: 'approved', proposedBy: 'ana', proposedByName: 'Ana', proposedAt: 40, decidedBy: 'ana', decidedByName: 'Ana', decidedAt: 41 },
+    { version: 3, state: 'rejected', proposedBy: 'lee', proposedAt: 30, decidedBy: 'ana', decidedByName: 'Ana', decidedAt: 31 },
+    { version: 2, state: 'superseded', proposedBy: 'kim', proposedByName: 'Kim', proposedAt: 20, decidedBy: 'ana', decidedAt: 21 },
+    { version: 1, state: 'approved', proposedBy: 'kim', proposedByName: 'Kim', proposedAt: 10, decidedBy: 'ana', decidedByName: 'Ana', decidedAt: 11 },
+  ] });
+  const html = page.historyHtml(esc, app, { versions }, when);
+  const line = (n) => html.split('<li class="app-history-row">')[versions.length - n + 1];
+  assert.match(line(6), /Waiting for approval[\s\S]*Sent by &lt;b&gt;Lee&lt;\/b&gt;, as a suggested edit on day 60<\/div><div class="app-history-detail">Fix &lt;totals&gt;/);
+  assert.match(line(5), /Replaced before going live/);
+  assert.match(line(4), /Live now[\s\S]*Sent by Ana, as a suggested edit on day 40 · published directly by Ana, an admin on day 41/);
+  assert.match(line(3), /Turned down<[\s\S]*Sent by a colleague, as a suggested edit on day 30 · turned down by Ana on day 31/);
+  assert.match(line(2), /Turned down, then replaced[\s\S]*Sent by Kim on day 20 · turned down by an admin on day 21/);
+  assert.match(line(1), /Was live[\s\S]*Sent by Kim on day 10 · approved by Ana on day 11/);
+  assert.doesNotMatch(html, /<b>Lee|<totals>/);
+  assert.match(page.historyHtml(esc, app, { loading: true }), /Loading…/);
+  assert.match(page.historyHtml(esc, app, { error: page.historyError({ status: 404 }) }), /role="alert">This app’s history is not available\./);
+  assert.match(page.historyHtml(esc, app, { versions: [] }), /No versions to show/);
+});
+
+test('every company app row offers History, and an open one is drawn under its row', () => {
+  const app = catalogApp({ publisher: { id: 'kim', name: 'Kim' }, live: bundle({ state: 'approved' }) });
+  const closed = page.bodyHtml(state({ teamId: TEAM, catalog: [app] }), esc);
+  assert.match(closed, new RegExp('data-app-history="' + APP + '" aria-expanded="false"'));
+  assert.doesNotMatch(closed, /app-history-list/);
+  const open = page.bodyHtml(state({ teamId: TEAM, catalog: [app], history: { [APP]: { versions: page.normalizeHistory({ versions: [{ version: 1, state: 'approved', proposedBy: 'kim', proposedByName: 'Kim' }] }) } } }), esc);
+  assert.match(open, /Hide history[\s\S]*app-history-list[\s\S]*Sent by Kim/);
+  const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.match(source, /'data-app-history': toggleAppHistory/);
+  assert.match(source, /hubCall\('GET', '\/v1\/teams\/' \+ teamId \+ '\/apps\/' \+ id \+ '\/versions'\)/);
+});
