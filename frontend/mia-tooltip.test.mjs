@@ -19,6 +19,8 @@ test('a tip sits centred below its control and stays inside the window', () => {
   assert.equal(tooltip.place({ left: 0, width: 28, top: 4, bottom: 32 }, { width: 60, height: 24 }, viewport).left, 8, 'clamped at the left edge');
   assert.equal(tooltip.place({ left: 790, width: 10, top: 4, bottom: 32 }, { width: 60, height: 24 }, viewport).left, 732, 'clamped at the right edge');
   assert.equal(tooltip.place({ left: 100, width: 28, top: 570, bottom: 598 }, { width: 60, height: 24 }, viewport).top, 540, 'flips above with no room below');
+  assert.deepEqual(tooltip.place({ left: 100, width: 28, top: 570, bottom: 598 }, { width: 60, height: 24 }, viewport,
+    { left: 80, top: 520 }), { left: 80, top: 490 }, 'Flow help sits above its rows');
 });
 
 test('the view and mix buttons use the shared tip, not the slow native title', async () => {
@@ -47,18 +49,20 @@ test('Flow help is shown by the question mark on hover and by the entry on keybo
     body: { appendChild() {} }, documentElement: { clientWidth: 800, clientHeight: 600 },
     createElement: () => tip, addEventListener: (name, handler) => { handlers[name] = handler; },
   };
-  const rect = { left: 100, width: 20, top: 560, bottom: 580 };
+  const rect = { left: 100, width: 20, height: 20, top: 560, bottom: 580 };
+  const firstRow = { getBoundingClientRect: () => ({ left: 88, width: 263, height: 32, top: 520, bottom: 552 }) };
   const row = {
     isConnected: true, getBoundingClientRect: () => rect,
     getAttribute: name => name === 'data-tip-keyboard' ? 'Flow help' : null,
-    closest: selector => selector.includes('data-tip-keyboard') ? row : null,
+    closest: selector => selector === '.ai-mode-entry' || selector.includes('data-tip-keyboard') ? row : null,
     matches: selector => selector === ':focus-visible',
   };
   const question = {
     isConnected: true, getBoundingClientRect: () => rect,
     getAttribute: name => name === 'data-tip' ? 'Flow help' : null,
-    closest: selector => selector.includes('data-tip') ? question : null,
+    closest: selector => selector === '.ai-mode-entry' ? row : selector.includes('data-tip') ? question : null,
   };
+  doc.querySelectorAll = () => [firstRow, row];
   tooltip.install(doc);
   handlers.pointerover({ target: row });
   await new Promise(resolve => setTimeout(resolve, 110));
@@ -67,6 +71,7 @@ test('Flow help is shown by the question mark on hover and by the entry on keybo
   await new Promise(resolve => setTimeout(resolve, 110));
   assert.equal(classes.has('is-visible'), true, 'hovering the question mark shows help');
   assert.equal(tip.textContent, 'Flow help');
+  assert.deepEqual(tip.style, { left: '88px', top: '466px' }, 'help stays above both Flow rows');
   handlers.pointerout({ relatedTarget: null });
   handlers.focusin({ target: row });
   await new Promise(resolve => setTimeout(resolve, 110));
