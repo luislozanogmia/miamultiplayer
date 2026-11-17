@@ -429,21 +429,24 @@ function ensureCronPlugin(plugin) {
   return cronPluginsReady.get(plugin);
 }
 
-// Scheduled jobs run from the Hermes home, not from a bot's profile, so the
-// guards a bot has in chat are set there too, once per process: the shell
-// guard on the terminal (a search-only bot has no terminal and gets none),
-// the instruction-file guard, and approvals that fail closed with nobody
-// watching (cron_mode deny; mode "off" would skip every gate). Ask-before-do
-// runs as in chat, except that nobody can answer: a blocked action becomes a
-// "needs you" step (ask-before-do.js decide).
+// Scheduled jobs run from the Hermes home, not from a bot's profile, so a
+// bot's chat setup is repeated there, once per process: the shell guard on
+// the terminal (a search-only bot has no terminal and gets none), the
+// instruction-file guard, and the same tools as the bot's chat. Commands are
+// allowed the way chat allows them (its approvals are off; Hermes' hardline
+// floor still blocks catastrophic ones), so the one gate is ask-before-do:
+// when it is on, a blocked action asks in the bot's chat or becomes a "needs
+// you" step (ask-before-do.js decide); when it is off, the run just does it.
+// Google's server is the one in the bot's chat (hermes-bot-profile.js); it
+// carries no credential, which the gateway sends over the MCP pipe.
 let cronGuardsReady = null;
 // Run by Hermes' own Python so Hermes writes its own config.yaml.
 const CRON_GUARD_SCRIPT = [
-  'import sys',
+  'import json,sys',
   'from hermes_cli.config import load_config, save_config',
   'cfg=load_config() or {}',
   'a=cfg.setdefault("approvals",{})',
-  'a["cron_mode"]="deny"',
+  'a["cron_mode"]="approve"',
   'a["mode"]="manual" if str(a.get("mode") or "").lower()=="off" else (a.get("mode") or "manual")',
   'cfg.setdefault("security",{})["protected_instruction_files"]=True',
   'g=sys.argv[1] if len(sys.argv)>1 else ""',
@@ -456,15 +459,22 @@ const CRON_GUARD_SCRIPT = [
   // reopens, whichever profile the chat runs in, so the profile line in
   // hermes-bot-profile.js alone did not stop its own resume.
   'cfg.setdefault("desktop",{}).setdefault("auto_continue",{})["enabled"]=False',
+  // A bot's chat gets Google's tools shown directly, not behind tool_search.
+  'gs=json.loads(sys.argv[3]) if len(sys.argv)>3 and sys.argv[3] else None',
+  'm=dict(cfg.get("mcp_servers") or {})',
+  'm.update({"google":gs}) if gs else m.pop("google",None)',
+  'cfg["mcp_servers"]=m',
+  'gs and cfg.setdefault("tools",{}).setdefault("tool_search",{}).update({"enabled":"off"})',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
   if (!cronGuardsReady) {
     cronGuardsReady = (async () => {
-      const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS } = require('./hermes-bot-profile');
+      const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS, googleWorkspaceMcpServer } = require('./hermes-bot-profile');
       const guardPath = cronShellGuard(HERMES_HOME) || '';
+      const google = googleWorkspaceMcpServer();
       await new Promise((resolve, reject) => {
-        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS)], {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : ''], {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),

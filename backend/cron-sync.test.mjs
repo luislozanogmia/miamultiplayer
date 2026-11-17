@@ -1273,7 +1273,7 @@ test('the first scheduled job sets the bot\'s guards where jobs run, once', asyn
   assert.equal(guardCalls.length <= 1, true);
   const guard = path.join(hermesHome, 'miaos-shell-guard.sh');
   assert.ok(fs.existsSync(guard), 'the chat shell guard is written beside the jobs');
-  assert.match(cronSync.CRON_GUARD_SCRIPT, /cron_mode"\]="deny"/);
+  assert.match(cronSync.CRON_GUARD_SCRIPT, /cron_mode"\]="approve"/, 'only ask-before-do asks, as in chat');
   assert.match(cronSync.CRON_GUARD_SCRIPT, /protected_instruction_files"\]=True/);
   assert.match(cronSync.CRON_GUARD_SCRIPT, /"mode"\]="manual" if .*=="off"/, 'approvals off would skip every gate, so it is turned back on');
 });
