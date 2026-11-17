@@ -10259,7 +10259,7 @@ let browserWorkWorkerBroker = null;
 let askBeforeDoGate = null;
 async function initializeAskBeforeDoGate() {
   const { createAskBeforeDoGate } = require('./ask-before-do');
-  askBeforeDoGate = await createAskBeforeDoGate();
+  askBeforeDoGate = await createAskBeforeDoGate({ scheduledRun: scheduledRunAskBeforeDo });
   // In process.env so a gateway restarted after a clean slate inherits it too.
   // The token can only ask; a yes comes only from the user's own reply.
   process.env.GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN = askBeforeDoGate.token;
@@ -10316,6 +10316,27 @@ async function sharedRunAskBeforeDo({ owner, asker, channel, sharedBot }) {
     }),
     // A finished or stopped run takes its open request with it.
     end: () => askBeforeDoGate.cancelScope(scope),
+  };
+}
+// A bot's scheduled run follows its owner's ask-before-do choice. Off: nothing
+// is gated. On: the run asks on a card in the bot's own chat, as a chat turn
+// would. One scope per execution, so a yes never carries into the next run.
+// -> what the gate needs (ask-before-do.js createGateState), or null.
+async function scheduledRunAskBeforeDo(sessionId) {
+  let run;
+  try { run = cronSync.activeBotCronRunForSession(conn, sessionId); } catch (_) { return null; }
+  if (!run || !run.bot) return null;
+  const owner = String(ownerOf(run.bot) || '').trim().toLowerCase();
+  const scope = `cron:${run.jobId}:${run.sessionId}`;
+  const enabled = currentInstructionSettings(owner).askBeforeDo !== false;
+  if (!enabled) return { scope, enabled };
+  const conversation = owner ? await ensureNativeBotConversation(run.bot).catch(() => null) : null;
+  return {
+    scope,
+    enabled,
+    requester: owner,
+    conversationId: conversation ? conversation.id : scope,
+    present: conversation ? botChatApprovalPresenter(run.bot, conversation) : null,
   };
 }
 // A browser bot asks in its own chat, on the same card and setting as any other turn.

@@ -149,6 +149,40 @@ test('a scheduled run never waits: a blocked action is skipped and reported as n
   assert.doesNotMatch(decision.message, /request_approval/, 'it never offers an approval nobody can give');
 });
 
+test('a scheduled run follows its owner: off runs, on asks in the bot chat, no chat is needs you', async () => {
+  const cron = 'cron_job_20261101_090000';
+  const rm = { sessionId: cron, summary: 'rm old.log', fingerprint: 'f'.repeat(64) };
+
+  const off = createGateState({ scheduledRun: async () => ({ scope: 'cron:job:1', enabled: false }) });
+  assert.equal((await off.decideAny(rm)).allow, true, 'ask-before-do off: the run just does it');
+
+  const shown = [];
+  const on = createGateState({ scheduledRun: async (id) => (id === cron ? {
+    scope: 'cron:job:1', enabled: true, requester: 'a@example.com', conversationId: 'bot-chat',
+    present: async (request) => { shown.push(request); return async () => {}; },
+  } : null) });
+  const blocked = await on.decideAny(rm);
+  assert.equal(blocked.allow, false);
+  assert.match(blocked.message, /request_approval with request_id/, 'on: the run is told to ask');
+  const id = /request_id "([^"]+)"/.exec(blocked.message)[1];
+  const answer = on.requestApproval({ requestId: id });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(shown.length, 1, 'the card is shown in the bot chat');
+  assert.equal(on.answer({ id: shown[0].id, requester: 'a@example.com', approved: true }), 'answered');
+  assert.equal((await answer).approved, true);
+  assert.equal((await on.decideAny(rm)).allow, true, 'the yes runs that exact call once');
+  assert.equal((await on.decideAny(rm)).allow, false, 'and only once');
+
+  const noChat = createGateState({ scheduledRun: async () => ({ scope: 'cron:job:2', enabled: true, requester: 'a@example.com' }) });
+  const skipped = await noChat.decideAny(rm);
+  assert.equal(skipped.allow, false);
+  assert.match(skipped.message, /report_step with state "needs_you"/);
+
+  const unknown = createGateState({ scheduledRun: async () => null });
+  assert.match((await unknown.decideAny(rm)).message, /needs_you/, 'an unrecognised run still never waits');
+  assert.equal((await unknown.decideAny({ sessionId: 'subagent-1', summary: 'send' })).allow, false, 'other sessions unchanged');
+});
+
 test('each turn reads the setting where promptInstructions puts it', async () => {
   const { readFile } = await import('node:fs/promises');
   const server = await readFile(new URL('./server.js', import.meta.url), 'utf8');
