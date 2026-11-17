@@ -248,6 +248,17 @@ table.admin-table tr:hover td{background:var(--accent-soft);}
 .hub-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 12px;margin:8px 0;font-size:12px;}
 .hub-facts dt{color:var(--muted);}
 .hub-facts dd{margin:0;overflow-wrap:anywhere;}
+/* An app's history: who sent each version and who decided it. Also in styles.css. */
+.app-history{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.app-history-head{font-size:12px;font-weight:600;}
+.app-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto;}
+.app-history-row{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px;}
+.app-history-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;}
+.app-history-version{font-weight:600;}
+.app-history-state,.app-history-who,.app-history-note{color:var(--muted);}
+.app-history-pending{color:inherit;font-weight:600;}
+.app-history-who,.app-history-detail{overflow-wrap:anywhere;}
+.app-history-note{font-size:12px;}
 .hub-address{font-family:var(--mono);font-size:11.5px;}
 .hub-ready-ok{color:var(--green);}
 .hub-ready-warn{color:var(--amber);}

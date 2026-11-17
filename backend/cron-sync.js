@@ -1351,13 +1351,15 @@ function readRunReports(directory, automationId) {
 // Steps run one at a time: the current step is the most recent `working`
 // report whose step has not been finished since. A finished run's unreported
 // steps read "unreported" so a silent skip is visible.
-function automationChecklist(steps, reports, run) {
+function automationChecklist(steps, reports, run, untilMs) {
   const startedMs = hermesTimestampMs(run && run.startedAt);
   const finished = !!run && ['completed', 'failed', 'unknown'].includes(run.status);
   const latest = new Map();
   let working = null;
   for (const report of reports || []) {
     if (Number.isFinite(startedMs) && report.ts * 1000 < startedMs - 5000) continue;
+    // A run that is not the latest stops where the next one began.
+    if (Number.isFinite(untilMs) && report.ts * 1000 >= untilMs - 5000) continue;
     if (report.step < 1 || report.step > steps.length) continue;
     const state = report.state === 'escalated' ? 'needs_you' : report.state;
     const entry = { ...report, state };
@@ -1410,17 +1412,10 @@ function listAutomationChecklists(conn) {
         if (!steps.length || !jobId) continue;
         const run = latest.get(jobId);
         if (!run) continue;
-        let directory = null;
-        try {
-          BOT_PACKAGE_STORE.hydrate(bot);
-          directory = BOT_PACKAGE_STORE.findDirectory(bot.id);
-        } catch (_error) {
-          directory = null;
-        }
         results.push({
           bot,
           automationId: automation.id,
-          ...automationChecklist(steps, readRunReports(directory, automation.id), run),
+          ...automationChecklist(steps, readRunReports(botRunReportsDirectory(bot), automation.id), run),
         });
       }
     }
@@ -1428,6 +1423,94 @@ function listAutomationChecklists(conn) {
   } finally {
     executions.close();
   }
+}
+
+function botRunReportsDirectory(bot) {
+  try {
+    BOT_PACKAGE_STORE.hydrate(bot);
+    return BOT_PACKAGE_STORE.findDirectory(bot.id);
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The checklist of the run a "run now" in a chat started: the first run of the
+// automation's job claimed from that moment on. null until that run begins.
+function automationRunChecklistSince(bot, automationId, sinceMs) {
+  if (!bot || !Number.isFinite(sinceMs) || !fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return null;
+  migrateBotAutomations(bot);
+  const automation = bot.automations.find((item) => item.id === automationId);
+  const jobId = automation && bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
+  if (!jobId) return null;
+  const Database = require('better-sqlite3');
+  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
+  let runs;
+  try {
+    if (!hasSqliteTable(executions, 'executions')) return null;
+    runs = executions.prepare(
+      `SELECT id AS executionId, status, claimed_at AS claimedAt,
+              coalesce(started_at, claimed_at) AS startedAt, finished_at AS finishedAt
+         FROM executions
+        WHERE job_id = ?
+        ORDER BY claimed_at DESC, id DESC LIMIT 200`
+    ).all(jobId).reverse();
+  } finally {
+    executions.close();
+  }
+  const index = runs.findIndex((run) => hermesTimestampMs(run.claimedAt) >= sinceMs - 5000);
+  if (index < 0) return null;
+  const next = runs[index + 1];
+  const steps = Array.isArray(automation.steps) ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean) : [];
+  return {
+    automationId: automation.id,
+    startedMs: hermesTimestampMs(runs[index].startedAt) || null,
+    finishedMs: hermesTimestampMs(runs[index].finishedAt) || null,
+    ...automationChecklist(steps, readRunReports(botRunReportsDirectory(bot), automation.id), runs[index],
+      next ? hermesTimestampMs(next.claimedAt) : NaN),
+  };
+}
+
+// Find the durable root of a scheduled session. The name alone is not proof:
+// an old session of the same job must not inherit the current run's browser.
+// A long run can continue under a new session whose parents lead to the root.
+function cronRootForSession(sessionId) {
+  const named = (id) => (/^cron_(.+)_\d{8}_\d{6}$/.exec(id) || [])[1] || '';
+  let id = String(sessionId || '');
+  if (!id || id.length > 200 || !fs.existsSync(HERMES_STATE_DB)) return null;
+  const Database = require('better-sqlite3');
+  const state = new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true });
+  try {
+    const parent = state.prepare('SELECT parent_session_id AS parent, source, started_at AS startedAt FROM sessions WHERE id = ?');
+    for (let hop = 0; hop < 8; hop += 1) {
+      const row = parent.get(id);
+      if (!row) return null;
+      const jobId = named(id);
+      if (jobId) return row.source === 'cron' ? { jobId, startedAt: row.startedAt } : null;
+      id = String(row.parent || '');
+      if (!id) return null;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  } finally {
+    state.close();
+  }
+}
+
+// The scheduled run going on right now that a live Hermes session belongs to,
+// with the folders that run works in, or null. A finished run matches nothing.
+function activeBotCronRunForSession(conn, sessionId) {
+  const root = cronRootForSession(sessionId);
+  if (!root) return null;
+  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === root.jobId);
+  if (!run) return null;
+  // Hermes creates the root session after marking this execution running.
+  // Comparing durable start times rejects a prior execution of the same job.
+  const sessionStarted = hermesTimestampMs(root.startedAt);
+  const runStarted = hermesTimestampMs(run.startedAt);
+  if (!Number.isFinite(sessionStarted) || !Number.isFinite(runStarted) || sessionStarted < runStarted - 1000 || sessionStarted > Date.now() + 1000) return null;
+  const job = readHermesJobs().byId.get(root.jobId) || {};
+  return { ...run, folders: [job.artifact_workspace, job.workdir].filter(Boolean) };
 }
 
 module.exports = {
@@ -1450,8 +1533,10 @@ module.exports = {
   reconcileBotCrons,
   listUndeliveredBotCronResults,
   listActiveBotCronRuns,
+  activeBotCronRunForSession,
   listInterruptedBotCronRuns,
   listAutomationChecklists,
+  automationRunChecklistSince,
   automationChecklist,
   readRunReports,
   artifactWorkspaceForBot,

@@ -37,7 +37,7 @@ function harness(conversations, activeWorkspaceKey = 'solo', stored = {}){
   vm.createContext(context);
   vm.runInContext([
     'nativeConversationKind', 'nativeConversationToRoom', 'isNativeMiaConversation',
-    'agentChatsStorageKey', 'rememberedAgentChats', 'agentChatOwnerId', 'rememberAgentChat',
+    'agentChatsStorageKey', 'rememberedAgentChats', 'agentChatOwnerId', 'rememberAgentChat', 'setAgentChat', 'aiModeSpoke',
     'applyNativeConversationList', 'nativeConversationInView', 'nativeConversationIdForChatKey', 'conversationHistoryTimestamp',
   ].map(fn).join('\n'), context);
   context.applyNativeConversationList(conversations);
@@ -245,4 +245,36 @@ test('unfinished onboarding does not pull you out of the chat you have open', ()
     onboarding(null, '', 'main').then((loaded) => assert.deepEqual(loaded, ['main'], 'a first run still lands on onboarding')),
     onboarding('main', 'main', 'main').then((loaded) => assert.deepEqual(loaded, ['main'])),
   ]);
+});
+
+test('what is said in Flow or Flow Tandem makes that chat the one Mia\'s row opens', async () => {
+  const stored = {};
+  const main = mia('mia-main', '2026-09-01T00:00:00.000Z', {});
+  const flow = mia('mia-flow', '2026-11-16T00:00:00.000Z', { conversationMode: 'fresh', source: 'ai-mode' });
+  const context = harness([main, flow], 'solo', stored);
+  assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-main');
+  let drawn = 0;
+  context.renderChatSidebar = () => { drawn += 1; };
+  context.loadNativeConversations = () => assert.fail('the chat is already listed');
+  context.aiModeSpoke('mia-flow');
+  assert.equal(context.chatWs.gatewayAgent.roomId, 'mia-flow');
+  assert.equal(drawn, 1);
+  context.aiModeSpoke('mia-flow');
+  assert.equal(drawn, 1, 'saying more in the same chat changes nothing');
+  assert.equal(harness([main, flow], 'solo', stored).chatWs.gatewayAgent.roomId, 'mia-flow', 'kept across a reload');
+
+  // A chat Flow has just made is fetched, then the row points at it.
+  const later = harness([main], 'solo', {});
+  later.loadNativeConversations = async () => [main, flow];
+  later.aiModeSpoke('mia-flow');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(later.chatWs.gatewayAgent.roomId, 'mia-flow');
+  later.aiModeSpoke('');
+  assert.equal(later.chatWs.gatewayAgent.roomId, 'mia-flow');
+});
+
+test('Flow tells the app which chat a direction went into, once it is accepted', () => {
+  const flowSource = fs.readFileSync(new URL('./ai-mode.js', import.meta.url), 'utf8');
+  assert.match(flowSource, /call\(chat\(id,'\/events'\),ev\)\.then\(function\(r\)\{[\s\S]{0,160}r\.status<300&&h&&h\.spoke\)try\{h\.spoke\(id\);/);
+  assert.match(source, /spoke: aiModeSpoke/);
 });

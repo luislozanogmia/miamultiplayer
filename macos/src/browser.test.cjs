@@ -32,6 +32,7 @@ function harness(options = {}) {
   const shown = [];
   const opened = [];
   const profile = new EventEmitter();
+  const appSessions = new Map();
   profile.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Mia/0.2.7 Chrome/132.0.0.0 Electron/44.2.0 Safari/537.36";
   profile.getUserAgent = () => profile.userAgent;
   profile.setUserAgent = value => { profile.userAgent = value; };
@@ -138,7 +139,19 @@ function harness(options = {}) {
       setVisible(visible) { this.visible = visible; }
       setBackgroundColor(color) { this.backgroundColor = color; }
     },
-    session: { fromPartition: partition => { profile.partition = partition; return profile; } },
+    session: { fromPartition: partition => {
+      // Each app has a session of its own; everything else is the one browser profile.
+      if (partition.startsWith("persist:mia-app-")) {
+        if (!appSessions.has(partition)) {
+          const appSession = new EventEmitter();
+          Object.assign(appSession, { partition, setPermissionCheckHandler() {}, setPermissionRequestHandler() {}, setDevicePermissionHandler() {},
+            webRequest: { onBeforeRequest() {} }, protocol: { handle(scheme, handler) { appSession.scheme = scheme; appSession.serve = handler; } } });
+          appSessions.set(partition, appSession);
+        }
+        return appSessions.get(partition);
+      }
+      profile.partition = partition; return profile;
+    } },
     ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key),
       on: (key, fn) => handlers.set(`on:${key}`, fn), removeListener: key => handlers.delete(`on:${key}`) },
     Menu: { buildFromTemplate: template => { menuTemplates.push(template); return { popup() {} }; } },
@@ -170,7 +183,7 @@ function harness(options = {}) {
   const controller = createBrowser(window, () => "http://127.0.0.1:4870", () => {}, { downloadErrorGraceMs: 0, resolveActor: knownActor({}), ...options, chromeHandoff });
   const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   const command = (action, extra = {}, event = sender) => handlers.get("miaos-browser-command")(event, { action, ...extra });
-  return { command, window, views, sender, profile, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, stopResult, menuTemplates };
+  return { command, window, views, sender, profile, appSessions, handlers, shown, opened, normalizeTarget, normalizeLocalFileTarget, controller, nativeTheme: electron.nativeTheme, dialogCalls, dialogResponse, botRunning, stopResult, menuTemplates };
 }
 
 test("search, domain ports, loopback and prohibited schemes", () => {
@@ -689,6 +702,50 @@ test("web popups become tabs, blocked schemes never navigate", () => {
     wc.emit(eventName, { url: "file:///tmp/private", preventDefault() { prevented = true; } });
     assert.equal(prevented, true);
   }
+});
+
+test("an app link on the page in front asks, then opens that app on the Mac", async () => {
+  const h = harness({ appNameForLink: url => (url.startsWith("claude:") ? "Claude.app" : "") });
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://claude.ai/login/app";
+  const link = "claude://login/callback?code=one-time";
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  function navigate(url) {
+    let blocked = false;
+    wc.emit("will-navigate", { url, preventDefault() { blocked = true; } });
+    return blocked;
+  }
+  h.dialogResponse.value = 1;
+  assert.equal(navigate(link), true, "the page itself never goes to the app link");
+  await settle();
+  assert.equal(h.dialogCalls.length, 1);
+  assert.equal(h.dialogCalls[0][1].message, "Open Claude?");
+  assert.match(h.dialogCalls[0][1].detail, /claude\.ai wants to open Claude/);
+  assert.deepEqual(h.opened, [], "Cancel opens nothing");
+  h.dialogResponse.value = 0;
+  assert.equal(wc.popup({ url: link }).action, "deny");
+  await settle(); await settle();
+  assert.deepEqual(h.opened, [link], "a popup to the app link asks the same way");
+  assert.equal(h.command("state").tabs.length, 1, "no tab is made for an app link");
+  const asked = h.dialogCalls.length;
+  for (const url of ["file:///tmp/private", "javascript:alert(1)", "smb://server/share", "x-apple.systempreferences:com.apple.preference.security", "zoommtg://zoom.us/join"]) {
+    assert.equal(navigate(url), true);
+  }
+  await settle();
+  assert.equal(h.dialogCalls.length, asked, "blocked kinds, and a link no app opens, are never offered");
+});
+
+test("an app link stays blocked on a tab behind the one in front", async () => {
+  const h = harness({ appNameForLink: () => "Claude" });
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://claude.ai/login/app";
+  h.command("new");
+  wc.emit("will-navigate", { url: "claude://login", preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.dialogCalls.length, 0, "a tab behind cannot ask");
+  assert.deepEqual(h.opened, []);
 });
 
 test("Mia's default-browser Google sign-in returns only a matching finish-page callback", async () => {
@@ -3842,4 +3899,130 @@ test("only a web page can be pictured out of sight, and picturing opens no tab",
     assert.equal((await h.command("pagePicture", { url })).error, "Only web pages can be pictured.");
   }
   assert.equal(h.views.length, 0);
+});
+
+// A Mia folder with one app in it, and the lookup main.cjs gives the browser.
+function appPlaces(t) {
+  const { findApp } = require("./app-address.cjs");
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "miaos-browser-app-")));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const miaFolder = path.join(base, "mia"), appsDir = path.join(base, "team-apps");
+  fs.mkdirSync(path.join(miaFolder, "Sales Dashboard"), { recursive: true }); fs.mkdirSync(appsDir);
+  fs.writeFileSync(path.join(miaFolder, "Sales Dashboard", "index.html"), "<h1>Sales</h1>");
+  return { base, root: path.join(miaFolder, "Sales Dashboard"), resolveApp: name => findApp(name, { miaFolder, appsDir }) };
+}
+
+test("app:name in the address bar opens the app as a tab in the app's own sandbox", t => {
+  const at = appPlaces(t);
+  const h = harness({ resolveApp: at.resolveApp });
+  h.command("new");
+  const state = h.command("navigate", { value: "app:Sales_Dashboard" });
+  const tab = state.tabs.find(item => item.id === state.activeId);
+  assert.equal(tab.url, "app:sales-dashboard");
+  assert.equal(tab.title, "Sales Dashboard");
+  // The tab's page moved to a new view on the app's partition; the web view is gone.
+  assert.equal(h.views.length, 2);
+  assert.equal(h.views[0].webContents.closed, true);
+  const view = h.views[1];
+  assert.match(view.options.webPreferences.partition, /^persist:mia-app-/);
+  assert.equal(view.options.webPreferences.sandbox, true);
+  assert.equal(view.options.webPreferences.preload, undefined);
+  assert.match(view.webContents.loads[0], /^mia-app:\/\/app-[a-z0-9]+\/$/);
+  assert.equal(h.appSessions.size, 1);
+  assert.equal(h.profile.partition, "persist:mia-browser", "the browser's own profile is untouched");
+  // The app's page has its own address inside; the tab keeps the one the person typed.
+  view.webContents.shownUrl = view.webContents.loads[0];
+  view.webContents.emit("did-navigate", {}, view.webContents.loads[0]);
+  assert.equal(h.command("state").tabs[0].url, "app:sales-dashboard");
+  // A page of the app can't open a tab on its own.
+  assert.equal(view.webContents.popup({ url: "https://example.com/" }).action, "deny");
+  assert.equal(h.command("state").tabs.length, 1);
+});
+
+test("a tab goes back to the web in the browser's own profile", t => {
+  const at = appPlaces(t);
+  const h = harness({ resolveApp: at.resolveApp });
+  h.command("new");
+  h.command("navigate", { value: "app:sales-dashboard" });
+  const state = h.command("navigate", { value: "https://example.com" });
+  assert.equal(state.tabs[0].url, "https://example.com/");
+  assert.equal(h.views.length, 3);
+  assert.equal(h.views[1].webContents.closed, true);
+  assert.equal(h.views[2].options.webPreferences.session, h.profile);
+  assert.equal(h.views[2].options.webPreferences.partition, undefined);
+  assert.deepEqual(h.views[2].webContents.loads, ["https://example.com/"]);
+});
+
+test("an app that isn't here says so in the toolbar and opens nothing", t => {
+  const at = appPlaces(t);
+  const h = harness({ resolveApp: at.resolveApp });
+  h.command("new");
+  const answer = h.command("navigate", { value: "app:budget" });
+  assert.match(answer.error, /No app named "budget" is on this computer\. Apps here: app:sales-dashboard\./);
+  assert.equal(h.views.length, 1);
+  assert.deepEqual(h.views[0].webContents.loads, []);
+  const none = harness();
+  none.command("new");
+  assert.equal(none.command("navigate", { value: "app:sales-dashboard" }).error, "Apps can't be opened in this window.");
+});
+
+test("a web page can't open an app: not as a popup, a link or a new tab of its own", t => {
+  const at = appPlaces(t);
+  const h = harness({ resolveApp: at.resolveApp });
+  h.command("new");
+  h.command("navigate", { value: "https://example.com" });
+  const page = h.views[0].webContents;
+  assert.equal(page.popup({ url: "app:sales-dashboard", disposition: "foreground-tab" }).action, "deny");
+  assert.equal(h.views.length, 1);
+  assert.equal(h.command("state").tabs.length, 1);
+  assert.equal(h.appSessions.size, 0);
+  assert.throws(() => h.normalizeTarget("app:sales-dashboard"));
+});
+
+test("a bot opens an app by its address, gets the same tab back, and is told when there is no such app", async t => {
+  const at = appPlaces(t);
+  const h = harness({ resolveApp: at.resolveApp, workspaceRoot: at.base, resolveActor: knownActor({ "s-bot": { botId: "bot-a", name: "Scout" } }) });
+  const opened = await h.controller.protocol("tab_open", { actor_session: "s-bot", url: "app:Sales Dashboard", wait: "none" });
+  assert.equal(opened.url, "app:sales-dashboard");
+  const view = h.views[h.views.length - 1];
+  assert.match(view.options.webPreferences.partition, /^persist:mia-app-/);
+  assert.match(view.webContents.loads[0], /^mia-app:\/\/app-/);
+  const again = await h.controller.protocol("tab_open", { actor_session: "s-bot", url: "app:sales_dashboard", wait: "none" });
+  assert.equal(again.reused, true);
+  assert.equal(again.tab_id, opened.tab_id);
+  const tabsBefore = h.command("state").tabs.length;
+  await assert.rejects(h.controller.protocol("tab_open", { actor_session: "s-bot", url: "app:budget", wait: "none" }),
+    error => error.code === "APP_NOT_FOUND" && /Apps here: app:sales-dashboard/.test(error.message));
+  assert.equal(h.command("state").tabs.length, tabsBefore, "no tab is left behind for an app that isn't there");
+  // From a web tab of its own, the bot goes to the app in that tab.
+  const web = await h.controller.protocol("tab_open", { actor_session: "s-bot", url: "https://example.com/", wait: "none" });
+  const moved = await h.controller.protocol("navigate", { actor_session: "s-bot", tab_id: web.tab_id, url: "app:sales-dashboard", wait: "none" });
+  assert.equal(moved.url, "app:sales-dashboard");
+});
+
+test("an app tab comes back after a restart, and one whose app is gone shows why", t => {
+  const at = appPlaces(t);
+  const statePath = path.join(at.base, "browser.json");
+  const first = harness({ resolveApp: at.resolveApp, statePath });
+  first.command("new");
+  first.command("navigate", { value: "app:sales-dashboard" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")).tabs.map(tab => tab.url), ["app:sales-dashboard"]);
+  first.window.emit("closed");
+
+  const restored = harness({ resolveApp: at.resolveApp, statePath });
+  restored.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 } });
+  const state = restored.command("state");
+  assert.equal(JSON.stringify(state.tabs.map(tab => tab.url)), JSON.stringify(["app:sales-dashboard"]));
+  const shown = restored.views[restored.views.length - 1];
+  assert.match(shown.options.webPreferences.partition, /^persist:mia-app-/);
+  assert.match(shown.webContents.loads[0], /^mia-app:\/\/app-/);
+  restored.window.emit("closed");
+
+  fs.rmSync(at.root, { recursive: true, force: true });
+  const gone = harness({ resolveApp: at.resolveApp, statePath });
+  gone.command("layout", { visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 } });
+  const after = gone.command("state");
+  assert.equal(JSON.stringify(after.tabs.map(tab => tab.url)), JSON.stringify(["app:sales-dashboard"]));
+  assert.match(after.tabs[0].error, /No app named "sales-dashboard" is on this computer/);
+  gone.window.emit("closed");
 });

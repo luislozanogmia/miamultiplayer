@@ -200,6 +200,24 @@ test('with no voices named, Mia speaks in the first voices of the key\u2019s own
   assert.deepEqual(await speechVoices({ env: { MIAOS_ELEVENLABS_API_KEY: 'loose-key' }, request }), []);
 });
 
+test('a key made for speech only still speaks, in ElevenLabs\u2019 own voices', async () => {
+  const missing = (permission) => async () => ({ ok: false, status: 401, json: async () => ({ detail: { status: 'missing_permissions', message: `The API key you used is missing the permission ${permission} to execute this operation.` } }) });
+  const ids = await speechVoices({ key: 'speech-only-key', env: {}, request: missing('voices_read') });
+  assert.equal(ids.length, 4);
+  assert.equal(ids[0], '21m00Tcm4TlvDq8ikWAM');
+  assert.deepEqual(await speechState({ key: 'speech-only-key-2', env: {}, request: missing('voices_read') }), { voices: 4, problem: '' });
+  // A line it may not speak still shows the key as not taken.
+  const calls = [];
+  const request = async (url) => { calls.push(url); return url.includes('/text-to-speech/') ? { ok: false, status: 401 } : missing('voices_read')(); };
+  assert.equal(await synthesize('Hi', 0, { key: 'speech-only-key-3', env: {}, request }), null);
+  assert.match(calls[1], /\/text-to-speech\/21m00Tcm4TlvDq8ikWAM\?/);
+  assert.deepEqual(await speechState({ key: 'speech-only-key-3', env: {}, request }), { voices: 0, problem: 'key' });
+  // A key that is simply wrong, or misses another permission, stays not taken.
+  const invalid = async () => ({ ok: false, status: 401, json: async () => ({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }) });
+  assert.deepEqual(await speechState({ key: 'wrong-key', env: {}, request: invalid }), { voices: 0, problem: 'key' });
+  assert.deepEqual(await speechState({ key: 'other-permission', env: {}, request: missing('user_read') }), { voices: 0, problem: 'key' });
+});
+
 test('narration keeps the one line Mia said before a step', () => {
   assert.equal(narration('I will open the browser for you.'), 'I will open the browser for you.');
   assert.equal(narration('Some notes.\n\n**The page is ready for you.**\n'), 'The page is ready for you.');

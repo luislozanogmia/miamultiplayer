@@ -9,7 +9,23 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
-## [0.3.10] — Unreleased
+## [0.3.11] — Unreleased
+
+### Added
+- Scheduled bot automations can use the owner's Mia browser while that exact run is active. Run steps appear in the bot's chat.
+- Company apps can be opened by name, copied for editing, suggested as updates, and reviewed with the sender and version history shown.
+- Help → Force Update lets a person fetch the latest release when the usual update prompt cannot be used.
+
+### Changed
+- Flow mode is opt-in from Settings and remembers Mia's selected voice. Flow and Flow Tandem can report completed bot work.
+- Chat replies record the model used after routing, and quiet-time compaction handles normal chats.
+
+### Fixed
+- A live browser page steps aside when the Flow demo or another prompt covers it, so the demo and Skip button can be seen.
+- Links in a page can open an installed Mac app after a person confirms; blocked destinations remain blocked.
+- Company app review identifies the member who sent an edit separately from the original publisher.
+
+## [0.3.10] — 2026-11-16
 
 ### Added
 - Flow preview gives Mia a full-screen stage for voice, visible progress, bot handoffs, and decisions. Flow Tandem lets the person keep working in the app while Mia helps.

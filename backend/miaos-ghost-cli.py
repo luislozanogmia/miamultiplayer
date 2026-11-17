@@ -89,6 +89,15 @@ def transport_instance():
     return transport_class(socket_path=socket_path, token=token)
 
 
+def live_actor_session() -> str:
+    # A chat turn is known by its UI session. A scheduled run has none, so it
+    # is known by its own session; the app checks that this run is going.
+    session = os.environ.get("HERMES_UI_SESSION_ID", "").strip()
+    if not session and os.environ.get("HERMES_CRON_SESSION", "").strip() == "1":
+        session = os.environ.get("HERMES_SESSION_ID", "").strip()
+    return session
+
+
 def call_tool(tool_name: str, arguments: dict) -> dict:
     transport = transport_instance()
     instance_id = str(arguments.get("instance_id") or "miaos")
@@ -97,7 +106,7 @@ def call_tool(tool_name: str, arguments: dict) -> dict:
 
     # Every bridge method, including the initial instance status check,
     # carries the live session identity supplied by Hermes, never arguments.
-    actor_session = os.environ.get("HERMES_UI_SESSION_ID", "").strip()
+    actor_session = live_actor_session()
     actor_params = {"actor_session": actor_session[:200]} if actor_session else {}
 
     if tool_name == "ghost_instance_create":

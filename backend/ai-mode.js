@@ -556,6 +556,19 @@ let voicesKept = null;
 // The last key ElevenLabs refused, and the number it answered with.
 let voicesRefused = null;
 
+// ElevenLabs' own voices, there for every account: Rachel, Sarah, Adam, Charlotte.
+const DEFAULT_VOICES = ['21m00Tcm4TlvDq8ikWAM', 'EXAVITQu4vr4xnSDxMaL', 'pNInz6obpgDQGcFmaJgB', 'XB0fDUnXU5powFXDhCwa'];
+
+// onlyMissesVoicesRead(response) -> true when ElevenLabs took the key but the
+// key was made without the right to list voices (a key for speech only).
+async function onlyMissesVoicesRead(response) {
+  if (Number(response.status) !== 401 || typeof response.json !== 'function') return false;
+  try {
+    const detail = ((await response.json()) || {}).detail || {};
+    return detail.status === 'missing_permissions' && /voices_read/.test(String(detail.message || ''));
+  } catch (_) { return false; }
+}
+
 // speechVoices({key}) -> the voice ids to choose from, or [] when speech is
 // not set up (no key, or no voice). They are the first voices of the key's
 // own account, asked for once and kept for a while; MIAOS_ELEVENLABS_VOICES
@@ -568,6 +581,15 @@ async function speechVoices({ key = '', env = process.env, request = fetch, now 
   if (named.length) return named;
   if (voicesKept && voicesKept.key === secret && now() - voicesKept.at < VOICES_KEPT_MS) return voicesKept.ids;
   const response = await request(VOICES_API, { headers: { 'xi-api-key': secret }, signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS) });
+  if (!response.ok && await onlyMissesVoicesRead(response)) {
+    // A key made for speech only may not list voices. It is still a good key:
+    // Mia speaks in ElevenLabs' own voices, and a spoken line that is refused
+    // still shows the key as not taken.
+    console.warn('[ai-mode] this key may not list voices; Mia speaks in ElevenLabs\u2019 default voices');
+    voicesRefused = null;
+    voicesKept = { key: secret, at: now(), ids: DEFAULT_VOICES.slice(0, MAX_VOICES) };
+    return voicesKept.ids;
+  }
   if (!response.ok) {
     console.warn(`[ai-mode] the list of voices was refused (${response.status}); Mia stays silent`);
     voicesRefused = { key: secret, status: Number(response.status) || 1 };

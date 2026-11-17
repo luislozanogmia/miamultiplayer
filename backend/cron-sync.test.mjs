@@ -831,6 +831,40 @@ test('active automation runs use Hermes execution liveness and retain their deli
   };
   require('./db').saveOne(appDb, 'bots', bot.id, bot);
 
+  // The session a run's commands send leads back to the current execution.
+  // A matching name without a durable session, or a prior run of the same job,
+  // must not borrow its browser identity.
+  const state = new (require('better-sqlite3'))(stateDbFile);
+  state.exec('CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, end_reason TEXT)');
+  if (!state.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'parent_session_id'").get()) {
+    state.exec('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT');
+  }
+  const addSession = state.prepare('INSERT INTO sessions (id, source, started_at, parent_session_id) VALUES (?, ?, ?, ?)');
+  const currentSession = 'cron_job-live_20260907_111226';
+  const oldSession = 'cron_job-live_20260907_100000';
+  addSession.run(currentSession, 'cron', Date.parse(startedAt) / 1000 + 0.1, null);
+  addSession.run(oldSession, 'cron', Date.parse(startedAt) / 1000 - 3600, null);
+  addSession.run('cron_job-live_20260907_111227', 'desktop', Date.parse(startedAt) / 1000 + 1, null);
+  addSession.run('cron_job-live_20260907_111229', 'cron', 'invalid', null);
+  addSession.run('cron_job-live_20260907_111230', 'cron', Date.now() / 1000 + 60, null);
+  addSession.run('compacted-1', 'cron', 1, currentSession);
+  addSession.run('compacted-2', 'cron', 1, 'compacted-1');
+  addSession.run('old-child', 'cron', 1, oldSession);
+  addSession.run('chat-child', 'desktop', 1, 'chat-parent');
+  state.close();
+  const named = cronSync.activeBotCronRunForSession(appDb, 'cron_job-live_20260907_111226');
+  assert.equal(named.bot.id, bot.id);
+  assert.equal(named.jobId, 'job-live');
+  assert.deepEqual(named.folders, []);
+  for (const other of ['', 'job-live', 'cron_job-live', 'cron_job-other_20260907_111226', 'execution-live',
+    'cron_job-live_20260907_111228', 'cron_job-live_20260907_111227',
+    'cron_job-live_20260907_111229', 'cron_job-live_20260907_111230', oldSession, 'old-child', 'x'.repeat(201)]) {
+    assert.equal(cronSync.activeBotCronRunForSession(appDb, other), null);
+  }
+  // A long run that compacted its history goes on under a new session id.
+  assert.equal(cronSync.activeBotCronRunForSession(appDb, 'compacted-2').jobId, 'job-live');
+  assert.equal(cronSync.activeBotCronRunForSession(appDb, 'chat-child'), null);
+
   const runs = cronSync.listActiveBotCronRuns(appDb);
   assert.equal(runs.length, 1);
   assert.equal(runs[0].sessionId, 'execution-live');

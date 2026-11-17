@@ -549,6 +549,10 @@ test("OTA updates default to the GitHub releases feed and use signed-app update 
   assert.match(source, /attachUpdateReadiness\(/);
   assert.match(source, /scheduleUpdateChecks\(\{ check: \(\) => checkForMiaUpdate\(\) \}\)/);
   assert.match(source, /label: "Check for Updates…"/);
+  assert.match(source, /label: "Force Update…"/);
+  assert.match(source, /click: \(\) => \{ forceMiaUpdate\(\)\.catch\(/);
+  assert.match(source, /buttons: \["Force Update", "Cancel"\], defaultId: 0, cancelId: 1/);
+  assert.match(source, /if \(answer\?\.response !== 0\) return \{ status: "cancelled" \};/);
 });
 
 test("OTA updates run in packaged builds on macOS and Windows only", () => {

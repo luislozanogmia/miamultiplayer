@@ -264,13 +264,16 @@ function runtimeProfileConfig({
     'auxiliary:',
     '  background_review:',
     `    enabled: ${backgroundReview === true ? 'true' : 'false'}`,
-    // Hermes summarizes older turns once a request passes this size or its
-    // own share of the model's window, whichever is smaller, before sending
-    // it, and keeps working. A lower fixed size (64k) cut long chats short
-    // on models with room for far more.
+    // Mia compacts a chat herself, in the background while it is quiet, once
+    // it has used 70% of this size (hermes-gateway-client.js). Hermes' own
+    // compaction in the middle of a turn stays off: it made the person wait
+    // for a summary and cut into a turn that was still working. The size and
+    // the tail settings still shape the summary Mia asks Hermes for.
     // The last turns stay word for word, including the last few requests.
+    // Scheduled runs keep Hermes' own compaction (cron-sync.js): a run is
+    // one long turn with no quiet moment to compact in.
     'compression:',
-    '  enabled: true',
+    '  enabled: false',
     `  threshold_tokens: ${COMPRESSION_THRESHOLD_TOKENS}`,
     '  protect_last_n: 20',
     '  min_tail_user_messages: 3',

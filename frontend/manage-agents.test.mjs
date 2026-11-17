@@ -979,6 +979,10 @@ test('the address bar hands local files to the browser instead of refusing them'
   assert.equal(normalize('file:///Users/me/Documents/mia/calculator.html', 'google'), 'file:///Users/me/Documents/mia/calculator.html');
   assert.equal(normalize('/Users/me/Documents/mia/dummy.pdf', 'google'), '/Users/me/Documents/mia/dummy.pdf');
   assert.equal(normalize('example.com', 'google'), 'https://example.com/');
+  // An app's address is left for the browser to find; anything else with a colon is still judged as before.
+  assert.equal(normalize('app:Sales Dashboard', 'google'), 'app:Sales Dashboard');
+  assert.equal(normalize('app:sales-dashboard', 'google'), 'app:sales-dashboard');
+  assert.throws(() => normalize('app://sales', 'google'), /Only web addresses/);
   assert.throws(() => normalize('javascript://x', 'google'), /Only web addresses/);
 });
 

@@ -42,6 +42,8 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
   let preparing = false;
   let promptOpen = false;
   let installRequested = false;
+  // Set by Help → Force Update: install as soon as the update is ready, without asking.
+  let forced = false;
   let pendingInfo;
   let nativeReady = false;
   let failureShown = false;
@@ -57,6 +59,7 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
     if (error && typeof error === "object") reportedErrors.add(error);
     preparing = false;
     installRequested = false;
+    forced = false;
     pendingInfo = undefined;
     nativeReady = false;
     tell({ phase: "idle" });
@@ -75,8 +78,36 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
     })).catch(log);
   }
 
+  function install() {
+    if (installRequested) return;
+    installRequested = true;
+    if (platform === "win32") updater.quitAndInstall(true, true);
+    else updater.quitAndInstall();
+  }
+
+  const ready = () => Boolean(pendingInfo) && (platform !== "darwin" || nativeReady);
+
+  // Installs without asking: now when an update is ready, otherwise as soon as
+  // the one being fetched is. Answers "installing", "waiting" for a download
+  // already under way, or "checking" when the caller still has to look for one.
+  function forceInstall() {
+    forced = true;
+    if (ready()) {
+      try { install(); } catch (error) { report(error); }
+      return "installing";
+    }
+    return downloading || preparing ? "waiting" : "checking";
+  }
+
   async function offerInstall() {
-    if (!pendingInfo || promptOpen || installRequested || (platform === "darwin" && !nativeReady)) return;
+    if (!ready() || installRequested) return;
+    if (forced) {
+      preparing = false;
+      tell({ phase: "ready", version });
+      try { install(); } catch (error) { report(error); }
+      return;
+    }
+    if (promptOpen) return;
     preparing = false;
     promptOpen = true;
     tell({ phase: "ready", version });
@@ -87,11 +118,7 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
         detail: "Restart Mia now to finish the update, or install it when you quit.",
         buttons: ["Restart and install", "Later"], defaultId: 0, cancelId: 1,
       });
-      if (result?.response === 0 && !installRequested) {
-        installRequested = true;
-        if (platform === "win32") updater.quitAndInstall(true, true);
-        else updater.quitAndInstall();
-      }
+      if (result?.response === 0) install();
     } catch (error) { report(error); }
     finally { promptOpen = false; }
   }
@@ -133,10 +160,12 @@ function attachUpdateReadiness({ updater, nativeUpdater, platform, directories, 
       void offerInstall();
     });
   }
+  updater.on("update-not-available", () => { forced = false; });
   updater.on("error", error => {
     if (downloading || preparing || installRequested) report(error);
+    else forced = false;
   });
-  return { handledError: error => Boolean(error && typeof error === "object" && reportedErrors.has(error)), offerInstall };
+  return { handledError: error => Boolean(error && typeof error === "object" && reportedErrors.has(error)), offerInstall, forceInstall };
 }
 
 module.exports = {

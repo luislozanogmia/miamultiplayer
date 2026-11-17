@@ -2,9 +2,12 @@
   'use strict';
 
   // The review card under a bot reply that proposes an automation (event
-  // metadata.automationProposal), and the status line for run_now
-  // (metadata.automationRun). It reuses the bot setup card's layout. Fields
-  // are scoped by the event id because several cards can be on screen.
+  // metadata.automationProposal), and the card for run_now
+  // (metadata.automationRun) that shows the run's steps as they go. It reuses
+  // the bot setup card's layout. Fields are scoped by the event id because
+  // several cards can be on screen.
+
+  var board = root.MiaAutomationsBoard || (typeof require === 'function' ? require('./automations-board.js') : null);
 
   var WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   // 'weekdays' is a daily schedule with weekdaysOnly; it is only a menu choice.
@@ -36,12 +39,80 @@
 
   function runHtml(run, esc){
     var name = esc(run.name || 'This automation');
-    var text = run.status === 'started' ? 'Running ' + name + ' now. Its checklist is on the Automations page.'
-      : run.status === 'off' ? name + ' is off, so it didn’t run.'
+    var text = run.status === 'off' ? name + ' is off, so it didn’t run.'
       : run.status === 'denied' ? 'Only the bot owner or a workspace admin can run ' + name + '.'
       : run.status === 'missing' ? name + ' has no scheduled job yet. Open it in Automations and save it again.'
       : name + ' didn’t start. Try again in a moment.';
     return '<div class="automation-run-note" data-automation-run="' + esc(run.automationId || '') + '">' + text + '</div>';
+  }
+
+  function durationText(ms){
+    if(!(ms >= 0)) return '';
+    var seconds = Math.round(ms / 1000);
+    if(seconds < 60) return seconds + ' s';
+    var minutes = Math.round(seconds / 60);
+    if(minutes < 60) return minutes + ' min';
+    return Math.floor(minutes / 60) + ' h' + (minutes % 60 ? ' ' + (minutes % 60) + ' min' : '');
+  }
+
+  // How long a card waits for its run to show up before it stops asking.
+  var RUN_START_WAIT_MS = 10 * 60 * 1000;
+
+  // The card of a run a bot started from its chat. card: {eventId, botId,
+  // automationId, name, since}; checklist: that run's steps from the app, or
+  // null while the run has not begun. options: {now, timeText, open}.
+  // The app redraws it in place as the run goes, from the card's own
+  // attributes, until the card says it is final.
+  function runCardHtml(card, checklist, esc, options){
+    var opts = options || {};
+    var name = esc(card.name || 'This automation');
+    var final = checklist ? ['completed', 'failed', 'unknown'].indexOf(checklist.runStatus) >= 0
+      : !(opts.now - card.since < RUN_START_WAIT_MS);
+    var attrs = ' data-automation-run-card="' + esc(card.eventId || '') + '" data-run-bot="' + esc(card.botId || '') +
+      '" data-run-automation="' + esc(card.automationId || '') + '" data-run-name="' + esc(card.name || '') +
+      '" data-run-since="' + esc(card.since || '') + '"' + (final ? ' data-run-final' : '');
+    var open = '<button type="button" class="automation-proposal-open" data-automation-bot="' + esc(card.botId || '') +
+      '" data-automation-open="' + esc(card.automationId || '') + '">Open</button>';
+    if(!checklist){
+      var waiting = final ? name + ' was asked to run. Its checklist is on the Automations page.' : 'Starting ' + name + '…';
+      return '<div class="automation-run-note"' + attrs + '>' + waiting + '</div>';
+    }
+    var items = checklist.steps || [];
+    var count = items.length ? checklist.done + ' of ' + checklist.total : '';
+    var time = function(ms){ return ms && opts.timeText ? opts.timeText(ms) : ''; };
+    var foot = function(text){ return '<div class="automation-run-foot"><span>' + esc(text) + '</span>' + open + '</div>'; };
+    var head = function(mark, title, side){
+      return mark + '<span class="automation-run-name">' + title + '</span>' + (side ? '<span class="automation-run-count">' + esc(side) + '</span>' : '');
+    };
+    if(!final){
+      return '<div class="automation-run-card" data-state="running"' + attrs + '><div class="automation-run-head">' +
+        head('<span class="automations-live" aria-hidden="true"></span>', name, count) + '</div>' +
+        (items.length ? board.stepsHtml(items, esc) : '') +
+        foot(time(checklist.startedMs) ? 'Started ' + time(checklist.startedMs) : 'Running now') + '</div>';
+    }
+    var ran = durationText(checklist.finishedMs - checklist.startedMs);
+    var stopped = items.filter(function(item){ return item.state === 'failed' || item.state === 'needs_you'; })[0];
+    if(stopped || checklist.runStatus !== 'completed'){
+      // Steps after the last one the bot reported on were never reached.
+      var reached = 0;
+      items.forEach(function(item, index){ if(item.state !== 'pending' && item.state !== 'unreported') reached = index + 1; });
+      var rest = items.length - reached;
+      var title = !stopped ? name + ' didn’t finish' : (stopped.state === 'failed' ? 'Stopped at step ' : 'Needs you at step ') + stopped.n;
+      return '<div class="automation-run-card" data-state="stopped"' + attrs + '><div class="automation-run-head">' +
+        head('<span class="automations-step-mark" data-state="' + (stopped ? stopped.state : 'failed') + '"></span>', title, stopped ? card.name || '' : '') + '</div>' +
+        (reached ? board.stepsHtml(items.slice(0, reached), esc) : '') +
+        (rest > 0 && reached ? '<div class="automation-run-rest">' + rest + ' more step' + (rest === 1 ? '' : 's') + ' not reached</div>' : '') +
+        foot(ran ? 'Ran ' + ran : 'Stopped') + '</div>';
+    }
+    // A finished run folds to one line; the bot's own message has the result.
+    var side = [count, ran].filter(Boolean).join(' · ');
+    if(!items.length){
+      return '<div class="automation-run-card" data-state="done"' + attrs + '><div class="automation-run-head">' +
+        head('<span class="automations-step-mark" data-state="done"></span>', name, side || 'Done') + '</div></div>';
+    }
+    return '<details class="automation-run-card" data-state="done"' + attrs + (opts.open ? ' open' : '') + '><summary class="automation-run-head">' +
+      head('<span class="automations-step-mark" data-state="done"></span>', name, side) + '</summary>' +
+      board.stepsHtml(items, esc) + foot(time(checklist.startedMs) ? 'Started ' + time(checklist.startedMs) : 'Finished') + '</details>';
   }
 
   function answeredHtml(proposal, esc){
@@ -111,12 +182,20 @@
   }
 
   // html(message, {esc, canEdit, busy, error, timezone}) -> '' when the
-  // message carries no automation card.
+  // message carries no automation card. A run card also reads {botId,
+  // runChecklist, runOpen, now, timeText}.
   function html(message, options){
     var metadata = message && message.nativeEvent && message.nativeEvent.metadata;
     if(!metadata) return '';
     var esc = options.esc;
-    if(metadata.automationRun) return runHtml(metadata.automationRun, esc);
+    var run = metadata.automationRun;
+    if(run && run.status === 'started'){
+      return runCardHtml({
+        eventId: message.nativeEvent.id, botId: run.botId || options.botId || '', automationId: run.automationId, name: run.name,
+        since: Number(run.requestedAt) || Date.parse(message.nativeEvent.createdAt) || 0
+      }, options.runChecklist || null, esc, {now: options.now, timeText: options.timeText, open: options.runOpen});
+    }
+    if(run) return runHtml(run, esc);
     var proposal = metadata.automationProposal;
     if(!proposal || !proposal.automation) return '';
     if(proposal.status !== 'pending') return answeredHtml(proposal, esc);
@@ -165,7 +244,7 @@
     return 'That didn’t save. Try again.';
   }
 
-  var api = {html: html, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields, saveErrorText: saveErrorText};
+  var api = {html: html, runCardHtml: runCardHtml, readFields: readFields, scheduleText: scheduleText, changedFields: changedFields, saveErrorText: saveErrorText};
   if(typeof module !== 'undefined' && module.exports) module.exports = api;
   root.MiaAutomationProposalCard = api;
 })(typeof window !== 'undefined' ? window : globalThis);

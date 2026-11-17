@@ -6849,12 +6849,14 @@
           return;
         }
         if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[row]);render[roomId]=true;}
+        aiModeHubReport(roomId,row,true);
         var fromOther=row.author_type!=='system' && row.author_id!==subject;
         if(!fromOther)return;
         if(roomId===chatWs.activeRoomId && appInForeground()){markHubRead(roomId);return;}
         channel.unread=Number(channel.unread||0)+1;
         notifyDesktopChatMessage(roomId,window.MiaHubChat.message(row));
       } else if(event.kind==='message_updated' && event.message){
+        aiModeHubReport(roomId,event.message,false);
         if(state && (state.historyInitialized || state.hubPreviewFetched)){applyHubRows(roomId,[event.message]);render[roomId]=true;}
         if(event.message.deleted)refreshChannels=true;
       } else if(event.kind==='dispatch' && event.dispatch){
@@ -7158,7 +7160,9 @@
   function rememberAgentChat(roomId){
     var conversation = (chatWs.nativeConversations || []).filter(function(item){ return item.id === roomId; })[0];
     var ownerId = agentChatOwnerId(conversation);
-    if(!ownerId) return;
+    if(ownerId) setAgentChat(ownerId, roomId);
+  }
+  function setAgentChat(ownerId, roomId){
     var chats = rememberedAgentChats();
     chats[ownerId] = roomId;
     var key = agentChatsStorageKey(), value = JSON.stringify(chats);
@@ -8516,6 +8520,8 @@
     if(!input) throw new Error('Enter an address or search.');
     // Local files go to the browser as typed; it opens only files in the Mia folder.
     if(/^file:\/\//i.test(input) || input.charAt(0) === '/') return input;
+    // app:name is one of the person's apps; the browser finds it and opens it as a tab.
+    if(/^app:(?!\/\/)\s*\S/i.test(input)) return input;
     var explicitScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
     var localAddress = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(input);
     var domainAddress = /^[\w.-]+\.\w+(?::\d+)?(?:[/?#]|$)/i.test(input);
@@ -9091,10 +9097,6 @@
       shelf.rowsHtml(automationsPage.runHistory, esc, shelfWhen) + '</div>';
   }
 
-  function automationStepStateLabel(state){
-    return {working:'Working on it', done:'Done', skipped:'Skipped', failed:'Failed', needs_you:'Needs you', escalated:'Needs you', unreported:'Not reported', pending:'Not started'}[state] || '';
-  }
-
   function automationRunTime(value){
     var numeric = Number(value);
     var date = Number.isFinite(numeric) && String(value).trim() !== '' ? new Date(numeric * (numeric < 10000000000 ? 1000 : 1)) : new Date(String(value));
@@ -9182,13 +9184,10 @@
       // With a run on record, each step shows what the bot reported for it.
       var states = {};
       if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
-      body = '<ol class="automations-steps">' + row.steps.map(function(step, index){
-        var item = states[index + 1];
-        var state = item ? item.state : '';
-        var mark = state ? '<span class="automations-step-mark" data-state="' + esc(state) + '" title="' + esc(automationStepStateLabel(state)) + '"></span>' : '';
-        var note = item && item.note ? '<div class="automations-step-note">' + esc(item.note) + '</div>' : '';
-        return '<li class="automations-step" data-state="' + esc(state) + '"><span class="automations-step-n">' + mark + (index + 1) + '</span><span>' + esc(step) + note + '</span></li>';
-      }).join('') + '</ol>';
+      body = window.MiaAutomationsBoard.stepsHtml(row.steps.map(function(step, index){
+        var item = states[index + 1] || {};
+        return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
+      }), esc);
       if(checklist && checklist.startedAt){
         var when = automationRunTime(checklist.startedAt);
         var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
@@ -9664,7 +9663,7 @@
   // its own tab beside the page's.
   var APPS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></svg>';
   var appsPage = {open:false, tabClosed:!!closedPageTabs.apps, activeTab:'page', tabs:[], query:'', loading:false, error:'', catalogError:'',
-    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, previews:{}, teamId:'', me:'', isAdmin:false};
+    local:[], links:[], catalog:[], scans:{}, publishing:{}, installing:{}, copying:{}, previews:{}, history:{}, teamId:'', me:'', isAdmin:false};
   var appsUploaders = {};
   var appsScanTimer = null;
 
@@ -9841,6 +9840,11 @@
       if(teamId !== appsTeamId()) return;
       appsPage.catalog = window.MiaAppsPage.normalizeCatalog(reply);
       appsPage.catalogError = '';
+      // An open history follows the catalog: a decision or a new version adds a line.
+      Object.keys(appsPage.history).forEach(function(id){
+        if(appsPage.catalog.some(function(app){ return app.id === id; })) loadAppHistory(teamId, id);
+        else delete appsPage.history[id];
+      });
       checkAppsScans(teamId);
     }).catch(function(){
       if(teamId === appsTeamId()) appsPage.catalogError = "Your company's apps could not be loaded. Check your connection, then try again.";
@@ -10040,7 +10044,7 @@
     var link = appsPage.links.filter(function(entry){ return entry.id === id; })[0];
     var item = folder || link;
     if(!item || appsPage.publishing[id] && appsPage.publishing[id].step) return;
-    var existing = window.MiaAppsPage.publishedAs(appsPage.catalog, item.name, appsPage.me);
+    var target = window.MiaAppsPage.publishTarget(appsPage.catalog, item, teamId, appsPage.me), existing = target && target.app;
     var setStep = function(step){ appsPage.publishing[id] = {step: step}; renderAppsPage(); };
     var publishing;
     if(link){
@@ -10057,7 +10061,7 @@
           });
         },
         confirmBundle: function(files){
-          return appConfirm('Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n'), 'Publish files', {fileList: true});
+          return appConfirm(window.MiaAppsPage.publishConfirmText(files, target), target && target.suggest ? 'Send the edit' : 'Publish files', {fileList: true});
         },
         buildBundle: function(appId, sha256){
           return appsBytes('/api/apps/local/bundle', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: appId, name: folder.name, sha256: sha256})}).then(function(res){
@@ -10070,12 +10074,51 @@
     publishing.then(function(result){
       delete appsPage.publishing[id];
       if(result && result.cancelled) return renderAppsPage();
-      showBenchToast(appsPage.isAdmin ? '"' + item.name + '" is published.' : '"' + item.name + '" is waiting for an admin to approve it.');
+      showBenchToast(window.MiaAppsPage.publishedNotice(item.name, target, appsPage.isAdmin));
       return loadAppsCatalog(teamId);
     }).then(renderAppsPage).catch(function(error){
       appsPage.publishing[id] = {error: window.MiaAppsPage.errorMessage(error, 'That app could not be published.')};
       renderAppsPage();
     });
+  }
+  // Puts the live version's files in the Mia folder, where the person or a bot
+  // changes them. Publishing that folder sends the change back to this app.
+  function copyTeamApp(id){
+    var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
+    if(!app || !app.live || app.live.kind !== 'bundle' || appsPage.copying[id] && !appsPage.copying[id].error) return;
+    if(!window.MiaTeamFiles){ showBenchToast('Apps run in the Mia desktop app.'); return; }
+    var version = app.live;
+    appsPage.copying[id] = {};
+    renderAppsPage();
+    installTeamVersion(teamId, id, version, false, function(){}).then(function(identity){
+      return api('/api/apps/installed/copy?' + appsIdentityQuery(identity, version.sha256), {method: 'POST'});
+    }).then(function(res){
+      if(res.status !== 201 || !res.data.copy) throw new Error(res.data && res.data.message || 'That app could not be copied.');
+      delete appsPage.copying[id];
+      showBenchToast(window.MiaAppsPage.copiedNotice(app.name, res.data.copy.folder));
+      return api('/api/apps/local');
+    }).then(function(res){
+      if(res.status === 200 && Array.isArray(res.data.apps)) appsPage.local = res.data.apps;
+      renderAppsPage();
+    }).catch(function(error){
+      appsPage.copying[id] = {error: window.MiaAppsPage.openErrorMessage(error, app.publisher && app.publisher.name)};
+      renderAppsPage();
+    });
+  }
+  // Who sent each version of a company app and who decided it.
+  function loadAppHistory(teamId, id){
+    var shown = appsPage.history[id];
+    var entry = appsPage.history[id] = {loading: true, versions: shown && shown.versions};
+    return hubCall('GET', '/v1/teams/' + teamId + '/apps/' + id + '/versions').then(function(reply){
+      if(appsPage.history[id] === entry) appsPage.history[id] = {versions: window.MiaAppsPage.normalizeHistory(reply)};
+    }, function(error){
+      if(appsPage.history[id] === entry) appsPage.history[id] = {error: window.MiaAppsPage.historyError(error)};
+    }).then(renderAppsPage);
+  }
+  function toggleAppHistory(id){
+    if(appsPage.history[id]) delete appsPage.history[id];
+    else if(appsPage.teamId && appsPage.catalog.some(function(app){ return app.id === id; })) loadAppHistory(appsPage.teamId, id);
+    renderAppsPage();
   }
   function decideTeamApp(id, decision){
     var app = appsPage.catalog.filter(function(entry){ return entry.id === id; })[0], teamId = appsPage.teamId;
@@ -10123,6 +10166,8 @@
       'data-app-open-local': openLocalApp,
       'data-app-open-team': openTeamApp,
       'data-app-publish': publishLocalApp,
+      'data-app-copy': copyTeamApp,
+      'data-app-history': toggleAppHistory,
       'data-app-approve': function(id){ decideTeamApp(id, 'approve'); },
       'data-app-reject': function(id){ decideTeamApp(id, 'reject'); },
       'data-app-archive': archiveTeamApp,
@@ -12615,7 +12660,12 @@
         busy: !!cardState.busy,
         error: cardState.error || '',
         draft: cardState.draft || null,
-        timezone: automationCardTimezone()
+        timezone: automationCardTimezone(),
+        botId: automationRunCardBotId(),
+        runChecklist: automationRunCardChecklist(m.nativeEvent.id),
+        runOpen: !!(automationRunCards[m.nativeEvent.id] || {}).open,
+        now: Date.now(),
+        timeText: automationRunClock
       });
     }
     if(window.MiaInstructionProposalCard && m.nativeEvent){
@@ -12647,6 +12697,46 @@
   // Unsaved edits, busy state and errors for bot automation cards, by event
   // id, so a thread re-render for a new message keeps what the user typed.
   var automationCardStates = {};
+
+  // The steps of the run each "run now" card in a chat started, by event id,
+  // with whether a finished one is unfolded. A card on screen is redrawn in
+  // place on each live tick until its run is over, so the composer keeps focus.
+  var automationRunCards = {};
+  function automationRunCardBotId(){
+    var conversation = activeConversationRecord();
+    return conversation && conversation.metadata && conversation.metadata.botId || '';
+  }
+  // A card drawn again with the thread shows what the last tick knew.
+  function automationRunCardChecklist(eventId){
+    var state = automationRunCards[eventId];
+    if(!state) return null;
+    state.html = '';
+    return state.checklist || null;
+  }
+  function automationRunClock(ms){
+    return new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  }
+  function refreshAutomationRunCards(){
+    if(!window.MiaAutomationProposalCard) return;
+    els('#chatThread [data-automation-run-card]:not([data-run-final])').forEach(function(node){
+      var card = {
+        eventId: node.getAttribute('data-automation-run-card'), botId: node.getAttribute('data-run-bot'),
+        automationId: node.getAttribute('data-run-automation'), name: node.getAttribute('data-run-name'),
+        since: Number(node.getAttribute('data-run-since'))
+      };
+      if(!card.eventId || !card.botId || !card.automationId || !card.since) return;
+      api('/api/automations/run-steps?workspace=' + encodeURIComponent(localChatWorkspaceKey()) + '&bot=' + encodeURIComponent(card.botId) +
+        '&automation=' + encodeURIComponent(card.automationId) + '&since=' + card.since).then(function(res){
+        if(res.status !== 200 || !res.data || !node.isConnected) return;
+        var state = automationRunCards[card.eventId] = automationRunCards[card.eventId] || {};
+        state.checklist = res.data.checklist || null;
+        var html = window.MiaAutomationProposalCard.runCardHtml(card, state.checklist, esc, {now: Date.now(), timeText: automationRunClock, open: !!state.open});
+        if(html === state.html) return;
+        state.html = html;
+        node.outerHTML = html;
+      });
+    });
+  }
   var instructionCardStates = {};
   var miaAppCardStates = {};
   var tidyPlanCardStates = {};
@@ -12847,6 +12937,11 @@
     }
     thread.addEventListener('input', keepDraft);
     thread.addEventListener('change', keepDraft);
+    // A finished run card the person unfolded stays unfolded across re-renders.
+    thread.addEventListener('toggle', function(e){
+      var eventId = e.target.getAttribute && e.target.getAttribute('data-automation-run-card');
+      if(eventId) (automationRunCards[eventId] = automationRunCards[eventId] || {}).open = e.target.open;
+    }, true);
   })();
 
   // esc()+linkify for message bodies: URLs become real links, everything else
@@ -19170,6 +19265,7 @@
     // state version. Poll their narrow status endpoint on every live tick,
     // in a company too: your bots' automations run there as in Solo.
     loadActiveAutomationRuns();
+    refreshAutomationRunCards();
     // A company's channels and people refresh from the Hub instead.
     if(hubWorkspace()) return;
     api('/api/state/version').then(function(res){
@@ -19558,7 +19654,7 @@
 
   // What AI mode's stage needs from the app: which workspace Mia's own chats
   // live in, and the one formatter replies go through.
-  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, model: aiModeModel};
+  window.miaAiModeHost = {workspace: localChatWorkspaceKey, team: function(){ return hubWorkspace() ? activeWorkspaceKey : ''; }, format: mdLite, models: function(){ return chatConnectedModelEntries(); }, search: aiModeSearch, chats: aiModePeopleChats, chatLines: aiModeChatLines, chatSend: aiModeChatSend, rooms: aiModeRooms, open: aiModeOpenRoom, openPage: aiModeOpenPage, botChat: aiModeBotChat, botSetup: aiModeBotSetup, botSetupInApp: aiModeBotSetupInApp, spoke: aiModeSpoke, model: aiModeModel};
   // The person's chats kept on this computer, as AI mode lists and searches
   // them: their bots first, then their other chats.
   function aiModeChats(){
@@ -19585,6 +19681,21 @@
   function aiModeModel(){
     var pick = readCachedChatModelSelection('');
     return pick ? {provider: pick.provider, model: pick.model, reasoningEffort: pick.reasoningEffort, speed: pick.speed, fast: pick.speed === 'fast'} : null;
+  }
+  // What the person says in Flow or Flow Tandem goes into a chat with Mia. That
+  // chat is now the one they last used with her, so her sidebar row opens it.
+  function aiModeSpoke(conversationId){
+    var id = String(conversationId || '');
+    if(!id || rememberedAgentChats().gateway === id) return;
+    setAgentChat('gateway', id);
+    if((chatWs.nativeConversations || []).some(function(conversation){ return conversation.id === id; })){ renderChatSidebar(); return; }
+    // A chat Flow just made is not in the list yet.
+    var workspaceKey = activeWorkspaceKey;
+    loadNativeConversations().then(function(list){
+      if(activeWorkspaceKey !== workspaceKey) return;
+      applyNativeConversationList(list);
+      renderChatSidebar();
+    }).catch(function(){});
   }
   // Every bot and chat the sidebar can open, for Mia to open by name in Flow Tandem.
   function aiModeRooms(){
@@ -19683,7 +19794,27 @@
     var me = String(currentUser || '').toLowerCase();
     return ((chatWs.rooms && chatWs.rooms.dms) || []).filter(function(dm){
       return (dm.members || []).some(function(member){ return member.kind === 'human' && String(member.email || '').toLowerCase() !== me; });
-    }).map(function(dm){ return {kind:'chat', id:dm.id, label:dmLabel(dm), sub:'Direct message'}; });
+    }).map(function(dm){
+      // Its chat, so Flow can hear a bot finish there, and whether Mia is one of its members.
+      return {kind:'chat', id:dm.id, label:dmLabel(dm), sub:'Direct message', conversationId:String(dm.roomId || ''),
+        mia:(dm.members || []).some(function(member){ return member.kind !== 'human' && member.agentId === 'gateway'; })};
+    });
+  }
+  // A bot's reply in a company chat, told to Flow once, when its run ends: a reply that arrives
+  // finished, or one that was working and no longer is. A later change to it (a reaction, an edit)
+  // is not a report.
+  var hubBotsWorking = {};
+  function aiModeHubReport(roomId, row, arrived){
+    if(!row || row.author_type !== 'bot') return;
+    var id = String(row.id);
+    if(row.status === 'working' && !row.deleted){ hubBotsWorking[id] = true; return; }
+    var worked = !!hubBotsWorking[id];
+    delete hubBotsWorking[id];
+    var mode = window.MiaAiMode, channel = hubChannel(roomId);
+    // A reply that only arrives now but was written a while ago (a chat catching up) is old news.
+    var at = Date.parse(row.created_at);
+    if(row.deleted || !(worked || arrived && !(Date.now() - at > 120000)) || !channel || !mode || !mode.report) return;
+    mode.report({kind: channel.kind === 'bot' ? 'bot' : 'chat', bot: String(row.author_name || ''), chat: hubChannelLabel(channel), mia: false});
   }
   // A company chat's newest page, read the way the sidebar reads it for its
   // preview: who wrote each message, and what it says. Nothing is marked read.
@@ -22546,15 +22677,19 @@
       return !!hit && dialog.contains(hit);
     });
   }
-  // AI mode's intro plays by itself the first time on this computer, once
-  // nothing else sits on top of Mia.
-  function maybePlayAiModeIntro(attempt){
-    var mode = window.MiaAiMode;
-    if(!mode || !mode.introDue()) return;
-    if(!appCovered()) return mode.intro();
-    if(attempt < 150) setTimeout(function(){ maybePlayAiModeIntro(attempt + 1); }, 2000);
+  // Flow mode is turned on here, and only then are its button and its intro there.
+  var flowModeToggle = el('#settingsFlowMode'), flowModeIntroRow = el('#settingsFlowModeIntroRow');
+  function showFlowModeSetting(){
+    var on = !!(window.MiaAiMode && window.MiaAiMode.on());
+    if(flowModeToggle) flowModeToggle.checked = on;
+    if(flowModeIntroRow) flowModeIntroRow.hidden = !on;
   }
-  setTimeout(function(){ maybePlayAiModeIntro(0); }, 3000);
+  showFlowModeSetting();
+  window.addEventListener('load', showFlowModeSetting); // Flow's own file loads after this one
+  if(flowModeToggle) flowModeToggle.addEventListener('change', function(){
+    if(window.MiaAiMode) window.MiaAiMode.setOn(flowModeToggle.checked);
+    showFlowModeSetting();
+  });
   var replayAiModeIntro = el('#settingsReplayAiModeIntro');
   if(replayAiModeIntro) replayAiModeIntro.addEventListener('click', function(){
     closeSettingsDrawer();

@@ -1195,6 +1195,10 @@
   .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
   @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-what,.ai-mode-entry-tag{display:none;}}
   .ai-mode-entry[hidden]{display:none;}
+  /* Flow mode is there only once it is turned on in Settings, and then glows
+     gold like a new invite until it is first opened. */
+  body:not(.flow-mode-on) #aiModeEntry{display:none;}
+  .ai-mode-entry.fresh{border-color:var(--mia-gold);box-shadow:0 0 0 1px var(--mia-gold),0 0 10px 1px color-mix(in srgb,var(--mia-gold) 55%,transparent);animation:workspace-invite-glow 1.8s ease-in-out infinite;}
   /* Flow Tandem: the call with Mia, as a card where the way in was. */
   .flow-tandem{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;margin:4px 12px;padding:10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:12px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);font-family:var(--styled-sans);}
   .flow-tandem[hidden]{display:none;}
@@ -1204,6 +1208,8 @@
   .flow-tandem-title{font-size:13px;font-weight:600;line-height:1.25;}
   .flow-tandem-state{font-size:11.5px;line-height:1.3;color:var(--sand-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .flow-tandem-line{font-size:12px;line-height:1.4;color:var(--sand-text-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .flow-tandem-reports[hidden]{display:none;}
+  .flow-tandem-reports{width:100%;min-width:0;height:28px;padding:0 6px;border:1px solid var(--sand-border-subtle);border-radius:8px;background:transparent;color:var(--sand-text-secondary);font:inherit;font-size:12px;text-overflow:ellipsis;cursor:pointer;}
   .flow-tandem-actions{display:flex;gap:6px;}
   .flow-tandem-btn{flex:1 1 0;display:grid;place-items:center;height:30px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:8px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;}
   .flow-tandem-btn:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
@@ -3652,6 +3658,20 @@
     body.styled-skin .automation-proposal-card .agent-setup-field>span:first-child i{display:inline;margin:0 0 0 4px;}
   }
   body.styled-skin .automation-proposal-answered,
+  body.styled-skin .automation-run-card{margin-top:8px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-fill-secondary);font-size:13px;line-height:1.45;color:var(--sand-text-primary);max-width:520px;}
+  body.styled-skin .automation-run-head{display:flex;align-items:center;gap:8px;min-width:0;}
+  body.styled-skin summary.automation-run-head{cursor:pointer;list-style:none;}
+  body.styled-skin summary.automation-run-head::-webkit-details-marker{display:none;}
+  body.styled-skin summary.automation-run-head::after{content:"";width:6px;height:6px;margin-left:2px;border-right:1.5px solid var(--sand-text-tertiary);border-bottom:1.5px solid var(--sand-text-tertiary);transform:rotate(-45deg);flex:none;}
+  body.styled-skin details[open]>summary.automation-run-head::after{transform:rotate(45deg);}
+  body.styled-skin .automation-run-head .automations-live{margin-right:0;flex:none;}
+  body.styled-skin .automation-run-head .automations-step-mark{margin-top:0;}
+  body.styled-skin .automation-run-name{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  body.styled-skin .automation-run-count{flex:none;font-size:12px;color:var(--sand-text-tertiary);}
+  body.styled-skin .automation-run-card .automations-steps{margin-top:8px;}
+  body.styled-skin .automation-run-card .automations-step{padding:8px 0;font-size:13px;}
+  body.styled-skin .automation-run-rest{padding:8px 0;border-top:1px solid var(--sand-border-subtle);font-size:12px;color:var(--sand-text-tertiary);}
+  body.styled-skin .automation-run-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:8px;border-top:1px solid var(--sand-border-subtle);font-size:12px;color:var(--sand-text-tertiary);}
   body.styled-skin .automation-run-note{margin-top:8px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:12px;background:var(--sand-fill-secondary);font-size:13px;line-height:1.45;color:var(--sand-text-primary);}
   body.styled-skin .automation-proposal-open{margin-left:6px;padding:0;border:0;background:none;color:var(--sand-text-primary);font:inherit;text-decoration:underline;cursor:pointer;}
 
@@ -3942,6 +3962,18 @@ body.browser-sidebar-open .pane-count,body:not(.browser-collab-mode):not(.left-p
 .apps-review-files{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto;font-size:12px;}
 .apps-review-files li{display:flex;justify-content:space-between;gap:12px;padding:3px 0;}
 .apps-review-path{min-width:0;overflow-wrap:anywhere;color:var(--sand-text-primary);}
+/* An app's history: who sent each version and who decided it. Also in admin.css. */
+.app-history{margin:0 6px 10px 46px;padding:10px 12px;border:1px solid var(--sand-border-default);border-radius:10px;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.app-history-head{font-size:12px;font-weight:600;color:var(--sand-text-primary);}
+.app-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto;}
+.app-history-row{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12px;}
+.app-history-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;}
+.app-history-version{font-weight:600;color:var(--sand-text-primary);}
+.app-history-state,.app-history-who,.app-history-note{color:var(--sand-text-secondary);}
+.app-history-pending{color:var(--sand-text-primary);font-weight:600;}
+.app-history-who,.app-history-detail{overflow-wrap:anywhere;}
+.app-history-detail{color:var(--sand-text-primary);user-select:text;}
+.app-history-note{font-size:12px;}
 .apps-pane-note{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;font-size:12px;color:var(--sand-text-primary);background:var(--sand-bg-base);border-bottom:1px solid var(--sand-border-default);overflow-wrap:anywhere;}
 .apps-pane-note[hidden]{display:none;}
 .bench-toast.bench-toast-action{pointer-events:auto;cursor:pointer;}

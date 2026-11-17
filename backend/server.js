@@ -4863,6 +4863,18 @@ async function inferenceOptionsForUser(email, baseOptions) {
   return Object.keys(options).length ? options : undefined;
 }
 
+// replyModelMetadata(options) -> { model: { provider, model, reasoningEffort } } for a reply's
+// record: the model the turn was sent to run on, after every default and pin was applied, so a
+// chat (Flow and Flow Tandem included) keeps which model wrote each reply. {} when none was set.
+function replyModelMetadata(options) {
+  const provider = options && typeof options.provider === 'string' ? options.provider.trim() : '';
+  const model = options && typeof options.model === 'string' ? options.model.trim() : '';
+  if (!provider || !model) return {};
+  const reasoningEffort = typeof options.reasoningEffort === 'string' && options.reasoningEffort.trim()
+    ? options.reasoningEffort.trim() : '';
+  return { model: { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } };
+}
+
 // The model a bot runs on when no turn picked one: its own while connected,
 // else the person's current model, the one chats and new bots use. Every path
 // outside a chat turn (schedules, Mia's tools, browser work) asks here.
@@ -6250,6 +6262,19 @@ app.get('/api/automations/active', requireAuth, (req, res) => {
     console.error('automation checklist scan failed', error.message);
   }
   res.status(200).json({ runs: visible, checklists });
+});
+
+// The steps of the run a bot's "run now" card started, for that card in its chat.
+app.get('/api/automations/run-steps', requireAuth, (req, res) => {
+  const since = Number(req.query.since);
+  const bot = db.loadAll(conn, 'bots').find((item) => String(item.id) === String(req.query.bot || ''));
+  if (!bot || !botReachable(bot, req) || !Number.isFinite(since)) return res.status(404).json({ error: 'not_found' });
+  try {
+    res.status(200).json({ checklist: cronSync.automationRunChecklistSince(bot, String(req.query.automation || ''), since) });
+  } catch (error) {
+    console.error('automation run steps failed', error.message);
+    res.status(503).json({ error: 'automation_status_unavailable' });
+  }
 });
 
 // Bot Store: read-only catalog of predefined bots the user can install with
@@ -7757,6 +7782,22 @@ function browserActorFolders(folders) {
     .map((folder) => path.resolve(folder));
 }
 
+// A bot's scheduled run uses the browser as the bot does in its own chat with
+// its owner: the same identity, so the same tab group, in that chat's
+// workspace. Only for the bot's owner, and only while the run is going.
+function browserActorForScheduledRun(sessionId, email) {
+  let run;
+  try {
+    run = cronSync.activeBotCronRunForSession(conn, sessionId);
+  } catch (_) {
+    return null;
+  }
+  if (!run || !sameOwner(run.bot, email) || !isActiveWorkspaceUser(ownerOf(run.bot))) return null;
+  const companyId = nativeCompanyId(workspaceIdForRecord(run.bot), ownerOf(run.bot));
+  const workspace = browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
+  return browserBotActor({ botId: browserBotId(run.bot), name: run.bot.name, workspace, folders: run.folders });
+}
+
 // The desktop browser asks which bot a live Hermes session belongs to, so a
 // page a bot opens lands in that bot's tab group. Mia is an explicit verified
 // identity; unknown sessions and inaccessible conversations never become Mia.
@@ -7769,6 +7810,9 @@ app.get('/api/browser/actor', requireAuth, (req, res) => {
     return res.status(200).json({ actor: browserBotActor(shared) });
   }
   const target = sessionId && sessionId.length <= 200 ? nativeGatewaySessionConversations.get(sessionId) : null;
+  if (!target && sessionId && sessionId.length <= 200) {
+    return res.status(200).json({ actor: browserActorForScheduledRun(sessionId, String(req.userEmail || '').trim().toLowerCase()) });
+  }
   if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return res.status(200).json({ actor: null });
   let conversation;
   try {
@@ -8197,7 +8241,8 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
       metadata: { automationProposal: { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id, status: 'pending' } },
     };
   }
-  const run = { automationId: proposal.automationId, name: proposal.name };
+  // The card in chat shows the steps of the run it started: the first one from here on.
+  const run = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, requestedAt: Date.now() };
   if (!sameOwner(agent, trigger.senderId) && !isAdmin(trigger.senderId)) {
     return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can run ${proposal.name}.`, metadata: { automationRun: { ...run, status: 'denied' } } };
   }
@@ -9312,6 +9357,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           agentName: agent.name,
           artifact: true,
           artifactSource: 'interactive',
+          ...replyModelMetadata(inferenceOptions),
           ...(index === validatedArtifacts.length - 1 ? nextStepMetadata : {}),
           ...(index === validatedArtifacts.length - 1 ? tidyPlan.metadata || {} : {}),
         },
@@ -9340,6 +9386,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       runtime: 'hermes',
       dispatchId: dispatch.id,
       agentName: agent.name,
+      ...replyModelMetadata(inferenceOptions),
       ...(instructionUpdate.metadata || {}),
       ...(automationAction.metadata || {}),
       ...(tidyPlan.metadata || {}),

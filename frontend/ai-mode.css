@@ -35,6 +35,8 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .btn.primary:hover{background:var(--accent-hover)}
 .btn.big{height:40px;padding:0 22px;font-size:14px;margin-top:10px}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+select.btn{font-family:inherit;max-width:190px;text-overflow:ellipsis}
+select.btn option{color:#111;background:#fff}
 .btn.ghost:hover{color:var(--ink);background:rgba(255,255,255,.06)}
 
 /* AI mode */

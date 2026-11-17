@@ -80,8 +80,8 @@ test('Hub channels cannot start a local chat socket; a company polls only its ow
   // Your bots' chats and automations stay live in a company, as in Solo.
   assert.equal(appFunction('localChatsLive',{hubWorkspace:()=>true,chatWs:{native:false}})(),true);
   const calls=[];
-  appFunction('pollLiveState',{hubWorkspace:()=>true,loadActiveAutomationRuns:()=>calls.push('runs'),api:()=>{calls.push('state');return Promise.resolve({});}})();
-  assert.deepEqual(calls,['runs'],'the company\'s channels and people come from the Hub, not local state');
+  appFunction('pollLiveState',{hubWorkspace:()=>true,loadActiveAutomationRuns:()=>calls.push('runs'),refreshAutomationRunCards:()=>calls.push('cards'),api:()=>{calls.push('state');return Promise.resolve({});}})();
+  assert.deepEqual(calls,['runs','cards'],'the company\'s channels and people come from the Hub, not local state');
 });
 test('a team loads only its own bot chats, from Solo storage on this computer',async()=>{
   const key=appFunction('localChatWorkspaceKey',{hubWorkspace:()=>true,activeWorkspaceKey:'hub_a'});
@@ -236,7 +236,7 @@ function hubEnv(overrides={}){
     chatWs:{configured:true,activeRoomId:'room',navigationGeneration:1,byRoom},
     chatRoomState:id=>byRoom[id]||(byRoom[id]={messages:[]}),hubPath:()=>'/team',appInForeground:()=>true,
     renderChatSidebar:()=>{},renderChatThread:()=>{},renderDeptAgentSelector:()=>{},renderChatHeaderBar:()=>{},refreshChatMain:()=>{},
-    showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
+    showBenchToast:()=>{},showDesktopNotification:()=>{},notifyDesktopChatMessage:()=>{},aiModeHubReport:()=>{},pollHubBots:()=>{},refreshHubBotState:()=>{},refreshHubChannels:()=>Promise.resolve(),
     startChatThinking:()=>{},stopChatThinking:()=>{},renderComposerTaskControl:()=>{},hubCall:async()=>({messages:[],hasMore:false}),hubRememberPeople:()=>{},hubMember:()=>null,mergeUserProfile:()=>{},loadHubTeams:()=>Promise.resolve(),...overrides};
   for(const name of ['hubChannel','hubSequence','hubOwnMessage','hubLatestSequence','applyHubRows','markHubRead','loadHubRoom','loadOlderHubMessages','sendHubMessage','deliverHubMessage','hubMessageDeletable','deleteHubMessage','applyHubEvents','trackHubDispatch','hubRoomThinking','hubUnreachable','hubFeedback','stopHubFeed'])
     if(!(name in overrides))env[name]=appFunction(name,env);

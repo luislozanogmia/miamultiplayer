@@ -179,3 +179,58 @@ test("macOS shows preparing between the download and the native ready signal, an
   await tick(); await tick();
   assert.deepEqual(failed, ["downloading", "idle"]);
 });
+
+test("a forced update installs as soon as it is ready, without asking", async () => {
+  for (const platform of ["win32", "darwin"]) {
+    const updater = new EventEmitter(), nativeUpdater = new EventEmitter(), calls = [], notices = [];
+    updater.quitAndInstall = (...args) => calls.push(args);
+    updater.downloadUpdate = async () => {};
+    const readiness = attachUpdateReadiness({ updater, nativeUpdater, platform, directories: [],
+      notify: async notice => { notices.push(notice); return { response: 1 }; }, log: () => {} });
+    assert.equal(readiness.forceInstall(), "checking");
+    updater.emit("update-available", { version: "next" });
+    await tick();
+    updater.emit("update-downloaded", { version: "next" });
+    await tick();
+    if (platform === "darwin") {
+      assert.deepEqual(calls, [], "macOS waits for the unpacked update");
+      nativeUpdater.emit("update-downloaded");
+      await tick();
+    }
+    assert.deepEqual(calls, [platform === "win32" ? [true, true] : []]);
+    assert.deepEqual(notices, []);
+  }
+});
+
+test("forcing an update that is already waiting on the restart question installs it once", async () => {
+  const updater = new EventEmitter(), calls = [];
+  let answer;
+  updater.quitAndInstall = (...args) => calls.push(args);
+  const readiness = attachUpdateReadiness({ updater, platform: "win32", directories: [],
+    notify: () => new Promise(resolve => { answer = resolve; }), log: () => {} });
+  updater.emit("update-downloaded", { version: "next" });
+  await tick();
+  assert.deepEqual(calls, []);
+  assert.equal(readiness.forceInstall(), "installing");
+  answer({ response: 0 });
+  await tick();
+  assert.deepEqual(calls, [[true, true]]);
+});
+
+test("a forced update with nothing newer does not carry over to the next update", async () => {
+  const updater = new EventEmitter(), calls = [], notices = [];
+  updater.quitAndInstall = (...args) => calls.push(args);
+  updater.downloadUpdate = async () => {};
+  const readiness = attachUpdateReadiness({ updater, platform: "win32", directories: [],
+    notify: async notice => { notices.push(notice); return { response: 1 }; }, log: () => {} });
+  readiness.forceInstall();
+  updater.emit("update-not-available");
+  updater.emit("update-available", { version: "next" });
+  await tick();
+  assert.equal(readiness.forceInstall(), "waiting");
+  updater.emit("error", new Error("network"));
+  await tick();
+  updater.emit("update-downloaded", { version: "next" });
+  await tick();
+  assert.deepEqual(calls, []);
+});

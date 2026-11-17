@@ -226,7 +226,7 @@ test('native browser visibility owner occludes and restores the live view withou
     overlay: { hidden: false },
     pip: { hidden: false },
     pipView: { getBoundingClientRect() { return { x: 820, y: 640, width: 160, height: 90 }; } },
-    document: { querySelector: () => dialog, body: { classList: { contains(name) { return classes.has(name); } } } },
+    document: { elementFromPoint: () => null, querySelector: () => dialog, body: { classList: { contains(name) { return classes.has(name); } } } },
     bridge: { command(payload) { commands.push(payload); return Promise.resolve(); } },
     JSON,
   };

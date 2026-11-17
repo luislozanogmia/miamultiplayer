@@ -42,6 +42,16 @@ test('ghost-cli tells the app which Hermes session sent a browser call', () => {
   assert.deepEqual(sent, { method: 'navigate', params: { url: 'example.com', actor_session: 'session-123' } });
 });
 
+test('ghost-cli names a scheduled run by its own session, and nothing else by it', () => {
+  const args = ['call', 'ghost_navigate', '--arguments', '{"url":"example.com"}'];
+  const run = 'cron_job-1_20261116_090000';
+  assert.deepEqual(runGhostCli(args, { HERMES_CRON_SESSION: '1', HERMES_SESSION_ID: run, HERMES_UI_SESSION_ID: '' }),
+    { method: 'navigate', params: { url: 'example.com', actor_session: run } });
+  assert.deepEqual(runGhostCli(args, { HERMES_SESSION_ID: run }), { method: 'navigate', params: { url: 'example.com' } },
+    'outside a scheduled run the stored session id is no identity');
+  assert.deepEqual(runGhostCli(args, { HERMES_CRON_SESSION: '1', HERMES_SESSION_ID: run, HERMES_UI_SESSION_ID: 'chat-1' }).params.actor_session, 'chat-1');
+});
+
 test('ghost-cli never forwards a session the model wrote into its arguments', () => {
   const forged = runGhostCli(['call', 'ghost_navigate', '--arguments', '{"url":"example.com","actor_session":"other"}'], {});
   assert.deepEqual(forged, { method: 'navigate', params: { url: 'example.com' } });

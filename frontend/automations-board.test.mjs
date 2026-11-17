@@ -102,3 +102,12 @@ test('a needs_you step turns the row into needs-you with the step and the note',
   assert.equal(digest.status, 'needs');
   assert.equal(digest.detail, 'Step 2 needs you: Sign in to the site');
 });
+
+test('a run\'s steps are drawn as one list, with each step\'s mark and note escaped', () => {
+  const esc = (value) => String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const html = board.stepsHtml([{ n: 1, text: 'Read <it>', state: 'done', note: '' }, { n: 2, text: 'Post', state: 'failed', note: 'No <access>' }, { n: 3, text: 'Wrap up', state: '' }], esc);
+  assert.match(html, /^<ol class="automations-steps"><li class="automations-step" data-state="done">/);
+  assert.match(html, /data-state="failed" title="Failed"><\/span>2<\/span><span>Post<div class="automations-step-note">No &#60;access&#62;<\/div>/);
+  assert.match(html, /Read &#60;it&#62;/);
+  assert.match(html, /<li class="automations-step" data-state=""><span class="automations-step-n">3<\/span>/);
+});

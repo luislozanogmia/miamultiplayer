@@ -47,6 +47,8 @@ function build(){
       '<span class="flow-tandem-names"><span class="flow-tandem-title">Flow Tandem</span><span class="flow-tandem-state" id="flowTandemState" aria-live="polite"></span></span>'+
     '</div>'+
     '<div class="flow-tandem-line" id="flowTandemLine" hidden></div>'+
+    '<select class="flow-tandem-reports" id="flowTandemReports" aria-label="Whose finished work Mia tells you about" title="Whose finished work Mia tells you about"></select>'+
+    '<button type="button" class="flow-tandem-reports" id="flowTandemVoicePick" hidden></button>'+
     '<div class="flow-tandem-actions">'+
       button('flowTandemMic','mic','Mute your mic')+
       button('flowTandemVoice','voice','Mute Mia’s voice')+
@@ -55,6 +57,8 @@ function build(){
     '</div>';
   entry.parentNode.insertBefore(card,entry.nextSibling);
   if(window.MiaMark)window.MiaMark.render($('flowTandemMark'),22,'static');
+  $('flowTandemReports').onchange=function(){api().reports(this.value);};
+  $('flowTandemVoicePick').onclick=function(){api().voiceNext();};
   $('flowTandemMic').onclick=function(){api().mic();};
   $('flowTandemVoice').onclick=function(){api().voice();};
   $('flowTandemStage').onclick=function(){api().stage();};
@@ -74,6 +78,14 @@ function draw(){
   $('flowTandemState').textContent=stateLine(st)+' · '+clock(Date.now()-st.since);
   var line=$('flowTandemLine');
   line.hidden=!st.line;line.textContent=st.line?'“'+st.line+'”':'';
+  // The same choice as on the Flow stage, with the same words.
+  var pick=$('flowTandemReports');
+  if(!pick.options.length)(st.reportChoices||[]).forEach(function(r){var o=document.createElement('option');o.value=r[0];o.textContent='Reports: '+r[1];pick.appendChild(o);});
+  if(document.activeElement!==pick&&pick.value!==st.reports)pick.value=st.reports;
+  // The same voices as on the Flow stage, under the same names.
+  var voicePick=$('flowTandemVoicePick'),voiceText='Voice '+((st.voiceAt||0)+1)+' of '+st.voices+'. Change Mia’s voice';
+  voicePick.hidden=!(st.voices>1);voicePick.textContent='Voice '+((st.voiceAt||0)+1);
+  voicePick.setAttribute('aria-label',voiceText);voicePick.setAttribute('data-tip',voiceText);
   $('flowTandemMic').disabled=!st.mic;
   label($('flowTandemMic'),st.muted,st.muted?'Turn your mic on':'Mute your mic');
   label($('flowTandemVoice'),st.quiet,st.quiet?'Turn Mia’s voice on':'Mute Mia’s voice');

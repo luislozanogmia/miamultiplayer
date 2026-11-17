@@ -602,7 +602,7 @@ test('a rejected version is not waiting: no Approve, no count, and its file is n
   assert.equal(calls.filter((c) => c.includes('/status')).length, 0, 'no scan to ask about');
   const html = admin.renderHubView('apps', hub.state.apps, NOW);
   assert.doesNotMatch(html, /app-approve|app-reject|Waiting for review|waiting for review/);
-  assert.match(html, /Version 2 was rejected/);
+  assert.match(html, /Version 2, sent by someone Mia could not name, was rejected/);
   await hub.act('app-approve', hex('b'), 2);
   await hub.act('app-reject', hex('b'), 2);
   assert.equal(calls.filter((c) => c.startsWith('POST')).length, 0, 'a stale button does nothing');
@@ -624,6 +624,64 @@ test('approving a bundle warns the scan cannot see inside it, in the same words 
   const copy = admin.hubConfirmCopy('app-approve', {name: 'Tool', publisher: {name: 'Pat'}, pending: {version: 1, kind: 'bundle'}});
   assert.ok(copy.body.includes(page.APP_SCAN_NOTE), copy.body);
   assert.doesNotMatch(admin.hubConfirmCopy('app-approve', {name: 'Site', pending: {version: 1, kind: 'link', url: 'https://x.example.com/'}}).body, /virus scan/);
+});
+
+test('a suggested edit names who sent it, not the publisher, wherever an admin decides', async () => {
+  const edit = {id: hex('b'), name: 'Tool', publisher: {id: 'pat', name: 'Pat'}, live: {version: 1, state: 'approved', kind: 'link', url: 'https://x.example.com/', proposedBy: 'pat', proposedByName: 'Pat'},
+    pending: {version: 2, state: 'pending', kind: 'link', url: 'https://y.example.com/', proposedBy: 'sam', proposedByName: '<i>Sam</i>'}};
+  const {hub} = hubHarness({'GET /apps': {apps: [edit]}});
+  await hub.load('apps');
+  const html = admin.renderHubView('apps', hub.state.apps, NOW);
+  assert.match(html, /This version sent by<\/dt><dd class="hub-ready-warn">&lt;i&gt;Sam&lt;\/i&gt; · a suggested edit, not from the publisher/);
+  assert.match(html, /This version sent by<\/dt><dd>Pat</, 'the live version is the publisher’s own');
+  assert.doesNotMatch(html, /<i>Sam/);
+  const link = admin.hubConfirmCopy('app-approve', edit).body;
+  assert.match(link, /suggested edit sent by <i>Sam<\/i>, not by Pat, who published the app/);
+  const bundle = admin.hubConfirmCopy('app-approve', Object.assign({}, edit, {pending: Object.assign({}, edit.pending, {kind: 'bundle'})})).body;
+  assert.match(bundle, /suggested edit sent by <i>Sam<\/i>, not by Pat/);
+  assert.match(admin.hubConfirmCopy('app-approve', {name: 'Tool', publisher: {id: 'pat', name: 'Pat'}, pending: {version: 1, kind: 'bundle', proposedBy: 'pat', proposedByName: 'Pat'}}).body, /Sent by Pat, who published this app\./);
+  assert.match(admin.hubConfirmCopy('app-approve', {name: 'Tool', publisher: {id: 'pat', name: 'Pat'}, pending: {version: 1, kind: 'bundle'}}).body, /Mia could not tell who sent this version/);
+  assert.match(admin.hubConfirmCopy('app-reject', edit).body, /<i>Sam<\/i> sent it and can send a new version/);
+});
+
+test('History asks the company for the app’s versions and lists who sent and who decided each', async () => {
+  const app = {id: hex('b'), name: 'Tool', publisher: {id: 'pat', name: 'Pat'}, live: {version: 1, state: 'approved', kind: 'link', url: 'https://x.example.com/', proposedBy: 'pat', proposedByName: 'Pat'}};
+  const versions = [
+    {version: 3, kind: 'link', url: 'https://z.example.com/', state: 'pending', proposedBy: 'sam', proposedByName: 'Sam', proposedAt: 1790000000},
+    {version: 2, kind: 'link', url: 'https://y.example.com/', state: 'superseded', proposedBy: 'sam', proposedByName: 'Sam', proposedAt: 1789000000, decidedBy: 'ana', decidedByName: 'Ana', decidedAt: 1789100000},
+    {version: 1, kind: 'link', url: 'https://x.example.com/', state: 'approved', proposedBy: 'pat', proposedByName: 'Pat', proposedAt: 1788000000, decidedBy: 'ana', decidedByName: 'Ana', decidedAt: 1788100000},
+  ];
+  const {hub, calls} = hubHarness({'GET /apps': {apps: [app]}, ['GET /apps/' + hex('b') + '/versions']: {versions}});
+  await hub.load('apps');
+  assert.match(admin.renderHubView('apps', hub.state.apps, NOW), /data-hub-action="app-history"[^>]*>History</);
+  await hub.act('app-history', hex('b'));
+  assert.ok(calls.includes('GET /apps/' + hex('b') + '/versions'));
+  const html = admin.renderHubView('apps', hub.state.apps, NOW);
+  assert.match(html, /Version 3<\/span><span class="app-history-state app-history-pending">Waiting for approval/);
+  assert.match(html, /Sent by Sam, as a suggested edit on [^<]+<\/div>/);
+  assert.match(html, /Turned down, then replaced[\s\S]*turned down by Ana on/);
+  assert.match(html, /Live now[\s\S]*Sent by Pat on [^·]+ · approved by Ana on/);
+  assert.match(html, />Hide history</);
+  await hub.act('app-history', hex('b'));
+  assert.doesNotMatch(admin.renderHubView('apps', hub.state.apps, NOW), /app-history-list/);
+  // a company that cannot answer yet says so in plain words
+  const old = hubHarness({'GET /apps': {apps: [app]}});
+  await old.hub.load('apps');
+  await old.hub.act('app-history', hex('b'));
+  assert.match(admin.renderHubView('apps', old.hub.state.apps, NOW), /This app’s history is not available\./);
+  await old.hub.act('app-history', hex('9'));
+  assert.equal(old.calls.filter((c) => c.endsWith('/versions')).length, 1, 'an app that is not listed is not asked about');
+});
+
+test('app events in the audit log read plainly and their target is not shown as a person', () => {
+  const kinds = ['app_created', 'app_version_proposed', 'app_version_self_approved', 'app_version_approved', 'app_version_rejected', 'app_archived', 'app_live_cleared', 'app_pending_cleared'];
+  const rows = admin.teamActivityEvents(kinds.map((event) => ({event, at: 1790000000, actor: 'u1', target: 'app:' + hex('b')})), [{clerk_user_id: 'u1', email: 'one@example.test'}]);
+  for(const row of rows){
+    assert.doesNotMatch(row.action, /_|^app /, row.action);
+    assert.equal(row.target, '');
+    assert.equal(row.actor, 'one@example.test');
+  }
+  assert.equal(rows[1].action, 'Sent an app version for approval');
 });
 
 test('deleting a file that is an app warns that the app goes too, and the row names the app', () => {

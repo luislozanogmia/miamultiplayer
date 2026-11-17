@@ -243,3 +243,37 @@ test('the app routes keep previews in their own folder', () => {
   assert.match(server, /previewsDir: \(\) => TEAM_APP_PREVIEWS_DIR/);
   assert.match(server, /removeDirectoryContents\(TEAM_APP_PREVIEWS_DIR/, 'a clean slate removes previews too');
 });
+
+test('an installed company app can be copied into the Mia folder to edit, and the copy remembers its app', (t) => {
+  const appsDir = temp(t), mia = temp(t);
+  const bytes = bundleBytes([entry, file('css/a.css', 'p{}')], { name: 'Sales: report' });
+  const sha256 = apps.sha256Hex(bytes);
+  install(appsDir, bytes);
+  const copy = apps.copyInstalledApp(appsDir, identity, sha256, mia);
+  assert.deepEqual(copy, { id: 'folder:apps/Sales_ report', name: 'Sales_ report', folder: 'apps/Sales_ report' });
+  const root = path.join(mia, 'apps', 'Sales_ report');
+  assert.equal(fs.readFileSync(path.join(root, 'css', 'a.css'), 'utf8'), 'p{}');
+  assert.equal(fs.existsSync(path.join(root, '.mia-install.json')), false);
+  const listed = apps.listLocalApps(mia).find((app) => app.id === copy.id);
+  assert.deepEqual(listed.source, { teamId: TEAM, appId: APP });
+  // The note of where it came from never goes into a bundle.
+  assert.deepEqual(apps.buildBundle(root, { name: 'x' }).files, ['css/a.css', 'index.html']);
+  // A second copy gets a folder of its own; nothing already there is written over.
+  fs.writeFileSync(path.join(root, 'index.html'), 'changed');
+  assert.equal(apps.copyInstalledApp(appsDir, identity, sha256, mia).folder, 'apps/Sales_ report 2');
+  assert.equal(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), 'changed');
+  assert.throws(() => apps.copyInstalledApp(appsDir, identity, 'f'.repeat(64), mia), (error) => error.status === 404);
+  assert.throws(() => apps.copyInstalledApp(appsDir, { ...identity, version: '9' }, sha256, mia), (error) => error.status === 404);
+});
+
+test('a folder is a copy of a company app only when its note names one properly', (t) => {
+  const mia = temp(t);
+  const add = (name, note) => {
+    fs.mkdirSync(path.join(mia, name), { recursive: true });
+    fs.writeFileSync(path.join(mia, name, 'index.html'), 'x');
+    if (note !== undefined) fs.writeFileSync(path.join(mia, name, '.mia-app-source.json'), note);
+  };
+  add('plain'); add('broken', '{'); add('odd', JSON.stringify({ teamId: '../x', appId: APP })); add('good', JSON.stringify({ teamId: TEAM, appId: APP, version: '2', extra: 1 }));
+  const source = Object.fromEntries(apps.listLocalApps(mia).map((app) => [app.name, app.source]));
+  assert.deepEqual(source, { plain: null, broken: null, odd: null, good: { teamId: TEAM, appId: APP } });
+});

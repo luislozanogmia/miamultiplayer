@@ -30,10 +30,11 @@ const MODEL_OPTIONS_TIMEOUT_MS = 30000;
 const MODEL_OPTIONS_ATTEMPTS = 10;
 const RETRY_DELAY_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 300;
-// Hermes compacts a long chat in the middle of a turn, and the person waits
-// for the summary. A kept chat is compacted earlier instead, while it is
-// quiet: once it has used this share of the room Hermes allows before it
-// compacts on its own, and nothing has happened in it for a moment.
+// Hermes' own compaction in the middle of a turn is off for chats
+// (hermes-bot-profile.js); a kept chat is compacted here instead, while it
+// is quiet: once it has used this share of the compaction size (300k, or
+// Hermes' share of a smaller window) and nothing has happened in it for a
+// moment.
 const IDLE_COMPACT_SHARE = 0.7;
 const IDLE_COMPACT_QUIET_MS = 8000;
 // Hermes' own rule: half the model's window, three quarters for a small one.
@@ -783,8 +784,8 @@ class HermesGatewayClient {
     if (busy || this.shutdownRequested) { forget(); return; }
     // What the chat holds now is only known after its next turn.
     this.sessionContext.delete(sessionId);
-    // A failed or refused compaction costs nothing: Hermes still compacts on
-    // its own when the chat fills up.
+    // A failed or refused compaction is tried again after the chat's next
+    // turn, which reports its size again.
     entry.running = this.request('session.compress', { session_id: sessionId })
       .catch(() => {})
       .then(forget);

@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261116-flow-tandem-1" />
+<link rel="stylesheet" href="styles.css?v=20261116-flow-setting-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -1005,6 +1005,10 @@
           <button class="styled-settings-pill-btn" id="settingsReplayTour">Replay</button>
         </div>
         <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Flow mode</div><div class="styled-settings-row-desc">A preview. Adds Flow mode to the sidebar; until you turn it on, nothing of it shows or plays</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsFlowMode" /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row" id="settingsFlowModeIntroRow" hidden>
           <div><div class="styled-settings-row-label">Flow mode intro</div><div class="styled-settings-row-desc">Watch the short intro to Flow mode again</div></div>
           <button class="styled-settings-pill-btn" id="settingsReplayAiModeIntro">Watch</button>
         </div>
@@ -1392,16 +1396,16 @@
 <script src="account-switcher.js"></script>
     <script src="browser-work.js"></script>
     <script src="browser-omnibox.js?v=20261113-places-2"></script>
-    <script src="automations-board.js?v=20261019-automations-1"></script>
+    <script src="automations-board.js?v=20261116-run-steps-1"></script>
     <script src="needs-you.js?v=20261102-1"></script>
     <script src="artifacts-page.js?v=20261103-artifacts-2"></script>
-    <script src="apps-page.js?v=20261102-apps-3"></script>
+    <script src="apps-page.js?v=20261116-app-history-1"></script>
     <script src="view-shelf.js?v=20261027-shelf-1"></script>
-    <script src="automation-proposal-card.js?v=20261111-automation-card-5"></script>
+    <script src="automation-proposal-card.js?v=20261116-run-steps-1"></script>
     <script src="instruction-proposal-card.js?v=20261106-instruction-review-1"></script>
     <script src="mia-app-card.js?v=20261102-mia-app-1"></script>
     <script src="tab-strip.js?v=20261102-apps-3"></script>
-    <script src="native-browser.js?v=20261114-drawer-scrim"></script>
+    <script src="native-browser.js?v=20261116-page-cover"></script>
     <script src="team-logo.js"></script>
     <script src="hub-chat.js?v=20261114-working-once"></script>
     <script src="safe-page-url.js?v=20261102-space-1"></script>
@@ -1422,12 +1426,12 @@
     <script src="mcp-apps-ui.js?v=20261110-mcp-3"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
-    <script src="app.js?v=20261116-attach-together-1"></script>
+    <script src="app.js?v=20261116-flow-setting-1"></script>
     <script src="remote-link-core.js?v=20261114-phone-1"></script>
     <script src="remote-link-host.js?v=20261116-phone-2"></script>
     <script src="ai-mode-intro.js?v=20261114-ai-mode-intro-4"></script>
-    <script src="ai-mode.js?v=20261116-ai-mode-35"></script>
-    <script src="flow-tandem.js?v=20261116-flow-tandem-1"></script>
+    <script src="ai-mode.js?v=20261116-ai-mode-38"></script>
+    <script src="flow-tandem.js?v=20261116-flow-tandem-3"></script>
     <script src="shared-space-live.js?v=20261112-ideas-1"></script>
     <script src="shared-space-talk.js?v=20261112-ideas-1"></script>
     <script src="shared-space-ui.js?v=20261112-ideas-1"></script>

@@ -14,6 +14,8 @@
   var SCAN_WAITS = 60;
   var MAX_NAME_LENGTH = 80;
   var MAX_URL_LENGTH = 2048;
+  var MAX_NOTE_LENGTH = 300;
+  var HISTORY_LIMIT = 50;
 
   var ERRORS = {
     app_name_taken: 'Your company already has an app with that name. Rename the folder, then try again.',
@@ -28,6 +30,8 @@
     version_rejected: 'This version was already turned down. Change the app, then publish again.',
     version_superseded: 'This version is no longer available. Check the list and try again.',
     version_already_approved: 'This version is already live.',
+    version_pending: 'Someone else’s change to this app is waiting for approval. Try again once it is decided.',
+    edit_pending_limit: 'You have 20 suggested edits waiting for approval. Try again once some are decided.',
     app_pending_limit: 'You have 20 apps that aren’t live yet, including any that were turned down. Remove any you no longer need, then try again.',
   };
   function errorMessage(error, fallback){
@@ -132,9 +136,9 @@
     return ID.test(appId) ? appId : '';
   }
   function approveMessage(app){
-    var pending = app.pending || {};
-    if(pending.kind === 'link') return 'Approve "' + app.name + '" for everyone? It opens ' + pending.url + ' on every colleague’s computer, in their Mia browser with their own sign-ins. Only approve an address you trust.';
-    return 'Approve "' + app.name + '" for everyone? It runs on every colleague’s computer. ' + APP_SCAN_NOTE;
+    var pending = app.pending || {}, sender = senderLine(app, pending);
+    if(pending.kind === 'link') return 'Approve "' + app.name + '" for everyone? It opens ' + pending.url + ' on every colleague’s computer, in their Mia browser with their own sign-ins. ' + sender + ' Only approve an address you trust.';
+    return 'Approve "' + app.name + '" for everyone? It runs on every colleague’s computer. ' + sender + ' ' + APP_SCAN_NOTE;
   }
   function blockedLinkNote(blocked){
     if(blocked && blocked.reason === 'no-input') return 'This app tried to open ' + blocked.host + ' without a click, so Mia stopped it. Click inside the app to open a link.';
@@ -164,6 +168,107 @@
       return app.name.trim().toLowerCase() === wanted && !!me && app.publisher.id === me;
     })[0] || null;
   }
+
+  // Where publishing a local item goes: a new version of a company app, or a new
+  // app when there is none. A folder copied from a company app goes back to that
+  // app, as a suggested edit when someone else published it; anything else
+  // updates the app this person published under the same name.
+  function publishTarget(catalog, item, teamId, me){
+    var source = item && item.source;
+    if(source && teamId && source.teamId === teamId){
+      var copied = catalog.filter(function(app){ return app.id === source.appId && !!app.live; })[0];
+      if(copied) return {app: copied, suggest: !me || copied.publisher.id !== me};
+    }
+    var mine = publishedAs(catalog, item && item.name, me);
+    return mine ? {app: mine, suggest: false} : null;
+  }
+  function personName(value){ return typeof value === 'string' ? value.trim().slice(0, MAX_NAME_LENGTH) : ''; }
+  // Who sent a version. Every place that asks someone to decide on a version, or
+  // lists one, names this person: on a suggested edit it is not the publisher.
+  function sentBy(app, version){
+    var publisher = app && app.publisher || {};
+    var id = version && typeof version.proposedBy === 'string' ? version.proposedBy : '';
+    var own = !!id && id === publisher.id;
+    return {known: !!id, publisher: own, name: personName(version && version.proposedByName) || (own && personName(publisher.name)) || (id ? 'a colleague' : 'someone Mia could not name')};
+  }
+  // One sentence for a confirm step, so nobody approves an edit thinking the publisher sent it.
+  function senderLine(app, version){
+    var sender = sentBy(app, version), publisher = personName(app && app.publisher && app.publisher.name) || 'a former colleague';
+    if(sender.publisher) return 'Sent by ' + sender.name + ', who published this app.';
+    if(sender.known) return 'This version is a suggested edit sent by ' + sender.name + ', not by ' + publisher + ', who published the app.';
+    return 'Mia could not tell who sent this version. The app was published by ' + publisher + '.';
+  }
+  // A suggested edit is a version sent by someone other than the app's publisher.
+  function suggestedBy(app){
+    var sender = sentBy(app, app && app.pending);
+    return sender.known && !sender.publisher ? sender.name : '';
+  }
+
+  // An app's history as the company answers it: newest first, each version with
+  // who sent it and who decided it. Rows that do not fit are dropped.
+  function normalizeHistory(reply){
+    var rows = reply && Array.isArray(reply.versions) ? reply.versions : [];
+    var seconds = function(value){ return Number.isSafeInteger(value) && value > 0 ? value : 0; };
+    var id = function(value){ return typeof value === 'string' ? value.slice(0, 200) : ''; };
+    return rows.filter(function(row){ return row && typeof row === 'object' && Number.isSafeInteger(row.version) && row.version > 0; }).slice(0, HISTORY_LIMIT).map(function(row){
+      var link = row.kind === 'link';
+      return {version: row.version, kind: link ? 'link' : 'bundle', url: link && isPublishableAddress(row.url) ? String(row.url).slice(0, MAX_URL_LENGTH) : '',
+        note: typeof row.note === 'string' ? row.note.trim().slice(0, MAX_NOTE_LENGTH) : '',
+        state: ['pending', 'approved', 'rejected', 'superseded'].indexOf(row.state) === -1 ? '' : row.state,
+        proposedBy: id(row.proposedBy), proposedByName: personName(row.proposedByName), proposedAt: seconds(row.proposedAt),
+        decidedBy: id(row.decidedBy), decidedByName: personName(row.decidedByName), decidedAt: seconds(row.decidedAt)};
+    });
+  }
+  function historyDate(seconds){
+    return new Date(seconds * 1000).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'});
+  }
+  function historyOutcome(app, version){
+    if(version.state === 'approved') return app.live && app.live.version === version.version ? 'Live now' : 'Was live';
+    if(version.state === 'pending') return 'Waiting for approval';
+    if(version.state === 'rejected') return 'Turned down';
+    if(version.state === 'superseded') return version.decidedBy ? 'Turned down, then replaced' : 'Replaced before going live';
+    return 'Unknown';
+  }
+  function historyDecision(version, when){
+    if(!version.decidedBy) return '';
+    var name = version.decidedByName || 'an admin', on = version.decidedAt ? ' on ' + when(version.decidedAt) : '';
+    if(version.state === 'approved') return (version.decidedBy === version.proposedBy ? 'published directly by ' + name + ', an admin' : 'approved by ' + name) + on;
+    return 'turned down by ' + name + on;
+  }
+  // The history list, the same on the Apps page and in Company controls.
+  // entry: {loading} | {error} | {versions}. when(seconds) writes a date.
+  function historyHtml(esc, app, entry, when){
+    when = when || historyDate;
+    var html = '<div class="app-history" data-app-history-of="' + esc(app.id) + '"><div class="app-history-head">History of ' + esc(app.name) + '</div>';
+    if(!entry || entry.loading && !entry.versions) return html + '<div class="app-history-note" role="status">Loading…</div></div>';
+    if(entry.error) return html + '<div class="app-history-note app-history-bad" role="alert">' + esc(entry.error) + '</div></div>';
+    var versions = entry.versions || [];
+    if(!versions.length) return html + '<div class="app-history-note">No versions to show.</div></div>';
+    html += '<ol class="app-history-list">' + versions.map(function(version){
+      var sender = sentBy(app, version), decided = historyDecision(version, when);
+      var who = 'Sent by ' + sender.name + (sender.known && !sender.publisher ? ', as a suggested edit' : '') + (version.proposedAt ? ' on ' + when(version.proposedAt) : '');
+      var detail = [version.url, version.note].filter(Boolean).join(' · ');
+      return '<li class="app-history-row"><div class="app-history-line"><span class="app-history-version">Version ' + Number(version.version) + '</span>'
+        + '<span class="app-history-state' + (version.state ? ' app-history-' + version.state : '') + '">' + esc(historyOutcome(app, version)) + '</span></div>'
+        + '<div class="app-history-who">' + esc(who) + (decided ? ' · ' + esc(decided) : '') + '</div>'
+        + (detail ? '<div class="app-history-detail">' + esc(detail) + '</div>' : '') + '</li>';
+    }).join('') + '</ol>';
+    if(versions.length >= HISTORY_LIMIT) html += '<div class="app-history-note">These are the newest ' + HISTORY_LIMIT + ' versions.</div>';
+    return html + '</div>';
+  }
+  function historyError(error){
+    if(error && (error.status === 404 || error.code === 'not_found')) return 'This app’s history is not available.';
+    return errorMessage(error, 'The history could not be loaded. Try again.');
+  }
+  function publishConfirmText(files, target){
+    if(target && target.suggest) return 'Send these ' + files.length + ' files as a suggested edit to "' + target.app.name + '"? An admin approves it before anyone gets it.\n\n' + files.join('\n');
+    return 'Publish these ' + files.length + ' files to the company?\n\n' + files.join('\n');
+  }
+  function publishedNotice(name, target, isAdmin){
+    if(target && target.suggest) return isAdmin ? 'Your edit to "' + target.app.name + '" is live.' : 'Your edit to "' + target.app.name + '" is waiting for an admin to approve it.';
+    return isAdmin ? '"' + name + '" is published.' : '"' + name + '" is waiting for an admin to approve it.';
+  }
+  function copiedNotice(name, folder){ return 'A copy of "' + name + '" is in your Mia folder, in ' + folder + '. Change it, then choose Suggest an edit.'; }
 
   function matches(values, query){
     var q = String(query || '').trim().toLowerCase();
@@ -321,51 +426,61 @@
     return rows.length ? '<div class="artifacts-section-title">' + esc(title) + '</div><div class="artifacts-list" role="list">' + rows.join('') + '</div>' : '';
   }
   var STEP_TEXT = {building: 'Checking app files…', reviewing: 'Waiting for your review…', uploading: 'Uploading…', publishing: 'Publishing…'};
-  function publishCell(esc, item, state, itemId, existing){
+  function publishCell(esc, item, state, itemId, target){
     var job = state.publishing && state.publishing[itemId];
     if(job && job.step) return '<span class="apps-note" role="status">' + esc(STEP_TEXT[job.step] || 'Working…') + '</span>';
-    var label = existing ? 'Publish update' : 'Publish to company';
+    var label = target ? (target.suggest ? 'Suggest an edit' : 'Publish update') : 'Publish to company';
     return (job && job.error ? '<span class="apps-note apps-note-bad" role="alert">' + esc(job.error) + '</span>' : '')
       + button(esc, label, 'data-app-publish="' + esc(itemId) + '"');
   }
   function localRows(esc, state){
     var team = !!state.teamId;
     var folders = state.local.filter(function(item){ return matches([item.name, item.folder, item.from], state.query); }).map(function(item){
-      var existing = team ? publishedAs(state.catalog, item.name, state.me) : null;
-      var meta = esc(item.folder) + (item.from ? ' · ' + esc(item.from) : '');
-      return row(esc, 'App', item.name, meta, button(esc, 'Open', 'data-app-open-local="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''));
+      var target = team ? publishTarget(state.catalog, item, state.teamId, state.me) : null;
+      var meta = esc(item.folder) + (item.from ? ' · ' + esc(item.from) : '') + (target && target.suggest ? ' · your copy of ' + esc(target.app.name) : '');
+      return row(esc, 'App', item.name, meta, button(esc, 'Open', 'data-app-open-local="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, target) : ''));
     });
     var links = state.links.filter(function(item){ return matches([item.name, item.url], state.query); }).map(function(item){
-      var existing = team ? publishedAs(state.catalog, item.name, state.me) : null;
+      var existing = team ? publishTarget(state.catalog, item, state.teamId, state.me) : null;
       var running = item.running === true ? ' · <span class="artifacts-dot on">● running</span>' : item.running === false ? ' · <span class="artifacts-dot">○ off</span>' : '';
       return row(esc, 'Link', item.name, esc(address(item.url)) + running, (item.running === true && item.local ? button(esc, 'Stop', 'data-app-stop-link="' + esc(item.id) + '"') : '') + button(esc, 'Open', 'data-app-open-link="' + esc(item.id) + '"', true) + (team ? publishCell(esc, item, state, item.id, existing) : ''), item.url);
     });
     return folders.concat(links);
   }
   function catalogRow(esc, app, state){
-    var status = appState(app, state.scans), busy = state.installing && state.installing[app.id];
+    var status = appState(app, state.scans), busy = state.installing && state.installing[app.id], copying = state.copying && state.copying[app.id];
     var who = app.publisher && app.publisher.name ? esc(app.publisher.name) : '';
-    var meta = [who, app.description ? esc(app.description) : '', '<span class="apps-state apps-state-' + esc(status) + '">' + esc(stateText(status)) + '</span>'].filter(Boolean).join(' · ');
+    var edit = isWaitingForReview(app) && suggestedBy(app);
+    var meta = [who, app.description ? esc(app.description) : '', '<span class="apps-state apps-state-' + esc(status) + '">' + esc(stateText(status)) + '</span>',
+      edit ? 'edit suggested by ' + esc(edit) : ''].filter(Boolean).join(' · ');
     var actions = '';
     if(busy && busy.error) actions += '<span class="apps-note apps-note-bad" role="alert">' + esc(busy.error) + '</span>';
     if(busy && !busy.error) actions += '<span class="apps-note" role="status">' + esc(busy.percent != null ? 'Getting it… ' + busy.percent + '%' : 'Getting it…') + '</span>';
     else if(app.live) actions += button(esc, 'Open', 'data-app-open-team="' + esc(app.id) + '"', true);
+    // A copy in the Mia folder is where a change to this app is made, by anyone.
+    if(copying && copying.error) actions += '<span class="apps-note apps-note-bad" role="alert">' + esc(copying.error) + '</span>';
+    if(copying && !copying.error) actions += '<span class="apps-note" role="status">Copying…</span>';
+    else if(app.live && app.live.kind === 'bundle' && !(busy && !busy.error)) actions += button(esc, 'Edit a copy', 'data-app-copy="' + esc(app.id) + '"');
     if(state.isAdmin && app.pending && app.pending.state !== 'rejected'){
       var ready = status === 'pending' || status === 'live-pending';
       if(ready) actions += button(esc, 'Approve', 'data-app-approve="' + esc(app.id) + '"') + button(esc, 'Reject', 'data-app-reject="' + esc(app.id) + '"');
     }
+    var history = state.history && state.history[app.id];
+    actions += button(esc, history ? 'Hide history' : 'History', 'data-app-history="' + esc(app.id) + '"' + (history ? ' aria-expanded="true"' : ' aria-expanded="false"'));
     if(state.isAdmin || (state.me && app.publisher.id === state.me)) actions += button(esc, 'Remove', 'data-app-archive="' + esc(app.id) + '" aria-label="Remove ' + esc(app.name) + ' from the company"');
     return row(esc, app.live && app.live.kind === 'link' || (!app.live && app.pending && app.pending.kind === 'link') ? 'Link' : 'App', app.name, meta, actions)
-      + (state.isAdmin && isWaitingForReview(app) ? reviewBlock(esc, app, state, status) : '');
+      + (state.isAdmin && isWaitingForReview(app) ? reviewBlock(esc, app, state, status) : '')
+      + (history ? historyHtml(esc, app, history, state.historyDate) : '');
   }
   // What an admin can look at before deciding. Nothing here opens by itself.
   function reviewBlock(esc, app, state, status){
     var pending = app.pending, html = '<div class="apps-review" role="listitem" data-app-review="' + esc(app.id) + '">';
+    var edit = suggestedBy(app);
     if(pending.kind === 'link'){
-      return html + '<div class="apps-review-head">Version ' + Number(pending.version) + ' is this address:</div><div class="apps-review-address">' + esc(pending.url) + '</div>'
+      return html + '<div class="apps-review-head">Version ' + Number(pending.version) + (edit ? ', an edit suggested by ' + esc(edit) + ',' : '') + ' is this address:</div><div class="apps-review-address">' + esc(pending.url) + '</div>'
         + '<div class="apps-review-actions">' + button(esc, 'Open address', 'data-app-preview="' + esc(app.id) + '"') + '</div></div>';
     }
-    html += '<div class="apps-review-head">Version ' + Number(pending.version) + ' · ' + esc(formatSize(pending.sizeBytes)) + '</div>';
+    html += '<div class="apps-review-head">Version ' + Number(pending.version) + ' · ' + esc(formatSize(pending.sizeBytes)) + (edit ? ' · an edit suggested by ' + esc(edit) : '') + '</div>';
     if(status === 'scanning') return html + '<div class="apps-note" role="status">You can preview it once the virus check is done.</div></div>';
     if(status === 'blocked') return html + '<div class="apps-note apps-note-bad" role="status">The virus check refused this version, so it can’t be previewed.</div></div>';
     var previews = state.previews || {}, preview = previews[app.id] && previews[app.id].version === pending.version ? previews[app.id] : null;
@@ -412,6 +527,6 @@
   return {APP_SCAN_NOTE: APP_SCAN_NOTE, approveMessage: approveMessage, blockedLinkNote: blockedLinkNote, isWaitingForReview: isWaitingForReview, reviewCount: reviewCount, reviewFromEvent: reviewFromEvent, reviewNotice: reviewNotice, reviewTag: reviewTag, reviewTagApp: reviewTagApp,
     BUILD_PROMPT: BUILD_PROMPT, appState: appState, bodyHtml: bodyHtml, createUploader: createUploader, errorMessage: errorMessage, filesToCheck: filesToCheck, installVersion: installVersion,
     isPublishableAddress: isPublishableAddress, linkPublishProblem: linkPublishProblem, matches: matches, newAppId: newAppId, openErrorMessage: openErrorMessage, nextTabAfterClose: nextTabAfterClose,
-    normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, runHtml: runHtml, stateText: stateText,
+    normalizeCatalog: normalizeCatalog, publishFolder: publishFolder, publishLink: publishLink, publishedAs: publishedAs, publishTarget: publishTarget, publishConfirmText: publishConfirmText, publishedNotice: publishedNotice, copiedNotice: copiedNotice, suggestedBy: suggestedBy, sentBy: sentBy, senderLine: senderLine, normalizeHistory: normalizeHistory, historyHtml: historyHtml, historyError: historyError, runHtml: runHtml, stateText: stateText,
     stripTabs: stripTabs, submitVersion: submitVersion, waitForScan: waitForScan};
 });
