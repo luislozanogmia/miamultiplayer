@@ -101,10 +101,39 @@ test('every workspace remembers its own chats', () => {
   assert.equal(harness([], team, stored).agentChatsStorageKey(), 'miaAgentChats:person@example.test:' + team);
 });
 
-test('team bot chats open through the same remembered chat', () => {
-  const start = source.indexOf('  function openTeamBotChat(bot){');
-  const body = source.slice(start, source.indexOf('if(existing)return', start));
-  assert.match(body, /rememberedAgentChats\(\)\[bot\.id\]/);
+// A company row opens the chat last used with Mia or the bot, and shows that
+// same chat's latest line and time: the row and what it opens are one lookup.
+test('a company row stands for the chat last used with Mia or the bot', async () => {
+  const workspace = 'hub_' + 'a'.repeat(32);
+  const chat = (id, metadata) => ({ id, type: metadata.botId ? 'bot' : 'agent', metadata: { teamWorkspace: workspace, ...metadata } });
+  const remembered = {};
+  const opened = [];
+  const context = {
+    activeWorkspaceKey: workspace,
+    chatWs: { nativeConversations: [
+      chat('bot-main', { botId: 'bot-a' }), chat('bot-new', { botId: 'bot-a', conversationMode: 'fresh' }),
+      chat('other-new', { botId: 'bot-b', conversationMode: 'fresh' }),
+      chat('mia-main', { agentId: 'gateway' }), chat('mia-new', { agentId: 'gateway', conversationMode: 'fresh' }),
+    ] },
+    rememberedAgentChats: () => remembered,
+    isNativeMiaConversation: conversation => conversation.metadata.agentId === 'gateway',
+    loadChatRoom: async id => { opened.push(id); },
+  };
+  vm.createContext(context);
+  for (const name of ['currentTeamChat', 'teamBotChat', 'teamMiaChat', 'openTeamBotChat', 'openTeamMiaChat']) vm.runInContext(fn(name), context);
+  const bot = { id: 'bot-a', name: 'Team bot' };
+  assert.equal(context.teamBotChat(bot).id, 'bot-main');
+  assert.equal(context.teamMiaChat().id, 'mia-main');
+  assert.equal(context.teamBotChat({ id: 'bot-b' }), null, 'a new conversation nobody opened stays in History');
+  Object.assign(remembered, { 'bot-a': 'bot-new', gateway: 'mia-new' });
+  assert.equal(context.teamBotChat(bot).id, 'bot-new');
+  assert.equal(context.teamMiaChat().id, 'mia-new');
+  await context.openTeamBotChat(bot);
+  await context.openTeamMiaChat();
+  assert.deepEqual(opened, ['bot-new', 'mia-new']);
+  // a remembered chat that is gone, or another bot's, falls back to the main chat
+  remembered['bot-a'] = 'other-new';
+  assert.equal(context.teamBotChat(bot).id, 'bot-main');
 });
 
 test('a new company bot chat forwards its signed-in Hub token for membership verification', async () => {
@@ -126,8 +155,7 @@ test('a new company bot chat forwards its signed-in Hub token for membership ver
     loadNativeConversations: async () => [],
   };
   vm.createContext(context);
-  vm.runInContext(fn('openTeamBotChat'), context);
-  vm.runInContext(fn('createNativeAgentConversation'), context);
+  for (const name of ['currentTeamChat', 'teamBotChat', 'openTeamBotChat', 'createNativeAgentConversation']) vm.runInContext(fn(name), context);
   await context.openTeamBotChat({ id: 'bot-a', name: 'Team bot' });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].path, '/api/conversations?workspace=solo');

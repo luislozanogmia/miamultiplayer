@@ -5748,12 +5748,7 @@
   // The chat you last had open with a bot in this team, else its main chat,
   // made the first time you open it.
   function openTeamBotChat(bot){
-    var lastChat=rememberedAgentChats()[bot.id];
-    var botChats=(chatWs.nativeConversations||[]).filter(function(conversation){
-      return (conversation.metadata||{}).botId===bot.id;
-    });
-    var existing=botChats.filter(function(conversation){ return conversation.id===lastChat; })[0]
-      || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
+    var existing=teamBotChat(bot);
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
     // Same chat bot setup makes (createNativeAgentConversation), so a bot
@@ -5768,10 +5763,17 @@
   // In a company, Mia is your own 1:1 chat, never in a channel and never
   // @-mentioned. Each company has its own Mia chat, apart from Solo's.
   function teamMiaChat(){
-    return (chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return isNativeMiaConversation(conversation) && metadata.teamWorkspace===activeWorkspaceKey && metadata.conversationMode!=='fresh';
-    })[0]||null;
+    return currentTeamChat('gateway',(chatWs.nativeConversations||[]).filter(function(conversation){
+      return isNativeMiaConversation(conversation) && (conversation.metadata||{}).teamWorkspace===activeWorkspaceKey;
+    }));
+  }
+  // The chat a company row stands for, as in Solo: the one last open with Mia
+  // or that bot, else its main chat. The row opens it and shows its latest
+  // line and time, so a "New conversation" in use is not hidden behind an old one.
+  function currentTeamChat(ownerId,chats){
+    var lastChat=rememberedAgentChats()[ownerId];
+    return chats.filter(function(conversation){ return conversation.id===lastChat; })[0]
+      || chats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0] || null;
   }
   function openTeamMiaChat(){
     var existing=teamMiaChat();
@@ -6291,10 +6293,9 @@
   // A bot row in a team opens your private chat with it for this team.
   // A company bot's row opens its ongoing chat on this computer, if any.
   function teamBotChat(bot){
-    return (chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
-    })[0] || null;
+    return currentTeamChat(String(bot.id),(chatWs.nativeConversations||[]).filter(function(conversation){
+      return (conversation.metadata||{}).botId===bot.id;
+    }));
   }
   function teamBotRow(bot,pinned){
     var chat=teamBotChat(bot);
@@ -18480,6 +18481,8 @@
       var chat = teamBotChat(bot);
       if(chat && ids.indexOf(chat.id) < 0) ids.push(chat.id);
     });
+    var mia = teamMiaChat();
+    if(mia && ids.indexOf(mia.id) < 0) ids.push(mia.id);
     return ids;
   }
   function loadNativeRoomPreview(roomId, state){
