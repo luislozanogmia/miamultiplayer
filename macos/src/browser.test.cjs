@@ -704,6 +704,50 @@ test("web popups become tabs, blocked schemes never navigate", () => {
   }
 });
 
+test("an app link on the page in front asks, then opens that app on the Mac", async () => {
+  const h = harness({ appNameForLink: url => (url.startsWith("claude:") ? "Claude.app" : "") });
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://claude.ai/login/app";
+  const link = "claude://login/callback?code=one-time";
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  function navigate(url) {
+    let blocked = false;
+    wc.emit("will-navigate", { url, preventDefault() { blocked = true; } });
+    return blocked;
+  }
+  h.dialogResponse.value = 1;
+  assert.equal(navigate(link), true, "the page itself never goes to the app link");
+  await settle();
+  assert.equal(h.dialogCalls.length, 1);
+  assert.equal(h.dialogCalls[0][1].message, "Open Claude?");
+  assert.match(h.dialogCalls[0][1].detail, /claude\.ai wants to open Claude/);
+  assert.deepEqual(h.opened, [], "Cancel opens nothing");
+  h.dialogResponse.value = 0;
+  assert.equal(wc.popup({ url: link }).action, "deny");
+  await settle(); await settle();
+  assert.deepEqual(h.opened, [link], "a popup to the app link asks the same way");
+  assert.equal(h.command("state").tabs.length, 1, "no tab is made for an app link");
+  const asked = h.dialogCalls.length;
+  for (const url of ["file:///tmp/private", "javascript:alert(1)", "smb://server/share", "x-apple.systempreferences:com.apple.preference.security", "zoommtg://zoom.us/join"]) {
+    assert.equal(navigate(url), true);
+  }
+  await settle();
+  assert.equal(h.dialogCalls.length, asked, "blocked kinds, and a link no app opens, are never offered");
+});
+
+test("an app link stays blocked on a tab behind the one in front", async () => {
+  const h = harness({ appNameForLink: () => "Claude" });
+  h.command("new");
+  const wc = h.views[0].webContents;
+  wc.shownUrl = "https://claude.ai/login/app";
+  h.command("new");
+  wc.emit("will-navigate", { url: "claude://login", preventDefault() {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.dialogCalls.length, 0, "a tab behind cannot ask");
+  assert.deepEqual(h.opened, []);
+});
+
 test("Mia's default-browser Google sign-in returns only a matching finish-page callback", async () => {
   const callbacks = [];
   const h = harness({ onClerkAuthCallback: async url => { callbacks.push(url); return true; } });

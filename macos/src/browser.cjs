@@ -835,6 +835,52 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return normalizeTarget(value);
   }
 
+  // A page's "Open Claude" or "Join in Zoom" hands off to an app on the Mac
+  // through a link of that app's own kind (claude://, zoommtg://). Mia's
+  // browser opens only web pages, so such a link used to do nothing. Now the
+  // person is asked, as Chrome and Safari do, and only on the tab in front
+  // that no bot or Mia is driving; a link no app on the Mac opens, or one
+  // that reaches files, shares or the browser itself, stays blocked.
+  const BLOCKED_APP_LINK_SCHEMES = new Set([
+    "http", "https", "javascript", "file", "data", "blob", "about", "chrome", "chrome-extension",
+    "chrome-untrusted", "devtools", "view-source", "filesystem", "ws", "wss", "ftp", "sftp", "smb",
+    "afp", "nfs", "vnc", "ssh", "telnet", "x-apple.systempreferences", "applescript", "help",
+    "miamultiplayer", "mia", "mia-app", "electron",
+  ]);
+  const appNameForLink = typeof options.appNameForLink === "function" ? options.appNameForLink
+    : value => (app && typeof app.getApplicationNameForProtocol === "function" ? app.getApplicationNameForProtocol(value) : "");
+  function appLinkTarget(value) {
+    try {
+      const url = new URL(String(value || ""));
+      const scheme = url.protocol.replace(/:$/, "").toLowerCase();
+      if (!/^[a-z][a-z0-9+.-]{0,31}$/.test(scheme) || BLOCKED_APP_LINK_SCHEMES.has(scheme)) return null;
+      if (url.username || url.password || url.href.length > 4096) return null;
+      return url.href;
+    } catch (_) { return null; }
+  }
+  function askToOpenAppLink(tab, value) {
+    const target = appLinkTarget(value);
+    if (!target || tab.app || tab.id !== activeId
+      || (tab.actorOperationCount || 0) > 0 || (tab.botWork || 0) > 0 || tab.appLinkPrompt) return false;
+    let name = "";
+    try { name = String(appNameForLink(target) || "").replace(/\.app$/i, "").trim().slice(0, 80); } catch (_) { name = ""; }
+    if (!name) return false;
+    let site = "This page";
+    try { site = new URL(tab.view.webContents.getURL()).host || site; } catch (_) { /* keep the generic name */ }
+    tab.appLinkPrompt = true;
+    Promise.resolve(dialog.showMessageBox(window, {
+      type: "question", buttons: [`Open ${name}`, "Cancel"], defaultId: 0, cancelId: 1,
+      message: `Open ${name}?`, detail: `${site} wants to open ${name} on this Mac.`,
+    })).then(result => {
+      if (result && result.response === 0 && !disposed && tabs.get(tab.id) === tab) {
+        return shell.openExternal(target);
+      }
+      return null;
+    }).catch(error => log(`browser app link failed: ${error && error.message ? error.message : error}`))
+      .finally(() => { tab.appLinkPrompt = false; });
+    return true;
+  }
+
   function applyNativeTheme(enabled) {
     darkTheme = enabled === true;
     nativeTheme.themeSource = darkTheme ? "dark" : "light";
@@ -3143,12 +3189,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       } catch (_) { /* Invalid targets are denied below. */ }
       // Cmd/Ctrl+click arrives as "background-tab": open it without leaving
       // this page. Cmd+Shift+click and target=_blank links switch to it.
+      if (askToOpenAppLink(tab, url)) return { action: "deny" };
       try { newTab(url, { activate: disposition !== "background-tab", after: tab.id }); } catch (_) { /* Block non-web schemes and local-file popups. */ }
       return { action: "deny" };
     });
     const guard = (event) => {
       if (handOffClerkCallback(event.url)) { event.preventDefault(); return; }
-      try { normalizeNavigableTarget(event.url); } catch (_) { event.preventDefault(); }
+      try { normalizeNavigableTarget(event.url); } catch (_) { event.preventDefault(); askToOpenAppLink(tab, event.url); }
     };
     wc.on("did-create-window", child => {
       const popup = child.webContents;
