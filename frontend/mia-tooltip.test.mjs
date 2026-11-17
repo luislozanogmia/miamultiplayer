@@ -35,3 +35,41 @@ test('the view and mix buttons use the shared tip, not the slow native title', a
   assert.match(app, /mixBtn\.setAttribute\('data-tip', mixLabel\)/);
   assert.doesNotMatch(app, /mixBtn\.title =/);
 });
+
+test('Flow help is shown by the question mark on hover and by the entry on keyboard focus', async () => {
+  const handlers = {};
+  const classes = new Set();
+  const tip = {
+    classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
+    style: {}, offsetWidth: 240, offsetHeight: 48, setAttribute() {},
+  };
+  const doc = {
+    body: { appendChild() {} }, documentElement: { clientWidth: 800, clientHeight: 600 },
+    createElement: () => tip, addEventListener: (name, handler) => { handlers[name] = handler; },
+  };
+  const rect = { left: 100, width: 20, top: 560, bottom: 580 };
+  const row = {
+    isConnected: true, getBoundingClientRect: () => rect,
+    getAttribute: name => name === 'data-tip-keyboard' ? 'Flow help' : null,
+    closest: selector => selector.includes('data-tip-keyboard') ? row : null,
+    matches: selector => selector === ':focus-visible',
+  };
+  const question = {
+    isConnected: true, getBoundingClientRect: () => rect,
+    getAttribute: name => name === 'data-tip' ? 'Flow help' : null,
+    closest: selector => selector.includes('data-tip') ? question : null,
+  };
+  tooltip.install(doc);
+  handlers.pointerover({ target: row });
+  await new Promise(resolve => setTimeout(resolve, 110));
+  assert.equal(classes.has('is-visible'), false, 'hovering the entry does not show help');
+  handlers.pointerover({ target: question });
+  await new Promise(resolve => setTimeout(resolve, 110));
+  assert.equal(classes.has('is-visible'), true, 'hovering the question mark shows help');
+  assert.equal(tip.textContent, 'Flow help');
+  handlers.pointerout({ relatedTarget: null });
+  handlers.focusin({ target: row });
+  await new Promise(resolve => setTimeout(resolve, 110));
+  assert.equal(classes.has('is-visible'), true, 'keyboard focus still shows help');
+  doc.__miaTooltip.hide();
+});

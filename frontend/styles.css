@@ -1194,7 +1194,7 @@
   .ai-mode-entry-what{display:inline-grid;place-items:center;flex:none;width:16px;height:16px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:10px;line-height:1;cursor:help;}
   .ai-mode-entry-what:hover{border-color:var(--sand-border-focus);color:var(--sand-text-primary);}
   .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
-  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-what,.ai-mode-entry-tag{display:none;}}
+  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;gap:4px;}.ai-mode-entry-text,.ai-mode-entry-tag{display:none;}}
   .ai-mode-entry[hidden]{display:none;}
   /* Flow mode is there only once it is turned on in Settings, and then glows
      gold like a new invite until it is first opened. */

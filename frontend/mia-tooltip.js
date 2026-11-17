@@ -45,7 +45,7 @@
       return node && node.closest ? node.closest('[data-tip]') : null;
     }
     function show(target) {
-      var text = target.getAttribute('data-tip');
+      var text = target.getAttribute('data-tip') || target.getAttribute('data-tip-keyboard');
       if (!text || !target.isConnected) return;
       tip.textContent = text;
       tip.classList.add('is-visible');
@@ -80,7 +80,7 @@
       if (to !== current) hide();
     }, true);
     doc.addEventListener('focusin', function (event) {
-      var target = targetOf(event.target);
+      var target = event.target && event.target.closest ? event.target.closest('[data-tip], [data-tip-keyboard]') : null;
       if (target && target.matches && target.matches(':focus-visible')) enter(target);
     }, true);
     doc.addEventListener('focusout', hide, true);
@@ -90,7 +90,7 @@
     // A label that changes while showing (Mix → Separate) updates in place.
     if (typeof MutationObserver !== 'undefined') {
       new MutationObserver(function () { if (current && tip.classList.contains('is-visible')) show(current); })
-        .observe(doc.body, { subtree: true, attributes: true, attributeFilter: ['data-tip'] });
+        .observe(doc.body, { subtree: true, attributes: true, attributeFilter: ['data-tip', 'data-tip-keyboard'] });
     }
     doc.__miaTooltip = { hide: hide };
     return doc.__miaTooltip;
