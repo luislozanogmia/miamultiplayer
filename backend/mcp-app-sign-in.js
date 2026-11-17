@@ -98,10 +98,12 @@ function createMcpAppSignIn({ spawnLogin, signedIn, onSignedIn, env = process.en
       entry.timers.forEach(clearTimeout);
       entry.child = null;
       entry.output = '';
+      entry.authorizationUrl = null;
       entry.state = state;
       announce();
       if (state === 'signed_in') Promise.resolve().then(() => onSignedIn(entry)).catch(() => {});
     };
+    entry.finish = finish;
     const read = (chunk) => {
       if (entry.settled || entry.authorizationUrl) return;
       // Bounded, parsed for the one address, then dropped: never logged or returned.
@@ -137,7 +139,12 @@ function createMcpAppSignIn({ spawnLogin, signedIn, onSignedIn, env = process.en
   function cancel(appId) {
     const entry = entries.get(appId);
     entries.delete(appId);
-    if (entry && entry.child) { try { entry.child.kill('SIGTERM'); } catch (_) { /* already gone */ } }
+    if (!entry) return;
+    const child = entry.child;
+    // Settle before killing: late close/output events must not revive an old
+    // registration or run onSignedIn after credentials have been replaced.
+    entry.finish('error');
+    if (child) { try { child.kill('SIGTERM'); } catch (_) { /* already gone */ } }
   }
   return { start, stateOf, cancel };
 }
