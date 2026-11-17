@@ -35,7 +35,6 @@
     return '<div class="interrupted-title" id="interruptedTitle">' + esc(headline(items.length)) + '</div>'
       + '<div class="interrupted-sub">' + esc(whenText(items[0].stoppedAt)) + '. Choose what to start again.</div>'
       + '<div class="interrupted-list">' + rows + '</div>'
-      + '<div class="interrupted-error" role="status"></div>'
       + '<div class="app-confirm-actions"><button type="button" class="btn" data-interrupted="dismiss">Dismiss all</button>'
       + '<button type="button" class="btn primary" data-interrupted="start"></button></div>';
   }
@@ -98,15 +97,16 @@
     }
     // Closing without answering keeps everything for the next time Mia opens.
     function onKeydown(event){ if(event.key === 'Escape'){ event.preventDefault(); close(); } }
+    // Starting an automation can take several seconds, so the dialog closes at
+    // once and the work starts in the background; a toast reports the outcome.
     function submit(ids){
-      startButton.disabled = dismissButton.disabled = true;
+      close();
+      if(ids.length) options.toast(ids.length === 1 ? 'Starting it again…' : 'Starting ' + ids.length + ' again…');
       answer(items, ids, options).then(function(failed){
-        close();
         if(failed.length) options.toast(failed.length === 1 ? 'Couldn\'t start ' + failed[0] + '.' : 'Couldn\'t start ' + failed.length + ' of them.');
         else if(ids.length) options.toast(ids.length === 1 ? 'Started again.' : ids.length + ' started again.');
       }, function(){
-        startButton.disabled = dismissButton.disabled = false;
-        card.querySelector('.interrupted-error').textContent = 'Couldn\'t save that. Try again.';
+        options.toast('Couldn\'t start that. Try again from the Automations page.');
       });
     }
     boxes.forEach(function(box){ box.addEventListener('change', paint); });

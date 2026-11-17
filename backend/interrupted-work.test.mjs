@@ -132,6 +132,50 @@ test('the checklist leaves anything that could repeat unticked and escapes what 
   assert.equal(ui.headline(4), '4 things stopped when Mia closed');
 });
 
+test('starting again closes the checklist at once and reports in the background', async () => {
+  const handlers = {};
+  const node = (extra = {}) => ({
+    attrs: {}, children: [], removed: false, disabled: false, hidden: false, textContent: '',
+    setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; },
+    appendChild(child) { this.children.push(child); }, remove() { this.removed = true; },
+    addEventListener(type, fn) { handlers[(this.name || 'node') + ':' + type] = fn; }, focus() {}, ...extra,
+  });
+  const start = node({ name: 'start' }), dismiss = node({ name: 'dismiss' });
+  const box = node({ name: 'box', checked: true }); box.attrs['data-interrupted-id'] = 'automation:a';
+  const nodes = [];
+  globalThis.document = {
+    body: node(),
+    createElement() {
+      const el = node({
+        querySelector: (sel) => (sel.includes('start') ? start : dismiss),
+        querySelectorAll: () => [box],
+      });
+      nodes.push(el);
+      return el;
+    },
+    addEventListener() {}, removeEventListener() {},
+  };
+  let finish;
+  const toasts = [];
+  const api = (path) => (path === '/api/interrupted-work'
+    ? Promise.resolve({ data: { items: [{ id: 'automation:a', kind: 'automation', title: 'Admin Bot: check', stoppedAt: '2026-11-17T18:55:00Z' }] } })
+    : new Promise((resolve) => { finish = resolve; }));
+  try {
+    ui.showOnce({ api, toast: (text) => toasts.push(text) });
+    await new Promise((resolve) => setImmediate(resolve));
+    handlers['start:click']();
+    assert.equal(nodes[0].removed, true, 'the dialog closes before the start finishes');
+    assert.deepEqual(toasts, ['Starting it again…']);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(toasts, ['Starting it again…'], 'nothing more until the start answers');
+    finish({ data: { results: [{ id: 'automation:a', ok: true }] } });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(toasts, ['Starting it again…', 'Started again.']);
+  } finally {
+    delete globalThis.document;
+  }
+});
+
 test('the checklist says when in plain words', () => {
   const now = new Date(2026, 10, 4, 9, 0);
   assert.match(ui.whenText(new Date(2026, 10, 4, 8, 15).toISOString(), now), /^Today at /);

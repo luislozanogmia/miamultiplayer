@@ -684,8 +684,6 @@
   .interrupted-name{font-size:14px;font-weight:500;line-height:1.35;color:var(--ink);overflow-wrap:anywhere;}
   .interrupted-detail{font-size:12px;line-height:1.4;color:var(--muted);}
   .interrupted-repeat{font-size:11px;padding:1px 6px;margin-top:2px;border-radius:6px;background:#FBF0D9;color:#7A5300;}
-  .interrupted-error{font-size:12px;color:#B3261E;min-height:0;}
-  .interrupted-error:not(:empty){margin-top:8px;}
   /* The one-time card about bots sharing what they learn. */
   .memory-intro-card{max-width:400px;}
   .memory-intro-art{display:flex;align-items:flex-end;justify-content:center;gap:14px;margin:0 auto 12px;}
