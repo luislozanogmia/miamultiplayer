@@ -350,6 +350,7 @@ function updateMessage(options) {
 // Where an update stands, for the page to show while it downloads.
 let updateState = { phase: "idle" };
 let offerUpdateInstall = null;
+let forceUpdateInstall = null;
 function showUpdateState(state) {
   updateState = state;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("miaos-update-state", state);
@@ -374,6 +375,7 @@ function configureAutoUpdates() {
     notify: updateMessage, log: desktopLog, onState: showUpdateState,
   });
   offerUpdateInstall = updateReadiness.offerInstall;
+  forceUpdateInstall = updateReadiness.forceInstall;
   autoUpdater.on("update-not-available", () => {
     if (!autoUpdateCheckInteractive) return;
     updateMessage({
@@ -426,6 +428,25 @@ function checkForMiaUpdate({ interactive = false } = {}) {
       autoUpdateCheckInteractive = false;
     });
   return autoUpdateCheckInFlight;
+}
+
+// Help → Force Update: fetches the newest release and restarts into it without the
+// "ready to install" question, for when the app itself is too broken to answer it.
+// These are system dialogs, so nothing drawn in the window can cover them.
+async function forceMiaUpdate() {
+  if (!configureAutoUpdates()) return checkForMiaUpdate({ interactive: true });
+  const answer = await updateMessage({
+    type: "warning",
+    title: "Force update",
+    message: "Download the latest Mia and restart?",
+    detail: "Mia will restart by itself as soon as the update is ready. If you already have the latest version, nothing changes.",
+    buttons: ["Force Update", "Cancel"], defaultId: 0, cancelId: 1,
+  });
+  if (answer?.response !== 0) return { status: "cancelled" };
+  desktopLog("force update requested");
+  const status = forceUpdateInstall();
+  if (status === "checking") await checkForMiaUpdate({ interactive: true }).catch(() => {});
+  return { status };
 }
 
 function redactLogValue(value) {
@@ -2082,6 +2103,10 @@ function createApplicationMenuTemplate() {
         label: "Check for Updates…",
         enabled: ["darwin", "win32"].includes(process.platform),
         click: () => checkForMiaUpdate({ interactive: true }),
+      }, {
+        label: "Force Update…",
+        enabled: ["darwin", "win32"].includes(process.platform),
+        click: () => { forceMiaUpdate().catch(error => desktopLog(`force update failed: ${error && error.message || "unknown error"}`)); },
       }],
     },
   ];
