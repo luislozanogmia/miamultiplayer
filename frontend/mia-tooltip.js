@@ -23,7 +23,13 @@
 
   // Below the control, centred, kept inside the window; above it when there
   // is no room below.
-  function place(rect, tip, viewport) {
+  function place(rect, tip, viewport, group) {
+    if (group && group.top - GAP - tip.height >= EDGE) {
+      return {
+        left: Math.round(Math.max(EDGE, Math.min(group.left, viewport.width - tip.width - EDGE))),
+        top: Math.round(group.top - GAP - tip.height)
+      };
+    }
     var left = rect.left + rect.width / 2 - tip.width / 2;
     left = Math.max(EDGE, Math.min(left, viewport.width - tip.width - EDGE));
     var top = rect.bottom + GAP;
@@ -50,8 +56,19 @@
       tip.textContent = text;
       tip.classList.add('is-visible');
       var rect = target.getBoundingClientRect();
+      var group = null;
+      if (target.closest && target.closest('.ai-mode-entry') && doc.querySelectorAll) {
+        var entries = doc.querySelectorAll('.ai-mode-entry');
+        for (var i = 0; i < entries.length; i++) {
+          var entryRect = entries[i].getBoundingClientRect();
+          if (entryRect.width && entryRect.height) {
+            if (!group) group = { left: entryRect.left, top: entryRect.top };
+            else group.top = Math.min(group.top, entryRect.top);
+          }
+        }
+      }
       var spot = place(rect, { width: tip.offsetWidth, height: tip.offsetHeight },
-        { width: doc.documentElement.clientWidth, height: doc.documentElement.clientHeight });
+        { width: doc.documentElement.clientWidth, height: doc.documentElement.clientHeight }, group);
       tip.style.left = spot.left + 'px';
       tip.style.top = spot.top + 'px';
     }

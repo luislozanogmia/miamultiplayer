@@ -24,7 +24,7 @@ automatically through the in-app updater.
 - A live browser page steps aside when the Flow demo or another prompt covers it, so the demo and Skip button can be seen.
 - Links in a page can open an installed Mac app after a person confirms; blocked destinations remain blocked.
 - Company app review identifies the member who sent an edit separately from the original publisher.
-- Flow mode and Flow Tandem show their help text only over the `?`, with readable wrapped tooltips.
+- Flow mode and Flow Tandem show their help text only over the `?`, in readable wrapped tooltips above both entries.
 - The Mac and Windows app icons use Mia's rounded grey tile and dots, matching the existing Linux icon.
 
 ## [0.3.10] — 2026-11-16
