@@ -176,7 +176,7 @@ test('the page is told why Mia has no voice: no key, a key that is not taken, or
   assert.deepEqual(await speechState({ key: 'busy-key', env, request: async () => ({ ok: false, status: 503 }) }), { voices: 0, problem: 'refused' });
   // Another key is judged on its own answer, not on the last one's.
   const accept = async () => ({ ok: true, json: async () => ({ voices: [{ voice_id: 'voiceone1' }] }) });
-  assert.deepEqual(await speechState({ key: 'good-key-1', env, request: accept }), { voices: 1, problem: '' });
+  assert.deepEqual(await speechState({ key: 'good-key-1', env, request: accept }), { voices: 2, problem: '' });
   // Voices named on this computer do not hide a key that a spoken line shows is not taken.
   const named = { MIAOS_ELEVENLABS_VOICES: 'abcdefgh1234' };
   assert.deepEqual(await speechState({ key: 'named-key', env: named, request: refuse }), { voices: 1, problem: '' });
@@ -184,15 +184,29 @@ test('the page is told why Mia has no voice: no key, a key that is not taken, or
   assert.deepEqual(await speechState({ key: 'named-key', env: named, request: refuse }), { voices: 0, problem: 'key' });
 });
 
-test('with no voices named, Mia speaks in the first voices of the key\u2019s own account, asked for once', async () => {
+test('with no voices named, Voice 1 is Mia\u2019s own voice and Voice 2 the first of the key\u2019s own account, asked for once', async () => {
   const asked = [];
   const request = async (url, options) => {
     asked.push({ url, key: options.headers['xi-api-key'] });
     return { ok: true, json: async () => ({ voices: [{ voice_id: 'voiceone1' }, { voice_id: '../bad' }, { voice_id: 'voicetwo2' }, { voice_id: 'voicethree3' }, { voice_id: 'voicefour4' }, { voice_id: 'voicefive5' }] }) };
   };
   const key = 'account-key';
-  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['voiceone1', 'voicetwo2', 'voicethree3', 'voicefour4']);
-  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['voiceone1', 'voicetwo2', 'voicethree3', 'voicefour4']);
+  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['cuTixVvCOWFxeH3oGE9m', 'voiceone1']);
+  assert.deepEqual(await speechVoices({ key, env: {}, request }), ['cuTixVvCOWFxeH3oGE9m', 'voiceone1']);
+  // An account that already has Mia's voice does not list it twice.
+  const own = async () => ({ ok: true, json: async () => ({ voices: [{ voice_id: 'cuTixVvCOWFxeH3oGE9m' }, { voice_id: 'voicetwo2' }] }) });
+  assert.deepEqual(await speechVoices({ key: 'own-key', env: {}, request: own }), ['cuTixVvCOWFxeH3oGE9m', 'voicetwo2']);
+  // An account that may not use Mia's voice hears the next one instead of nothing, and its key still counts as good.
+  const said = [];
+  const picky = async (url) => {
+    if (!url.includes('/text-to-speech/')) return { ok: true, json: async () => ({ voices: [{ voice_id: 'voiceone1' }] }) };
+    said.push(url);
+    return url.includes('cuTixVvCOWFxeH3oGE9m') ? { ok: false, status: 400 } : { ok: true, arrayBuffer: async () => new Uint8Array([1]).buffer };
+  };
+  assert.equal((await synthesize('Hi', 0, { key: 'picky-key', env: {}, request: picky })).body.length, 1);
+  assert.equal(said.length, 2);
+  assert.match(said[1], /\/text-to-speech\/voiceone1\?/);
+  assert.deepEqual(await speechState({ key: 'picky-key', env: {}, request: picky }), { voices: 2, problem: '' });
   assert.deepEqual(asked, [{ url: 'https://api.elevenlabs.io/v1/voices', key }]);
   // A refused key gives no voices, and the refusal is not kept.
   assert.deepEqual(await speechVoices({ key: 'other-key', env: {}, request: async () => ({ ok: false, status: 401 }) }), []);
@@ -203,14 +217,14 @@ test('with no voices named, Mia speaks in the first voices of the key\u2019s own
 test('a key made for speech only still speaks, in ElevenLabs\u2019 own voices', async () => {
   const missing = (permission) => async () => ({ ok: false, status: 401, json: async () => ({ detail: { status: 'missing_permissions', message: `The API key you used is missing the permission ${permission} to execute this operation.` } }) });
   const ids = await speechVoices({ key: 'speech-only-key', env: {}, request: missing('voices_read') });
-  assert.equal(ids.length, 4);
-  assert.equal(ids[0], '21m00Tcm4TlvDq8ikWAM');
-  assert.deepEqual(await speechState({ key: 'speech-only-key-2', env: {}, request: missing('voices_read') }), { voices: 4, problem: '' });
+  assert.deepEqual(ids, ['cuTixVvCOWFxeH3oGE9m', 'pNInz6obpgDQGcFmaJgB']);
+  assert.deepEqual(await speechState({ key: 'speech-only-key-2', env: {}, request: missing('voices_read') }), { voices: 2, problem: '' });
   // A line it may not speak still shows the key as not taken.
   const calls = [];
   const request = async (url) => { calls.push(url); return url.includes('/text-to-speech/') ? { ok: false, status: 401 } : missing('voices_read')(); };
   assert.equal(await synthesize('Hi', 0, { key: 'speech-only-key-3', env: {}, request }), null);
-  assert.match(calls[1], /\/text-to-speech\/21m00Tcm4TlvDq8ikWAM\?/);
+  assert.match(calls[1], /\/text-to-speech\/cuTixVvCOWFxeH3oGE9m\?/);
+  assert.match(calls[2], /\/text-to-speech\/pNInz6obpgDQGcFmaJgB\?/);
   assert.deepEqual(await speechState({ key: 'speech-only-key-3', env: {}, request }), { voices: 0, problem: 'key' });
   // A key that is simply wrong, or misses another permission, stays not taken.
   const invalid = async () => ({ ok: false, status: 401, json: async () => ({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }) });

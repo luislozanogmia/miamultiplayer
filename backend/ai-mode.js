@@ -548,7 +548,7 @@ async function fetchImage(value, { request = fetch } = {}) {
 const SPEECH_API = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const SPEECH_MODEL = 'eleven_turbo_v2_5';
 const MAX_SPEECH_CHARS = 600;
-const MAX_VOICES = 4;
+const MAX_VOICES = 2;
 const SPEECH_TIMEOUT_MS = 20000;
 const VOICES_API = 'https://api.elevenlabs.io/v1/voices';
 const VOICES_KEPT_MS = 10 * 60 * 1000;
@@ -556,8 +556,12 @@ let voicesKept = null;
 // The last key ElevenLabs refused, and the number it answered with.
 let voicesRefused = null;
 
-// ElevenLabs' own voices, there for every account: Rachel, Sarah, Adam, Charlotte.
-const DEFAULT_VOICES = ['21m00Tcm4TlvDq8ikWAM', 'EXAVITQu4vr4xnSDxMaL', 'pNInz6obpgDQGcFmaJgB', 'XB0fDUnXU5powFXDhCwa'];
+// Mia's own voice. It is Voice 1 for everyone; Voice 2 is the first voice of the
+// key's account, or ElevenLabs' Adam for a key that may not list voices.
+const MIA_VOICE = 'cuTixVvCOWFxeH3oGE9m';
+// ElevenLabs' own voices, there for every account: Adam, Rachel.
+const DEFAULT_VOICES = ['pNInz6obpgDQGcFmaJgB', '21m00Tcm4TlvDq8ikWAM'];
+const withMia = (ids) => [MIA_VOICE, ...ids.filter((id) => id !== MIA_VOICE)].slice(0, MAX_VOICES);
 
 // onlyMissesVoicesRead(response) -> true when ElevenLabs took the key but the
 // key was made without the right to list voices (a key for speech only).
@@ -570,9 +574,9 @@ async function onlyMissesVoicesRead(response) {
 }
 
 // speechVoices({key}) -> the voice ids to choose from, or [] when speech is
-// not set up (no key, or no voice). They are the first voices of the key's
-// own account, asked for once and kept for a while; MIAOS_ELEVENLABS_VOICES
-// names other ones.
+// not set up (no key, or no voice). They are Mia's own voice, then the first
+// voice of the key's own account, asked for once and kept for a while;
+// MIAOS_ELEVENLABS_VOICES names other ones.
 async function speechVoices({ key = '', env = process.env, request = fetch, now = Date.now } = {}) {
   const secret = String(key || '').trim();
   if (!secret) return [];
@@ -587,7 +591,7 @@ async function speechVoices({ key = '', env = process.env, request = fetch, now 
     // still shows the key as not taken.
     console.warn('[ai-mode] this key may not list voices; Mia speaks in ElevenLabs\u2019 default voices');
     voicesRefused = null;
-    voicesKept = { key: secret, at: now(), ids: DEFAULT_VOICES.slice(0, MAX_VOICES) };
+    voicesKept = { key: secret, at: now(), ids: withMia(DEFAULT_VOICES) };
     return voicesKept.ids;
   }
   if (!response.ok) {
@@ -596,7 +600,7 @@ async function speechVoices({ key = '', env = process.env, request = fetch, now 
     return [];
   }
   voicesRefused = null;
-  const ids = clean(((await response.json()).voices || []).map((voice) => voice && voice.voice_id));
+  const ids = withMia(clean(((await response.json()).voices || []).map((voice) => voice && voice.voice_id)));
   voicesKept = { key: secret, at: now(), ids };
   return ids;
 }
@@ -620,12 +624,16 @@ async function synthesize(text, voice, { key = '', env = process.env, request = 
   const line = oneLine(text, MAX_SPEECH_CHARS);
   const voiceId = voices[Number.isInteger(voice) && voice >= 0 && voice < voices.length ? voice : 0];
   if (!line || !voiceId) return null;
-  const response = await request(`${SPEECH_API}${voiceId}?output_format=mp3_44100_128`, {
+  const say = (id) => request(`${SPEECH_API}${id}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'xi-api-key': String(key).trim(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
     body: JSON.stringify({ text: line, model_id: SPEECH_MODEL }),
     signal: AbortSignal.timeout(SPEECH_TIMEOUT_MS),
   });
+  let response = await say(voiceId);
+  // An account that may not use Mia's own voice hears the next one instead of nothing.
+  const other = voices.find((id) => id !== MIA_VOICE);
+  if (!response.ok && voiceId === MIA_VOICE && other) response = await say(other);
   if (!response.ok) {
     // Mia stays silent; the log says why (the answer's number only).
     console.warn(`[ai-mode] speech was refused (${response.status}); Mia stays silent`);
