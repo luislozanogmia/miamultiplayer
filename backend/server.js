@@ -3126,12 +3126,12 @@ async function ensureNativeBotConversation(bot) {
     }
   }
   cronSync.migrateBotAutomations(bot);
-  const needsAutomationDestination = bot.automations.some((automation) =>
-    automation.deliveryConversationId !== conversation.id
-      || automation.deliveryCompanyId !== conversation.companyId
-  );
+  // A company's automation posts to the bot's chat in that company instead.
+  const needsAutomationDestination = bot.automations.some((automation) => !automationTeamWorkspace(automation)
+    && (automation.deliveryConversationId !== conversation.id
+      || automation.deliveryCompanyId !== conversation.companyId));
   if (needsAutomationDestination) {
-    bot.automations = bot.automations.map((automation) => ({
+    bot.automations = bot.automations.map((automation) => (automationTeamWorkspace(automation) ? automation : {
       ...automation,
       deliveryConversationId: conversation.id,
       deliveryCompanyId: conversation.companyId,
@@ -3184,6 +3184,10 @@ async function reconcileNativeBotConversations() {
   for (const bot of db.loadAll(conn, 'bots')) {
     try {
       repairLegacyBotConversations(bot);
+      if (repairAutomationTeamWorkspaces(bot)) {
+        db.saveOne(conn, 'bots', bot.id, bot);
+        console.log(`native bot reconciliation: marked ${bot.id} automations made in a company`);
+      }
       const candidates = canonicalBotConversationCandidates(nativeBotConversations(bot));
       if (candidates.length > 1) {
         let canonical = candidates[0];
@@ -6255,10 +6259,6 @@ app.post('/api/agent/wake', requireAuth, (req, res) => {
   res.status(204).end();
 });
 
-// Live automation status comes from active Hermes cron sessions, not from
-// normal native chat dispatches. Keep the payload workspace-scoped and expose
-// only the fields the right-hand Automations panel needs.
-app.get('/api/automations/active', requireAuth, (req, res) => {
 // Run an enabled bot automation once from the Automations page. This shares
 // the same guarded scheduler path as the bot-chat "run now" action.
 app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAuth, async (req, res) => {
@@ -6276,6 +6276,10 @@ app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAu
   }
 });
 
+// Live automation status comes from active Hermes cron sessions, not from
+// normal native chat dispatches. Keep the payload workspace-scoped and expose
+// only the fields the right-hand Automations panel needs.
+app.get('/api/automations/active', requireAuth, (req, res) => {
   let runs;
   try {
     runs = cronSync.listActiveBotCronRuns(conn);
@@ -6284,9 +6288,9 @@ app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAu
     return res.status(503).json({ error: 'automation_status_unavailable' });
   }
   const visible = runs
-    .filter((run) => run && run.bot && botVisibleInWorkspace(run.bot, req))
+    .filter((run) => run && run.bot && automationVisibleHere(run.bot, run.automation, req))
     .map((run) => {
-      const conversation = nativeBotConversation(run.bot);
+      const conversation = automationChatNow(run.bot, run.automation);
       return {
         id: run.sessionId,
         botId: run.bot.id,
@@ -6302,7 +6306,8 @@ app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAu
   let checklists = [];
   try {
     checklists = cronSync.listAutomationChecklists(conn)
-      .filter((item) => item && item.bot && botVisibleInWorkspace(item.bot, req))
+      .filter((item) => item && item.bot && automationVisibleHere(item.bot,
+        (item.bot.automations || []).find((automation) => automation && automation.id === item.automationId), req))
       .map(({ bot, ...item }) => ({ botId: bot.id, ...item }));
   } catch (error) {
     console.error('automation checklist scan failed', error.message);
@@ -6420,6 +6425,7 @@ registerResource({
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
     if (record.model !== existing.model) stampBotModelProvider(record, req.userEmail);
     cronSync.migrateBotAutomations(record);
+    stampAutomationWorkspaces(record, existing, req);
   },
   prepareUpdate: (record, existing, req) => {
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'instructions')) return null;
@@ -6659,6 +6665,12 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
     conversationId: event.conversationId,
     companyId,
   });
+  // Made in a company's chat, it belongs to that company.
+  if (!existing) {
+    const origin = nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
+    const team = teamWorkspaceForNewAutomation(bot, origin && origin.metadata && origin.metadata.teamWorkspace);
+    if (team) record.teamWorkspace = team;
+  }
   const now = new Date().toISOString();
   const updatedBot = {
     ...bot,
@@ -7805,6 +7817,85 @@ function browserWorkspaceForConversation(conversation, companyId, email) {
   return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
 }
 
+// An automation belongs to the workspace it was made in. One bot can work in
+// Solo and in several companies, so a company's automation is marked with
+// that company (its hub id); its runs use that company's browser tabs, post
+// to the bot's chat there and show in that company's Automations panel. No
+// mark means the bot's own workspace. Mia sets the mark, never the request.
+const AUTOMATION_TEAM_WORKSPACE = /^hub_[a-f0-9]{32}$/;
+function automationTeamWorkspace(automation) {
+  const team = automation && automation.teamWorkspace;
+  return typeof team === 'string' && AUTOMATION_TEAM_WORKSPACE.test(team) ? team : '';
+}
+function requestTeamWorkspace(req) {
+  const header = req && req.headers && req.headers['x-miaos-workspace'];
+  const query = req && req.query && (req.query.team || req.query.workspace);
+  const named = String((req && req.query && req.query.team) || header || query || '').trim().toLowerCase();
+  return AUTOMATION_TEAM_WORKSPACE.test(named) ? named : '';
+}
+// Only a bot of the person's own list can work in a company's My Bots chat.
+function teamWorkspaceForNewAutomation(bot, team) {
+  return AUTOMATION_TEAM_WORKSPACE.test(String(team || '')) && workspaceIdForRecord(bot) === 'solo' ? team : '';
+}
+// The mark is server-owned: an edit keeps the automation's mark, and a new
+// automation saved from a company's screen takes that company.
+function stampAutomationWorkspaces(record, existing, req) {
+  const before = new Map(((existing && existing.automations) || []).map((automation) => [automation && automation.id, automation]));
+  const team = teamWorkspaceForNewAutomation(record, requestTeamWorkspace(req));
+  record.automations = (Array.isArray(record.automations) ? record.automations : []).map((automation) => {
+    const next = { ...automation };
+    delete next.teamWorkspace;
+    const previous = before.get(next.id);
+    const kept = previous ? automationTeamWorkspace(previous) : team;
+    if (kept) next.teamWorkspace = kept;
+    return next;
+  });
+}
+// Whether a run or checklist of this automation shows on the screen asking:
+// only in the workspace it belongs to. A company's screen lists its My Bots
+// with ?workspace=solo&team=hub_<id>.
+function automationVisibleHere(bot, automation, req) {
+  const team = automationTeamWorkspace(automation);
+  if (!team) return !requestTeamWorkspace(req) && botVisibleInWorkspace(bot, req);
+  return team === requestTeamWorkspace(req) && sameOwner(bot, req && req.userEmail) && isActiveWorkspaceUser(ownerOf(bot));
+}
+// The bot's chat an automation posts to: its chat in the automation's
+// company, or its main chat. automationChatNow only looks; automationChat
+// makes the company chat when it is missing.
+function automationChatNow(bot, automation) {
+  const team = automationTeamWorkspace(automation);
+  if (!team) return nativeBotConversation(bot);
+  return nativeBotConversations(bot).find((conversation) => conversation.metadata
+    && conversation.metadata.teamWorkspace === team && conversation.metadata.conversationMode !== 'fresh') || null;
+}
+async function automationChat(bot, automation) {
+  const team = automationTeamWorkspace(automation);
+  if (!team) return ensureNativeBotConversation(bot);
+  return nativeHandoffBotConversation(bot, { metadata: { teamWorkspace: team } }, ownerOf(bot));
+}
+// Automations made in a company chat before Mia kept the mark: the chat the
+// accepted card sits in says which company. Run at boot.
+function repairAutomationTeamWorkspaces(bot) {
+  if (!bot || workspaceIdForRecord(bot) !== 'solo' || !Array.isArray(bot.automations)) return false;
+  let changed = false;
+  for (const automation of bot.automations) {
+    if (!automation || automationTeamWorkspace(automation) || !automation.id) continue;
+    const row = conn.prepare(
+      `SELECT company_id AS companyId, conversation_id AS conversationId FROM events
+        WHERE json_extract(metadata, '$.automationProposal.automationId') = ?
+          AND json_extract(metadata, '$.automationProposal.status') = 'accepted'
+        ORDER BY created_at ASC LIMIT 1`
+    ).get(String(automation.id));
+    const conversation = row && nativeConversationRepository.getConversation({ companyId: row.companyId, id: row.conversationId, includeDeleted: true });
+    const metadata = (conversation && conversation.metadata) || {};
+    const team = metadata.botId === bot.id ? teamWorkspaceForNewAutomation(bot, metadata.teamWorkspace) : '';
+    if (!team) continue;
+    automation.teamWorkspace = team;
+    changed = true;
+  }
+  return changed;
+}
+
 // A bot's tab group is keyed by its id on this computer. A bot's own chat
 // runs it under that id; a channel run of the person's copy of a company bot
 // carries the company's versioned id, so it takes the local one when the
@@ -7840,7 +7931,8 @@ function browserActorForScheduledRun(sessionId, email) {
   }
   if (!run || !sameOwner(run.bot, email) || !isActiveWorkspaceUser(ownerOf(run.bot))) return null;
   const companyId = nativeCompanyId(workspaceIdForRecord(run.bot), ownerOf(run.bot));
-  const workspace = browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
+  const workspace = automationTeamWorkspace(run.automation)
+    || browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
   return browserBotActor({ botId: browserBotId(run.bot), name: run.bot.name, workspace, folders: run.folders });
 }
 
@@ -10185,7 +10277,8 @@ async function deliverBotCronResults() {
       // Cron output belongs to the bot that owns the automation. Never trust
       // a legacy origin-chat pointer: it may identify the user's private Mia
       // conversation and would break that conversation's 1:1 boundary.
-      const conversation = await ensureNativeBotConversation(result.bot);
+      // In the bot's chat of the workspace the automation belongs to.
+      const conversation = await automationChat(result.bot, result.automation);
       throwIfNativeCronBotOwnerInactive(result.bot);
       if (!conversation) throw new Error('bot conversation unavailable');
       const text = sanitizeChatReply(result.content).trim();

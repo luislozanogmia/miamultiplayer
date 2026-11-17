@@ -52,6 +52,44 @@ test('a scheduled run of a bot uses the browser as that bot, for its owner, whil
   assert.equal(h.calls.length, 1, 'a scheduled run never acquires a conversation principal');
 });
 
+test('an automation made in a company runs in that company, whichever chat the bot calls home', () => {
+  const h = route();
+  const team = 'hub_' + 'd'.repeat(32);
+  const session = 'cron_job-2_20261117_130000';
+  const bot = { id: 'admin-bot', name: 'Admin Bot', owner: 'owner@example.test', workspaceId: 'solo' };
+  h.scheduled.set(session, { bot, automation: { id: 'whatsapp', teamWorkspace: team }, folders: [] });
+  assert.equal(h.invoke(session).actor.workspace, team, 'the company the automation was made in, not Solo');
+  h.scheduled.set(session, { bot, automation: { id: 'whatsapp', teamWorkspace: 'solo' }, folders: [] });
+  assert.equal(h.invoke(session).actor.workspace, 'solo', 'only a company id counts as a mark');
+});
+
+test('an automation belongs to one workspace: Mia keeps its mark and shows it only there', () => {
+  const h = route();
+  const team = 'hub_' + 'e'.repeat(32);
+  h.context.botVisibleInWorkspace = (record, req) => record.workspaceId === (req.query.workspace || 'multiplayer_test');
+  const bot = { id: 'admin-bot', owner: 'owner@example.test', workspaceId: 'solo',
+    automations: [{ id: 'old', teamWorkspace: team }, { id: 'solo-one' }] };
+  const fromCompany = { headers: { 'x-miaos-workspace': team }, query: {}, userEmail: 'owner@example.test' };
+  const record = { ...bot, automations: [{ id: 'old' }, { id: 'solo-one', teamWorkspace: team }, { id: 'new' }] };
+  h.context.stampAutomationWorkspaces(record, bot, fromCompany);
+  assert.deepEqual(record.automations.map((automation) => automation.teamWorkspace),
+    [team, undefined, team], 'an edit keeps the mark, a request cannot set it, a new one takes the company on screen');
+  const companyScreen = { query: { workspace: 'solo', team }, headers: {}, userEmail: 'owner@example.test' };
+  const soloScreen = { query: { workspace: 'solo' }, headers: {}, userEmail: 'owner@example.test' };
+  const otherCompany = { query: { workspace: 'solo', team: 'hub_' + 'f'.repeat(32) }, headers: {}, userEmail: 'owner@example.test' };
+  const [company, solo] = bot.automations;
+  assert.equal(h.context.automationVisibleHere(bot, company, companyScreen), true);
+  assert.equal(h.context.automationVisibleHere(bot, company, soloScreen), false);
+  assert.equal(h.context.automationVisibleHere(bot, company, otherCompany), false);
+  assert.equal(h.context.automationVisibleHere(bot, company, { ...companyScreen, userEmail: 'stranger@example.test' }), false);
+  assert.equal(h.context.automationVisibleHere(bot, solo, soloScreen), true);
+  assert.equal(h.context.automationVisibleHere(bot, solo, companyScreen), false);
+  const teamBot = { ...bot, workspaceId: 'multiplayer_test' };
+  const fresh = { ...teamBot, automations: [{ id: 'new' }] };
+  h.context.stampAutomationWorkspaces(fresh, { ...teamBot, automations: [] }, fromCompany);
+  assert.equal(fresh.automations[0].teamWorkspace, undefined, 'only a bot of your own list works in a company\'s My Bots chat');
+});
+
 test('browser actor route distinguishes authorized Mia and bot sessions from unresolved or denied sessions', () => {
   const h = route();
   h.sessions.set('mia-session', { companyId: 'company', conversationId: 'mia-private', browserActiveUntil: Date.now() + 60_000 });

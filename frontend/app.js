@@ -11531,7 +11531,10 @@
       if(changed) renderChatSidebar();
       return [];
     };
-    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey())).then(function(res){
+    // A company's screen also names the company, so it gets that company's
+    // automations of your bots and not your Solo ones.
+    var team = hubWorkspace() ? '&team=' + encodeURIComponent(activeWorkspaceKey) : '';
+    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey()) + team).then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
       var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
