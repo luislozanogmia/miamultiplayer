@@ -25,6 +25,7 @@ automatically through the in-app updater.
 - Links in a page can open an installed Mac app after a person confirms; blocked destinations remain blocked.
 - Company app review identifies the member who sent an edit separately from the original publisher.
 - Flow mode and Flow Tandem show their help text only over the `?`, with readable wrapped tooltips.
+- The Mac and Windows app icons use Mia's rounded grey tile and dots, matching the existing Linux icon.
 
 ## [0.3.10] — 2026-11-16
 
