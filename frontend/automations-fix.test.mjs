@@ -31,6 +31,20 @@ test('a stuck automation keeps its title wide and shows the problem, escaped, wi
   assert.doesNotMatch(ctx.automationsDetailHtml({ ...row, status: 'scheduled' }, { id: 'auto-1' }, {}), /automationsFix/);
 });
 
+test('editing sits as a pencil beside the status; an automation with no steps keeps a worded Add steps button', () => {
+  const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
+  vm.createContext(ctx);
+  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});
+  const head = html.slice(0, html.indexOf('<div class="automations-needs">'));
+  assert.match(head, /<span class="automations-row-side">Needs you<\/span><button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">/, 'the pencil follows the status in the header');
+  assert.doesNotMatch(html, /automations-actions/, 'no bottom button when there are steps');
+  assert.equal((html.match(/id="automationsEdit"/g) || []).length, 1);
+  const empty = ctx.automationsDetailHtml({ ...row, status: 'scheduled', steps: [] }, { id: 'auto-1', prompt: '' }, {});
+  assert.doesNotMatch(empty, /automations-edit-icon/);
+  assert.match(empty, /<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">Add steps<\/button><\/div>$/);
+});
+
 test('Fix with Mia opens her chat and sends what is wrong, with the automation and its steps', async () => {
   const sent = []; const opened = [];
   const mia = { id: 'mia-conv', type: 'agent', metadata: { agentId: 'gateway' } };
