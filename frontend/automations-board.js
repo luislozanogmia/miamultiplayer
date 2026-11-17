@@ -133,5 +133,7 @@
     }).join('') + '</ol>';
   }
 
-  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary, stepStateLabel: stepStateLabel, stepsHtml: stepsHtml};
+  function canRunNow(automation, status){ return !!(automation && automation.enabled === true && status !== 'running'); }
+
+  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary, canRunNow: canRunNow, stepStateLabel: stepStateLabel, stepsHtml: stepsHtml};
 });

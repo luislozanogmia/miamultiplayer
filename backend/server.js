@@ -6259,6 +6259,23 @@ app.post('/api/agent/wake', requireAuth, (req, res) => {
 // normal native chat dispatches. Keep the payload workspace-scoped and expose
 // only the fields the right-hand Automations panel needs.
 app.get('/api/automations/active', requireAuth, (req, res) => {
+// Run an enabled bot automation once from the Automations page. This shares
+// the same guarded scheduler path as the bot-chat "run now" action.
+app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAuth, async (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botReachable(bot, req)) return res.status(404).json({ status: 'missing' });
+  if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can run this automation.' });
+  }
+  try {
+    const result = await cronSync.runBotAutomationNow(bot, req.params.automationId);
+    return res.status(result.status === 'started' ? 200 : 409).json(result);
+  } catch (error) {
+    console.error('automation run-now endpoint failed', error.message);
+    return res.status(503).json({ error: 'automation_run_unavailable', message: 'Could not start this automation.' });
+  }
+});
+
   let runs;
   try {
     runs = cronSync.listActiveBotCronRuns(conn);

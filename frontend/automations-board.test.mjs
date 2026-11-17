@@ -19,6 +19,12 @@ const bots = [
 const runs = [{ id: 'run-1', botId: 'news', automationId: 'digest', conversationId: 'conv-1' }];
 const schedule = (automation) => `every ${automation.frequency}`;
 
+test('Run now is available only for enabled automations that are not already running', () => {
+  assert.equal(board.canRunNow({ enabled: true }, 'scheduled'), true);
+  assert.equal(board.canRunNow({ enabled: false }, 'paused'), false, 'paused automation is disabled');
+  assert.equal(board.canRunNow({ enabled: true }, 'running'), false, 'duplicate run is disabled');
+  assert.equal(board.canRunNow(null, 'scheduled'), false);
+});
 test('every automation becomes one row with its bot, color, status and steps', () => {
   const rows = board.entries(bots, runs, schedule);
   assert.equal(rows.length, 5);

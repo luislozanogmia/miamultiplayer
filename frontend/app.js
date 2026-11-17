@@ -9203,12 +9203,14 @@
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
     // With steps, editing is a pencil beside the status, reachable without
     // scrolling past long step lists. Without steps, a worded button says what to do.
+    var canRunNow = window.MiaAutomationsBoard.canRunNow(automation, row.status);
+    var runNow = '<button type="button" class="automations-run-now" id="automationsRunNow" title="' + (canRunNow ? 'Run now' : automation.enabled === true ? 'Already running' : 'Turn on this automation to run it') + '" aria-label="Run now"' + (canRunNow ? '' : ' disabled') + '><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.8v12.4L16 10 6 3.8z"/></svg></button>';
     var editIcon = row.steps.length ? '<button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">' +
       '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10 11.7l-2.8.7.7-2.8z"/></svg></button>' : '';
     var addSteps = row.steps.length ? '' : '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">Add steps</button></div>';
     return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
       '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span>' + editIcon + '</div>' + needs + body + last + addSteps;
+      '<span class="automations-row-side">' + side + '</span>' + runNow + editIcon + '</div>' + needs + body + last + addSteps;
   }
 
   function renderAutomationsPage(){
@@ -9252,6 +9254,23 @@
         var run = automationsPage.runHistory[Number(button.getAttribute('data-shelf-row'))];
         if(run) openAutomationsDetail(run.botId, run.automationId);
       });
+    });
+    var runNow = el('#automationsRunNow', body);
+    if(runNow && found) runNow.addEventListener('click', function(){
+      runNow.disabled = true;
+      api('/api/bots/' + encodeURIComponent(found.bot.id) + '/automations/' + encodeURIComponent(found.automation.id) + '/run-now', {method:'POST', body:{}}).then(function(res){
+        if(res.status !== 200 || !res.data || res.data.status !== 'started'){
+          var reason = res.data && res.data.status === 'off' ? 'Turn on this automation before running it.'
+            : res.data && res.data.status === 'missing' ? 'Mia could not find its scheduled run. Save the automation again.'
+              : res.data && (res.data.message || res.data.error) || 'Could not start this automation.';
+          showToast(reason);
+          return;
+        }
+        showToast('Automation started');
+        loadActiveAutomationRuns();
+        window.setTimeout(loadActiveAutomationRuns, 900);
+      }).catch(function(){ showToast('Could not start this automation. Try again.'); })
+        .finally(function(){ if(document.body.contains(runNow)) runNow.disabled = found.automation.enabled !== true; });
     });
     var edit = el('#automationsEdit', body);
     if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
