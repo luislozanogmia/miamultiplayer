@@ -9201,10 +9201,14 @@
     }
     var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
+    // With steps, editing is a pencil beside the status, reachable without
+    // scrolling past long step lists. Without steps, a worded button says what to do.
+    var editIcon = row.steps.length ? '<button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">' +
+      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10 11.7l-2.8.7.7-2.8z"/></svg></button>' : '';
+    var addSteps = row.steps.length ? '' : '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">Add steps</button></div>';
     return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
       '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span></div>' + needs + body + last +
-      '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
+      '<span class="automations-row-side">' + side + '</span>' + editIcon + '</div>' + needs + body + last + addSteps;
   }
 
   function renderAutomationsPage(){
