@@ -2217,6 +2217,12 @@ function createWindow() {
       resolveActor: sessionId => resolveBrowserActor(window, sessionId),
       appRequest: (pathname, request) => desktopAppRequest(window, pathname, request),
       onClerkAuthCallback: receiveAuthCallback,
+      // A notification Mia caught from a site the person allowed. For now it
+      // is shown on the desktop under Mia's name; bots do not act on it yet.
+      onSiteNotification: ({ origin, title, body }) => {
+        if (!Notification.isSupported()) return;
+        new Notification({ title: `${new URL(origin).hostname}: ${title || "Notification"}`.slice(0, 120), body: body.slice(0, 240) }).show();
+      },
     },
   );
   const windowNativeBrowser = nativeBrowser;

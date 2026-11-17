@@ -7,6 +7,7 @@ const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, BrowserWindow, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
+const { createSiteNotifications, siteOrigin } = require("./site-notifications.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
 const { validClerkNonce } = require("./clerk-nonce.cjs");
@@ -402,18 +403,40 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const permissionsPath = statePath ? `${statePath.replace(/\.json$/, "")}-permissions.json` : "";
   const mediaDecisions = new Map();
   const mediaPrompts = new Map();
+  let savedNotifications = {};
   if (permissionsPath) {
     try {
       const saved = JSON.parse(fs.readFileSync(permissionsPath, "utf8"));
       for (const [origin, allowed] of Object.entries((saved && saved.media) || {})) {
         if (/^https:\/\//.test(origin)) mediaDecisions.set(origin, allowed === true);
       }
+      savedNotifications = (saved && saved.notifications) || {};
     } catch (_) { /* First run or unreadable state: prompt again. */ }
   }
+  // A site's notifications come to Mia instead of the desktop, once the person
+  // allows that site; the choice is kept in the same file.
+  const siteNotifications = createSiteNotifications({
+    saved: savedNotifications,
+    save: () => persistMediaDecisions(),
+    log,
+    caught: notification => { if (typeof options.onSiteNotification === "function") options.onSiteNotification(notification); },
+    ask: origin => dialog.showMessageBox(window, {
+      type: "question",
+      title: "Notifications",
+      message: `Let Mia catch notifications from ${origin}?`,
+      detail: "Mia and your bots can then see what this site notifies you about while its tab is open. Mia remembers Allow or Block for this site. You can change it later from the page's right-click menu.",
+      buttons: ["Allow", "Block", "Not Now"],
+      defaultId: 0,
+      cancelId: 2,
+    }).then((result) => {
+      const response = result && result.response;
+      return response === 0 ? true : response === 1 ? false : null;
+    }),
+  });
   function persistMediaDecisions() {
     if (!permissionsPath) return;
     try {
-      fs.writeFileSync(permissionsPath, JSON.stringify({ media: Object.fromEntries(mediaDecisions) }), { mode: 0o600 });
+      fs.writeFileSync(permissionsPath, JSON.stringify({ media: Object.fromEntries(mediaDecisions), notifications: siteNotifications.toJSON() }), { mode: 0o600 });
     } catch (error) {
       log(`browser permission save failed: ${error.message}`);
     }
@@ -738,6 +761,17 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return [{
       label: allowed ? "Block Camera and Microphone for This Site" : "Allow Camera and Microphone for This Site",
       click: () => { rememberMediaDecision(origin, !allowed); if (!wc.isDestroyed()) wc.reload(); },
+    }];
+  }
+  // The same for a site's notifications. It is there on every https page, so
+  // a site can be listened to before it asks.
+  function notificationMenuItems(wc) {
+    const url = wc.isDestroyed() ? "" : wc.getURL();
+    if (!siteOrigin(url)) return [];
+    const allowed = siteNotifications.decided(url) === true;
+    return [{
+      label: allowed ? "Stop Catching This Site's Notifications" : "Let Mia Catch This Site's Notifications",
+      click: () => { siteNotifications.set(url, !allowed); if (!wc.isDestroyed()) wc.reload(); },
     }];
   }
   function mediaRequestOrigin(details, contents) {
@@ -3002,6 +3036,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   function canSleep(tab) {
     if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId || inPane(tab.id)) return false;
     if (sessionGroupId && tab.groupId === sessionGroupId) return false;
+    // A site Mia catches notifications from says nothing while it sleeps.
+    if (siteNotifications.listening(tab.url)) return false;
     if ((tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0 || heldByRenderer.has(tab.id)) return false;
     if (actorRuntime.list().some(actor => actor.tabId === tab.id)) return false;
     const wc = tab.view.webContents;
@@ -3331,6 +3367,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
         { label: "Reload", click: () => wc.reload() },
         ...mediaMenuItems(wc),
+        ...notificationMenuItems(wc),
         { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
@@ -3930,6 +3967,17 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (tab && tab.id === activeId) printChoice(tab);
   }
   ipcMain.on("miaos-browser-print", pagePrintRequest);
+  // A page's notifications (see google-oauth-preload.cjs). Only a web tab's
+  // own page is answered, by the address Mia sees, never one the page names.
+  function siteNotificationPage(event) {
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === event.sender);
+    if (!tab || tab.app || event.sender.isDestroyed() || (event.senderFrame && event.senderFrame !== event.sender.mainFrame)) return "";
+    return event.sender.getURL();
+  }
+  const siteNotificationRaised = (event, payload) => { siteNotifications.receive(siteNotificationPage(event), payload); };
+  ipcMain.on("miaos-browser-site-notification", siteNotificationRaised);
+  ipcMain.handle("miaos-browser-site-notification-state", event => siteNotifications.state(siteNotificationPage(event)));
+  ipcMain.handle("miaos-browser-site-notification-ask", event => siteNotifications.request(siteNotificationPage(event)));
   function authorized(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return false;
     try { return new URL(event.senderFrame.url).origin === trustedOrigin(); } catch (_) { return false; }
@@ -4330,6 +4378,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
     ipcMain.removeListener("miaos-browser-print", pagePrintRequest);
+    ipcMain.removeListener("miaos-browser-site-notification", siteNotificationRaised);
+    ipcMain.removeHandler("miaos-browser-site-notification-state");
+    ipcMain.removeHandler("miaos-browser-site-notification-ask");
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     tabs.clear();
