@@ -261,3 +261,20 @@ test('a Hermes switch warning Mia cannot answer says what happened instead of th
   assert.match(userFacingModelDispatchError(new Error('Expensive Model Warning: this model costs more')), /marks that model as expensive/);
   assert.match(userFacingModelDispatchError(new Error('Data-Training Tier Warning: contributor tier')), /may use your chats for training/);
 });
+
+test('a reply keeps in its record the model the turn ran on, Flow Tandem included', () => {
+  const start = serverSource.indexOf('function replyModelMetadata(');
+  assert.ok(start > 0);
+  const context = vm.createContext({});
+  vm.runInContext(serverSource.slice(start, serverSource.indexOf('\n}\n', start) + 2) + 'this.replyModelMetadata = replyModelMetadata;', context);
+  const { replyModelMetadata } = context;
+  assert.deepEqual(JSON.parse(JSON.stringify(replyModelMetadata({ provider: 'openai-codex', model: 'gpt-6.1-terra', reasoningEffort: 'high', fast: false }))),
+    { model: { provider: 'openai-codex', model: 'gpt-6.1-terra', reasoningEffort: 'high' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(replyModelMetadata({ provider: 'openai-codex', model: 'gpt-6.1-terra' }))),
+    { model: { provider: 'openai-codex', model: 'gpt-6.1-terra' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(replyModelMetadata({ provider: 'openai-codex' }))), {});
+  assert.deepEqual(JSON.parse(JSON.stringify(replyModelMetadata(undefined))), {});
+  const reply = serverSource.slice(serverSource.indexOf('async function runNativeConversationAgentReply('),
+    serverSource.indexOf('async function executeNativeConversationDispatch('));
+  assert.equal((reply.match(/\.\.\.replyModelMetadata\(inferenceOptions\)/g) || []).length, 2);
+});

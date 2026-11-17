@@ -115,10 +115,11 @@ test('Mia provisions agent and bot configurations in the shared Hermes runtime',
   assert.doesNotMatch(config, /  - memory\n|  - session_search\n/, 'no memory or session search shared across bots');
   assert.match(config, /coding_context: off/);
   assert.match(config, /max_turns: 100/);
-  // One compression ceiling for every profile.
+  // One compression size for every profile; Mia compacts chats herself, so
+  // Hermes' own compaction mid-turn is off.
   for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE, MIAOS_BOT_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE]) {
     assert.match(fs.readFileSync(path.join(profileRoot, profile, 'config.yaml'), 'utf8'),
-      /compression:\n  enabled: true\n  threshold_tokens: 300000\n  protect_last_n: 20\n  min_tail_user_messages: 3/, profile);
+      /compression:\n  enabled: false\n  threshold_tokens: 300000\n  protect_last_n: 20\n  min_tail_user_messages: 3/, profile);
   }
   assert.match(agentConfig, /approvals:\n  mode: "off"/);
   assert.match(config, /approvals:\n  mode: "off"/);
