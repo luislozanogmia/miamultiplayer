@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261116-flow-reports-1" />
+<link rel="stylesheet" href="styles.css?v=20261116-flow-setting-1" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -1005,6 +1005,10 @@
           <button class="styled-settings-pill-btn" id="settingsReplayTour">Replay</button>
         </div>
         <div class="styled-settings-row">
+          <div><div class="styled-settings-row-label">Flow mode</div><div class="styled-settings-row-desc">A preview. Adds Flow mode to the sidebar; until you turn it on, nothing of it shows or plays</div></div>
+          <label class="styled-toggle"><input type="checkbox" id="settingsFlowMode" /><span class="gt-track"></span></label>
+        </div>
+        <div class="styled-settings-row" id="settingsFlowModeIntroRow" hidden>
           <div><div class="styled-settings-row-label">Flow mode intro</div><div class="styled-settings-row-desc">Watch the short intro to Flow mode again</div></div>
           <button class="styled-settings-pill-btn" id="settingsReplayAiModeIntro">Watch</button>
         </div>
@@ -1422,12 +1426,12 @@
     <script src="mcp-apps-ui.js?v=20261110-mcp-3"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
-    <script src="app.js?v=20261116-app-history-1"></script>
+    <script src="app.js?v=20261116-flow-setting-1"></script>
     <script src="remote-link-core.js?v=20261114-phone-1"></script>
     <script src="remote-link-host.js?v=20261116-phone-2"></script>
     <script src="ai-mode-intro.js?v=20261114-ai-mode-intro-4"></script>
-    <script src="ai-mode.js?v=20261116-ai-mode-36"></script>
-    <script src="flow-tandem.js?v=20261116-flow-tandem-2"></script>
+    <script src="ai-mode.js?v=20261116-ai-mode-37"></script>
+    <script src="flow-tandem.js?v=20261116-flow-tandem-3"></script>
     <script src="shared-space-live.js?v=20261112-ideas-1"></script>
     <script src="shared-space-talk.js?v=20261112-ideas-1"></script>
     <script src="shared-space-ui.js?v=20261112-ideas-1"></script>

@@ -22677,15 +22677,19 @@
       return !!hit && dialog.contains(hit);
     });
   }
-  // AI mode's intro plays by itself the first time on this computer, once
-  // nothing else sits on top of Mia.
-  function maybePlayAiModeIntro(attempt){
-    var mode = window.MiaAiMode;
-    if(!mode || !mode.introDue()) return;
-    if(!appCovered()) return mode.intro();
-    if(attempt < 150) setTimeout(function(){ maybePlayAiModeIntro(attempt + 1); }, 2000);
+  // Flow mode is turned on here, and only then are its button and its intro there.
+  var flowModeToggle = el('#settingsFlowMode'), flowModeIntroRow = el('#settingsFlowModeIntroRow');
+  function showFlowModeSetting(){
+    var on = !!(window.MiaAiMode && window.MiaAiMode.on());
+    if(flowModeToggle) flowModeToggle.checked = on;
+    if(flowModeIntroRow) flowModeIntroRow.hidden = !on;
   }
-  setTimeout(function(){ maybePlayAiModeIntro(0); }, 3000);
+  showFlowModeSetting();
+  window.addEventListener('load', showFlowModeSetting); // Flow's own file loads after this one
+  if(flowModeToggle) flowModeToggle.addEventListener('change', function(){
+    if(window.MiaAiMode) window.MiaAiMode.setOn(flowModeToggle.checked);
+    showFlowModeSetting();
+  });
   var replayAiModeIntro = el('#settingsReplayAiModeIntro');
   if(replayAiModeIntro) replayAiModeIntro.addEventListener('click', function(){
     closeSettingsDrawer();

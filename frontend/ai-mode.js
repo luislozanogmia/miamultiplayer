@@ -1468,7 +1468,7 @@ function answer(id,ok){
 function tandemTell(){var st=tandemState();tandemSubs.forEach(function(f){try{f(st);}catch(e){}});}
 function tandemState(){
   return {on:tandem,since:tandemSince,line:tandemLine,note:earNote,hearing:earState,working:!!(R&&R.running),talking:busy,
-    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices,reports:reports,reportChoices:REPORTS};
+    mic:!!earParts(),muted:!talkOn||talkMuted,quiet:quiet,voice:!!voices,voices:voices,voiceAt:voice,reports:reports,reportChoices:REPORTS};
 }
 function tandemStart(){
   if(tandem)return;
@@ -1961,11 +1961,24 @@ function introSay(t){
 var VOICE_KEYS='https://elevenlabs.io/app/settings/api-keys';
 var ask='',askNote='',askWhy='';
 function voiceSkipped(){try{return localStorage.getItem('miaAiModeVoiceSkip')||'';}catch(e){return '';}}
+// The voice the person chose is kept between visits, and Flow and Flow Tandem
+// speak in the same one; either can move to the next.
+function voiceKept(count){
+  var at=0;try{at=parseInt(localStorage.getItem('miaAiModeVoice'),10)||0;}catch(e){}
+  return at>0&&at<count?at:0;
+}
+function voiceNext(){
+  if(voices<2)return;
+  voice=(voice+1)%voices;
+  try{localStorage.setItem('miaAiModeVoice',String(voice));}catch(e){}
+  if(host&&$('voice'))$('voice').textContent='Voice '+(voice+1);
+  hush();speak('This is how I sound now.');tandemTell();
+}
 // What the server says about her voice: how many voices, and why none when a key is saved.
 function voiceCheck(){
   return call('/api/ai-mode/voices').then(function(r){
-    voices=+r.data.voices||0;voice=0;askWhy=voices?'':str(r.data.problem,20);
-    $('voice').hidden=voices<2;$('voice').textContent='Voice 1';$('voiceSet').hidden=!!voices;
+    voices=+r.data.voices||0;voice=voiceKept(voices);askWhy=voices?'':str(r.data.problem,20);
+    $('voice').hidden=voices<2;$('voice').textContent='Voice '+(voice+1);$('voiceSet').hidden=!!voices;tandemTell();
     // A saved key that stopped working is said once more even after a skip.
     if(voices){if(ask!=='done')ask='';}
     else if(!ask&&voiceSkipped()!==(askWhy||'none'))ask=window.MiaRemotePhone?'phone':'offer';
@@ -2267,7 +2280,7 @@ function build(){
   $('stop').onclick=function(){hush();halt('');};
   $('mic').onclick=function(){if(talkOn)talkMute();else earToggle();};$('talk').onclick=talkToggle;inkWire();
   $('drive').onclick=tandemStart;
-  $('voice').onclick=function(){voice=(voice+1)%voices;this.textContent='Voice '+(voice+1);hush();speak('This is how I sound now.');};
+  $('voice').onclick=voiceNext;
   siteWire();
   // How blurry the background is stays as the person left it on this computer.
   var k=100;try{k=+localStorage.getItem('miaAiModeBlur')||100;}catch(e){}
@@ -2402,21 +2415,41 @@ document.addEventListener('click',function(e){
   var b=e.target&&e.target.closest&&e.target.closest('[data-ai-mode-enter]');
   if(!b)return;
   e.preventDefault();
+  if(!flowOn())return;
+  try{localStorage.setItem('miaFlowModeOpened','1');}catch(err){}
+  flowShow();
   if(introDue())intro();else enter();
 });
-// The intro shows what AI mode is. Mia plays it by itself the first time on
-// this computer, and Settings can play it again.
+// Flow mode is off until the person turns it on in Settings. Off, its button is
+// not in the sidebar and its intro never plays, so nothing of Flow is seen or
+// heard unasked; Flow Tandem is not part of this and stays. Turned on, the
+// button is there with a gold glow, like a new invite, until it is first opened.
+function flowOn(){try{return localStorage.getItem('miaFlowModeOn')==='1';}catch(err){return false;}}
+function flowShow(){
+  var on=flowOn(),b=document.getElementById('aiModeEntry'),opened=false;
+  try{opened=localStorage.getItem('miaFlowModeOpened')==='1';}catch(err){}
+  document.body.classList.toggle('flow-mode-on',on);
+  if(b)b.classList.toggle('fresh',on&&!opened);
+}
+function flowSet(on){
+  try{if(on)localStorage.setItem('miaFlowModeOn','1');else localStorage.removeItem('miaFlowModeOn');}catch(err){}
+  flowShow();
+}
+flowShow();
+// The intro shows what Flow mode is. It plays the first time the person opens
+// Flow, and Settings can play it again; it never plays by itself.
 function introDue(){
   var seen=true;try{seen=localStorage.getItem('miaAiModeIntroSeen')==='1';}catch(err){}
   return !seen&&!open&&!!window.MiaAiModeIntro;
 }
 function intro(){
-  if(open||!window.MiaAiModeIntro)return;
+  if(open||!flowOn()||!window.MiaAiModeIntro)return;
   window.MiaAiModeIntro.play({sound:!muted,say:introSay}).then(function(r){
     try{localStorage.setItem('miaAiModeIntroSeen','1');}catch(err){}
     if(r==='try')enter();
   });
 }
 window.MiaAiMode={enter:enter,leave:leave,intro:intro,introDue:introDue,bots:function(){if(open&&R)redraw();},report:reportHeard,
-  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,reports:reportsSet,on:function(f){tandemSubs.push(f);}}};
+  tandem:{start:tandemStart,stage:tandemStage,mic:tandemMic,voice:function(){quietSet();tandemTell();},leave:leave,state:tandemState,reports:reportsSet,voiceNext:voiceNext,on:function(f){tandemSubs.push(f);}},
+  on:flowOn,setOn:flowSet};
 })();
