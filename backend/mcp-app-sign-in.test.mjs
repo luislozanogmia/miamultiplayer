@@ -63,6 +63,31 @@ test('a login that ends with no saved sign-in is an error, whatever its exit cod
   assert.equal(told.length, 0);
 });
 
+test('cancel settles a pending start and ignores late success from the replaced login', async () => {
+  const oldChild = login(), replacement = login(), told = [];
+  let saved = false, spawned = 0;
+  const flow = signIn.createMcpAppSignIn({
+    spawnLogin: () => spawned++ === 0 ? oldChild : replacement,
+    signedIn: () => saved, onSignedIn: entry => told.push(entry.appId), env: {},
+  });
+  const pending = flow.start('owner@example.test', APP, 'u_attio');
+  flow.cancel(APP.id);
+  assert.deepEqual(await pending, { state: 'error' });
+  assert.equal(oldChild.killed, true);
+  assert.equal(flow.stateOf(APP.id), null);
+  const next = flow.start('owner@example.test', APP, 'u_attio');
+  oldChild.stdout.emit('data', PROMPT);
+  saved = true;
+  oldChild.emit('close', 0);
+  await new Promise(setImmediate);
+  assert.deepEqual(told, []);
+  assert.equal(flow.stateOf(APP.id), 'starting');
+  saved = false;
+  replacement.stdout.emit('data', PROMPT);
+  assert.equal((await next).state, 'waiting');
+  flow.cancel(APP.id);
+});
+
 test('a login that never prints its address, or never finishes, is stopped', async (t) => {
   // The flow's own timers never hold the app open, so the test holds the loop.
   const hold = setInterval(() => {}, 1000);

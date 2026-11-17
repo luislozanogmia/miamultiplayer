@@ -4561,7 +4561,17 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .mcp-app-where a{color:inherit;text-decoration:underline;text-underline-offset:2px;}
 .mcp-app-where a:hover{color:var(--sand-text-primary);}
 .mcp-app-key{display:flex;gap:8px;}
-.mcp-app-key input{flex:1;min-width:0;border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;background:var(--sand-bg-base);color:var(--sand-text-primary);}
+.mcp-app-key input,.mcp-app-oauth input{flex:1;min-width:0;border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;background:var(--sand-bg-base);color:var(--sand-text-primary);}
+.mcp-app-oauth{font-size:13px;}
+.mcp-app-oauth summary{cursor:pointer;color:var(--sand-text-primary);border:1px solid var(--sand-border-default);border-radius:8px;padding:6px 12px;width:fit-content;}
+.mcp-app-oauth summary:hover{background:var(--sand-fill-ghost-hover);}
+.mcp-app-oauth .mcp-app-hint{margin:8px 0;}
+.mcp-app-oauth code{user-select:all;}
+.mcp-app-oauth form{display:grid;gap:8px;}
+.mcp-app-oauth label{display:grid;gap:4px;font-size:12px;color:var(--sand-text-secondary);}
+.mcp-app-oauth-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.mcp-app-oauth-status{font-size:12px;color:var(--sand-text-secondary);overflow-wrap:anywhere;}
+.mcp-app-oauth-status:empty{display:none;}
 .mcp-app-foot{display:flex;align-items:center;gap:8px;margin-top:2px;padding-top:10px;border-top:1px solid var(--sand-border-subtle);}
 .mcp-app-action{flex:none;border:1px solid var(--sand-border-default);background:var(--sand-bg-base);color:var(--sand-text-primary);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;white-space:nowrap;cursor:pointer;}
 .mcp-app-action:hover{background:var(--sand-fill-ghost-hover);}

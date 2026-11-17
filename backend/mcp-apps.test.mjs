@@ -6,7 +6,13 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const apps = require('./mcp-apps');
-const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-apps-'));
+const tempDirectories = [];
+const temp = () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-apps-'));
+  tempDirectories.push(directory);
+  return directory;
+};
+test.after(() => { for (const directory of tempDirectories) fs.rmSync(directory, { recursive: true, force: true }); });
 const PNG = 'data:image/png;base64,' + Buffer.from([137, 80, 78, 71]).toString('base64');
 
 test('an MCP app is a vendor server address or package, a sign-in type and a logo, with no key', () => {
@@ -105,4 +111,153 @@ test('ElevenLabs is offered to everyone, and a saved key can be read back for Mi
   apps.setProfileKey(env, apps.keyEnvName('elevenlabs'), 'a-test-value');
   assert.equal(apps.readProfileKey(env, apps.keyEnvName('elevenlabs')), 'a-test-value');
   assert.equal(apps.readProfileKey(env, 'MIA_MCP_OTHER_KEY'), '');
+});
+
+// All credential strings below are synthetic fixtures, never real credentials.
+test('OAuth credentials can be validated before any mutation and return only credential fields', () => {
+  assert.deepEqual(apps.validateOAuthClientCredentials({ clientId: 'fixture-id', clientSecret: 'fixture-secret', extra: 'ignored' }),
+    { clientId: 'fixture-id', clientSecret: 'fixture-secret' });
+  for (const value of [null, undefined, [], {}, { clientId: 'fixture-id' },
+    { clientId: ' fixture-id', clientSecret: 'fixture-secret' }]) {
+    assert.throws(() => apps.validateOAuthClientCredentials(value), error => error instanceof apps.McpAppError && error.code === 'invalid_oauth_client');
+  }
+});
+test('OAuth metadata validates ports and strips credentials from store and public records', () => {
+  const input = { name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', auth: 'oauth',
+    oauthClient: { redirectPort: 27890, clientId: 'fixture-id', clientSecret: 'fixture-secret' } };
+  const app = apps.cleanMcpApp(input);
+  assert.deepEqual(app.oauthClient, { redirectPort: 27890 });
+  assert.doesNotMatch(JSON.stringify(app), /fixture-|clientSecret|clientId/);
+  for (const value of [{}, [], 'bad', { redirectPort: '27890' }, { redirectPort: 0 },
+    { redirectPort: -1 }, { redirectPort: 65536 }, { redirectPort: 1.5 }]) {
+    assert.throws(() => apps.cleanMcpApp({ ...input, oauthClient: value }), /redirect port/);
+  }
+  assert.equal(apps.cleanMcpApp({ ...input, auth: 'none' }).oauthClient, undefined);
+  const file = path.join(temp(), 'apps.json');
+  const store = apps.createMcpAppsStore(file);
+  store.add({ ...input, oauthClient: null });
+  assert.deepEqual(store.setOAuthClient('asana', input.oauthClient).oauthClient, { redirectPort: 27890 });
+  assert.deepEqual(store.get('asana').oauthClient, { redirectPort: 27890 });
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /fixture-|clientSecret|clientId/);
+  assert.doesNotMatch(JSON.stringify(apps.publicMcpApp(store.get('asana'), false)), /fixture-|clientSecret|clientId/);
+  assert.equal(store.setOAuthClient('asana', null).oauthClient, undefined);
+  assert.equal(store.get('asana').oauthClient, undefined);
+  assert.throws(() => store.setOAuthClient('missing', input.oauthClient), /no longer/);
+  store.add({ name: 'Wiki', url: 'https://wiki.example.test' });
+  assert.throws(() => store.setOAuthClient('wiki', input.oauthClient), /OAuth app/);
+});
+
+test('exact HTTPS Asana hostname or explicit metadata requires an OAuth client before sign-in', () => {
+  for (const url of ['https://mcp.asana.com/v2/mcp', 'https://mcp.asana.com:443/sse', 'https://MCP.ASANA.COM/mcp']) {
+    assert.equal(apps.requiresOAuthClient({ auth: 'oauth', url }), true);
+  }
+  for (const url of ['http://mcp.asana.com/mcp', 'https://mcp.asana.com.evil.test/mcp',
+    'https://evil.test/mcp.asana.com', 'https://sub.mcp.asana.com/mcp', 'https://mcp.asana.com./mcp', 'invalid']) {
+    assert.equal(apps.requiresOAuthClient({ auth: 'oauth', url }), false, url);
+  }
+  assert.equal(apps.requiresOAuthClient({ auth: 'none', url: 'https://mcp.asana.com/mcp' }), false);
+  assert.equal(apps.requiresOAuthClient({ auth: 'oauth', url: 'https://other.test', oauthClient: { redirectPort: 27890 } }), true);
+  const app = apps.cleanMcpApp({ name: 'Asana', url: 'https://mcp.asana.com/mcp', auth: 'oauth' });
+  for (const options of [{}, { signedIn: true }, { state: 'waiting' }, { state: 'error' }]) {
+    const shown = apps.publicMcpApp(app, false, options);
+    assert.equal(shown.status, 'needs_oauth_client');
+    assert.equal(shown.oauthClientRequired, true);
+    assert.equal(shown.oauthClientConfigured, false);
+    assert.equal(shown.oauthRedirectUri, 'http://127.0.0.1:27890/callback');
+  }
+  assert.equal(apps.publicMcpApp(app, false, { oauthClientConfigured: true }).status, 'needs_sign_in');
+  assert.equal(apps.publicMcpApp(app, false, { oauthClientConfigured: true, signedIn: true }).status, 'signed_in');
+  assert.equal(apps.publicMcpApp({ ...app, oauthClient: { redirectPort: 28000 } }, false).oauthRedirectUri, 'http://127.0.0.1:28000/callback');
+});
+
+test('nested Hermes OAuth settings reference env names and preserve automatic OAuth for other apps', () => {
+  const app = apps.cleanMcpApp({ name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', auth: 'oauth',
+    oauthClient: { redirectPort: 27890, clientSecret: 'fixture-secret' } });
+  const lines = apps.hermesMcpServerLines([app]).join('\n');
+  assert.match(lines, /    auth: oauth\n    oauth:\n      client_id: "\$\{MIA_MCP_ASANA_CLIENT_ID\}"\n      client_secret: "\$\{MIA_MCP_ASANA_CLIENT_SECRET\}"\n      redirect_port: 27890\n      token_endpoint_auth_method: client_secret_post\n      cimd: false/);
+  assert.doesNotMatch(lines, /fixture-secret/);
+  const automatic = apps.cleanMcpApp({ name: 'Other', url: 'https://other.test/mcp', auth: 'oauth' });
+  assert.doesNotMatch(apps.hermesMcpServerLines([automatic]).join('\n'), /client_id|cimd|redirect_port/);
+  assert.equal(apps.publicMcpApp(automatic, false).status, 'needs_sign_in');
+  assert.equal(apps.publicMcpApp(automatic, false).oauthClientRequired, false);
+});
+
+test('OAuth profile env helpers replace both values privately and remove both without touching unrelated values', () => {
+  const directory = path.join(temp(), 'profile');
+  fs.mkdirSync(directory, { mode: 0o755 });
+  const env = path.join(directory, '.env');
+  const names = apps.oauthClientEnvNames('asana');
+  assert.deepEqual(names, { clientId: 'MIA_MCP_ASANA_CLIENT_ID', clientSecret: 'MIA_MCP_ASANA_CLIENT_SECRET' });
+  assert.equal(apps.oauthClientEnvNames('other-app').clientId, 'MIA_MCP_OTHER_APP_CLIENT_ID');
+  assert.throws(() => apps.oauthClientEnvNames('bad\nname'), /identifier/);
+  assert.throws(() => apps.oauthClientEnvNames('asana\n'), /identifier/);
+  assert.equal(apps.hasProfileOAuthClient(env, 'asana'), false);
+  fs.writeFileSync(env, '# retained\nOTHER=1\nMIA_MCP_ASANA_CLIENT_ID=old\nexport MIA_MCP_ASANA_CLIENT_SECRET=old\n', { mode: 0o644 });
+  const credentials = { clientId: 'fixture-id_123', clientSecret: 'fixture-secret._~:/+=-' };
+  assert.equal(apps.setProfileOAuthClient(env, 'asana', credentials), undefined);
+  assert.equal(apps.hasProfileOAuthClient(env, 'asana'), true);
+  const text = fs.readFileSync(env, 'utf8');
+  assert.match(text, /# retained\nOTHER=1\n/);
+  for (const [field, name] of Object.entries(names)) {
+    assert.equal(text.split('\n').filter(line => line.startsWith(name + '=')).length, 1);
+    assert.ok(text.includes(`${name}=${credentials[field]}\n`));
+  }
+  assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(env).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(directory), ['.env']);
+  apps.setProfileOAuthClient(env, 'asana', { clientId: 'fixture-replacement', clientSecret: 'fixture-replacement' });
+  assert.doesNotMatch(fs.readFileSync(env, 'utf8'), /fixture-id_123|fixture-secret/);
+  apps.setProfileOAuthClient(env, 'asana', null);
+  assert.equal(apps.hasProfileOAuthClient(env, 'asana'), false);
+  assert.doesNotMatch(fs.readFileSync(env, 'utf8'), /MIA_MCP_ASANA_CLIENT/);
+  assert.match(fs.readFileSync(env, 'utf8'), /OTHER=1/);
+});
+
+test('failed atomic OAuth env replacement leaves the original intact and removes its private temporary file', (t) => {
+  const directory = temp();
+  const env = path.join(directory, '.env');
+  fs.writeFileSync(env, 'OTHER=preserved\n');
+  t.mock.method(fs, 'renameSync', () => { throw new Error('fixture-storage-failure'); });
+  assert.throws(() => apps.setProfileOAuthClient(env, 'asana', {
+    clientId: 'fixture-id', clientSecret: 'fixture-secret',
+  }), error => error.code === 'oauth_client_storage_failed' && !/fixture-/.test(error.message));
+  assert.equal(fs.readFileSync(env, 'utf8'), 'OTHER=preserved\n');
+  assert.deepEqual(fs.readdirSync(directory), ['.env']);
+});
+
+test('unsafe OAuth credentials are rejected without exposing values or changing the environment', () => {
+  const env = path.join(temp(), '.env');
+  const baseline = 'OTHER=untouched\n';
+  fs.writeFileSync(env, baseline);
+  const invalid = ['', 'fixture\n', 'fixture\r', 'fixture\nINJECT=value', 'fixture space', 'fixture\t',
+    'fixture"', "fixture'", 'fixture\\', 'fixture$EXPAND', 'fixture#comment', 'fixture;command',
+    'fixture`command`', 'fixture\0', 'fixtureé', 'x'.repeat(4097), null, 123];
+  for (const value of invalid) {
+    for (const field of ['clientId', 'clientSecret']) {
+      assert.throws(() => apps.setProfileOAuthClient(env, 'asana', {
+        clientId: 'fixture-id', clientSecret: 'fixture-secret', [field]: value,
+      }), (error) => {
+        assert.equal(error.code, 'invalid_oauth_client');
+        if (typeof value === 'string' && value) assert.ok(!error.message.includes(value));
+        assert.doesNotMatch(error.stack, /fixture-secret|fixture-id/);
+        return true;
+      });
+    }
+  }
+  assert.equal(fs.readFileSync(env, 'utf8'), baseline);
+  for (const body of [
+    'MIA_MCP_ASANA_CLIENT_ID=fixture-id\n',
+    'MIA_MCP_ASANA_CLIENT_SECRET=fixture-secret\n',
+    'MIA_MCP_ASANA_CLIENT_ID=\nMIA_MCP_ASANA_CLIENT_SECRET=fixture-secret\n',
+    'MIA_MCP_ASANA_CLIENT_ID=fixture-id\nMIA_MCP_ASANA_CLIENT_SECRET="quoted"\n',
+    'MIA_MCP_ASANA_CLIENT_ID=fixture-id\nMIA_MCP_ASANA_CLIENT_SECRET=fixture$EXPAND\n',
+    'MIA_MCP_ASANA_CLIENT_ID=fixture-id\nMIA_MCP_ASANA_CLIENT_SECRET=fixture#comment\n',
+    'MIA_MCP_ASANA_CLIENT_ID=fixture-id\nMIA_MCP_ASANA_CLIENT_ID=duplicate\nMIA_MCP_ASANA_CLIENT_SECRET=fixture-secret\n',
+  ]) {
+    fs.writeFileSync(env, body);
+    assert.equal(apps.hasProfileOAuthClient(env, 'asana'), false);
+  }
+  assert.throws(() => apps.setProfileOAuthClient(path.join(env, 'unwritable'), 'asana', {
+    clientId: 'fixture-id', clientSecret: 'fixture-secret',
+  }), error => error.code === 'oauth_client_storage_failed' && !/fixture-/.test(error.message));
 });
