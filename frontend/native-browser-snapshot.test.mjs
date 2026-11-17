@@ -202,7 +202,7 @@ function layoutHarness() {
   const layoutSource = source.slice(source.indexOf('  function layout() {'), source.indexOf('  function render(next) {'));
   const sent = [], box = () => ({ x: 0, y: 0, width: 700, height: 600 });
   const c = {
-    JSON, scheduled: false, lastLayout: '', dialog: null, staged: null,
+    JSON, scheduled: false, lastLayout: '', dialog: null, staged: null, onTop: null,
     requestAnimationFrame: fn => fn(),
     open: true, overlay: { hidden: false }, screen: { getBoundingClientRect: box },
     pip: { hidden: true }, pipView: { getBoundingClientRect: box },
@@ -213,6 +213,7 @@ function layoutHarness() {
   const matches = (selector, className) => selector.split(',').some(part =>
     part.trim().split('.').filter(Boolean).every(name => className.split(' ').includes(name)));
   c.document = { body: { classList: { contains: () => false } },
+    elementFromPoint: () => c.onTop,
     querySelector: selector => c.dialog && matches(selector, c.dialog.className) ? c.dialog : null };
   vm.createContext(c);
   vm.runInContext(layoutSource, c);
@@ -232,6 +233,32 @@ test('a dialog over the page hides the live view without pausing what it plays',
   h.c.layout();
   assert.equal(h.sent.at(-1).visible, true);
   assert.equal(h.sent.at(-1).menu, undefined);
+});
+
+test('a layer the page was never told about, like the Flow intro, hides the live view and gives it back', () => {
+  const h = layoutHarness();
+  h.c.overlay.contains = h.c.pip.contains = node => node === 'own';
+  h.c.onTop = 'own';
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true);
+  h.c.onTop = 'intro';
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, false);
+  assert.equal(h.sent.at(-1).panelOpen, true);
+  assert.equal(h.sent.at(-1).menu, true, 'what plays in the page is not paused');
+  const count = h.sent.length;
+  h.c.layout();
+  assert.equal(h.sent.length, count, 'nothing is sent again while nothing changed');
+  h.c.onTop = 'own';
+  h.c.layout();
+  assert.equal(h.sent.at(-1).visible, true);
+  assert.equal(h.sent.at(-1).menu, undefined);
+  h.c.pip.hidden = false;
+  h.c.layout();
+  assert.equal(h.sent.at(-1).dockVisible, true);
+  h.c.onTop = 'intro';
+  h.c.layout();
+  assert.equal(h.sent.at(-1).dockVisible, false, 'the tab docked below the chat steps aside too');
 });
 
 test('an open drawer over the page hides the live view the same way, and it comes back on close', () => {

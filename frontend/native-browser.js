@@ -516,6 +516,9 @@
   // Full-window cards and viewers are added straight to the body; adding or
   // removing one lays the live page out again so it never covers them.
   new MutationObserver(function () { layout(); }).observe(document.body, { childList: true });
+  // Not every layer says when it opens or closes, so while a live page is on
+  // screen its place is looked at again a few times a second.
+  setInterval(function () { if (open || !pip.hidden) layout(); }, 300);
   // A drawer's scrim stays in the page and opens by a class, so a scrim
   // opening or closing lays the live page out again too.
   new MutationObserver(function (changes) {
@@ -861,15 +864,18 @@
         !document.body.classList.contains('native-browser-occluded-about') &&
         !document.body.classList.contains('native-browser-occluded-conversation') &&
         !dialogOpen;
+      // Anything else laid over the page's place hides it the same way.
+      var pageCovered = visible && coveredBy(rect, overlay);
+      if (pageCovered) visible = false;
       var payload = { action: 'layout', visible: visible, panelOpen: open,
         bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
       var pipRect = pipView.getBoundingClientRect();
       payload.dock = { x: pipRect.x, y: pipRect.y, width: pipRect.width, height: pipRect.height };
       // The dock sits beside the chat, so only full-window layers cover it.
-      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 && !dialogOpen;
+      payload.dockVisible = !pip.hidden && pipRect.width > 0 && pipRect.height > 0 && !dialogOpen && !coveredBy(pipRect, pip);
       // A menu (over a still of the page) or a dialog only covers the page for
       // a while, so the live view steps aside without pausing what it plays.
-      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered || dialogOpen) payload.menu = true;
+      if (downloadsOpen || suggestCovered || tabsListOpen || followMenuOpen || callMenuCovered || tipsCovered || dialogOpen || pageCovered) payload.menu = true;
       if (staged !== null) {
         payload = { action: 'layout', visible: !!staged, panelOpen: !!staged, dockVisible: false,
           bounds: staged || { x: 0, y: 0, width: 0, height: 0 } };
@@ -877,6 +883,26 @@
       var key = JSON.stringify(payload);
       if (key !== lastLayout) { lastLayout = key; bridge.command(payload).catch(function () {}); }
     });
+  }
+  // Whether something else in the app is drawn over a rectangle the live page
+  // would fill. The page is a native view and always paints above the app, so
+  // anything laid over its place (a card, a prompt, a full-window intro) must
+  // be found here, whoever made it: nine points across the rectangle are asked
+  // what is on top, and the middle, or any three, being something outside
+  // `own` counts. One point alone is a toast or a tip at an edge, and the page
+  // stays for those.
+  function coveredBy(rect, own) {
+    if (rect.width < 40 || rect.height < 40) return false;
+    var hits = 0, middle = false;
+    [0.08, 0.5, 0.92].forEach(function (fy) {
+      [0.08, 0.5, 0.92].forEach(function (fx) {
+        var top = document.elementFromPoint(rect.x + rect.width * fx, rect.y + rect.height * fy);
+        if (!top || own.contains(top)) return;
+        hits += 1;
+        if (fx === 0.5 && fy === 0.5) middle = true;
+      });
+    });
+    return middle || hits >= 3;
   }
   function render(next) {
     var changedTab = state.activeId !== next.activeId;
