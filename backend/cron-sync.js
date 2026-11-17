@@ -1470,25 +1470,28 @@ function automationRunChecklistSince(bot, automationId, sinceMs) {
   };
 }
 
-// The job a live Hermes session is a run of, or '' when it is not a scheduled
-// run. A run's session is named cron_<job id>_<start time>; a long run that
-// compacts its history goes on under a new id whose parents lead back to it.
-function cronJobIdForSession(sessionId) {
+// Find the durable root of a scheduled session. The name alone is not proof:
+// an old session of the same job must not inherit the current run's browser.
+// A long run can continue under a new session whose parents lead to the root.
+function cronRootForSession(sessionId) {
   const named = (id) => (/^cron_(.+)_\d{8}_\d{6}$/.exec(id) || [])[1] || '';
   let id = String(sessionId || '');
-  if (!id || id.length > 200 || named(id) || !fs.existsSync(HERMES_STATE_DB)) return named(id);
+  if (!id || id.length > 200 || !fs.existsSync(HERMES_STATE_DB)) return null;
   const Database = require('better-sqlite3');
   const state = new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true });
   try {
-    const parent = state.prepare('SELECT parent_session_id AS parent FROM sessions WHERE id = ?');
+    const parent = state.prepare('SELECT parent_session_id AS parent, source, started_at AS startedAt FROM sessions WHERE id = ?');
     for (let hop = 0; hop < 8; hop += 1) {
       const row = parent.get(id);
-      id = String((row && row.parent) || '');
-      if (!id || named(id)) return named(id);
+      if (!row) return null;
+      const jobId = named(id);
+      if (jobId) return row.source === 'cron' ? { jobId, startedAt: row.startedAt } : null;
+      id = String(row.parent || '');
+      if (!id) return null;
     }
-    return '';
+    return null;
   } catch (_) {
-    return '';
+    return null;
   } finally {
     state.close();
   }
@@ -1497,11 +1500,16 @@ function cronJobIdForSession(sessionId) {
 // The scheduled run going on right now that a live Hermes session belongs to,
 // with the folders that run works in, or null. A finished run matches nothing.
 function activeBotCronRunForSession(conn, sessionId) {
-  const jobId = cronJobIdForSession(sessionId);
-  if (!jobId) return null;
-  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === jobId);
+  const root = cronRootForSession(sessionId);
+  if (!root) return null;
+  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === root.jobId);
   if (!run) return null;
-  const job = readHermesJobs().byId.get(jobId) || {};
+  // Hermes creates the root session after marking this execution running.
+  // Comparing durable start times rejects a prior execution of the same job.
+  const sessionStarted = hermesTimestampMs(root.startedAt);
+  const runStarted = hermesTimestampMs(run.startedAt);
+  if (!Number.isFinite(sessionStarted) || !Number.isFinite(runStarted) || sessionStarted < runStarted - 1000 || sessionStarted > Date.now() + 1000) return null;
+  const job = readHermesJobs().byId.get(root.jobId) || {};
   return { ...run, folders: [job.artifact_workspace, job.workdir].filter(Boolean) };
 }
 
