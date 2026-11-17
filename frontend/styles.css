@@ -1191,7 +1191,8 @@
   /* AI mode: the way in sits above the footer; in the narrow rail only its icon shows. */
   .ai-mode-entry{flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:pointer;}
   .ai-mode-entry:hover{background:var(--sand-fill-ghost-hover);}
-  .ai-mode-entry-what{display:inline-grid;place-items:center;width:14px;height:14px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:9.5px;line-height:1;opacity:.8;}
+  .ai-mode-entry-what{display:inline-grid;place-items:center;flex:none;width:16px;height:16px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:10px;line-height:1;cursor:help;}
+  .ai-mode-entry-what:hover{border-color:var(--sand-border-focus);color:var(--sand-text-primary);}
   .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
   @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;}.ai-mode-entry-text,.ai-mode-entry-what,.ai-mode-entry-tag{display:none;}}
   .ai-mode-entry[hidden]{display:none;}
@@ -4199,7 +4200,7 @@ body.mia-session-mode #localBrowserCloseBtn,body.mia-session-mode .native-browse
 .mia-tab.private{opacity:.92;}
 @media (prefers-reduced-motion:reduce){.mia-space-live-dot{animation:none;}.mia-space-mark{transition:none;}}
 /* One tooltip for icon buttons (mia-tooltip.js): shows in about 80 ms. */
-.mia-tip{position:fixed;left:0;top:0;z-index:100000;max-width:240px;padding:4px 8px;border-radius:6px;background:var(--sand-text-primary,#1f1f1f);color:var(--sand-bg-base,#fff);font:500 12px/16px var(--styled-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transform:translateY(-2px);transition:opacity 60ms ease,transform 60ms ease,visibility 0s linear 60ms;}
+.mia-tip{position:fixed;left:0;top:0;z-index:100000;box-sizing:border-box;max-width:min(260px,calc(100vw - 16px));padding:7px 10px;border-radius:8px;background:var(--sand-text-primary,#1f1f1f);color:var(--sand-bg-base,#fff);box-shadow:0 4px 14px rgba(0,0,0,.18);font:500 12px/16px var(--styled-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif);white-space:normal;overflow-wrap:break-word;pointer-events:none;opacity:0;visibility:hidden;transform:translateY(-2px);transition:opacity 60ms ease,transform 60ms ease,visibility 0s linear 60ms;}
 .mia-tip.is-visible{opacity:1;visibility:visible;transform:none;transition:opacity 60ms ease,transform 60ms ease;}
 @media (prefers-reduced-motion:reduce){.mia-tip,.mia-tip.is-visible{transition:none;transform:none;}}
 /* View tips (view-tips.js): a Mote throws a curved arrow at a real control,
