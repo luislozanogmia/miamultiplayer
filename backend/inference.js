@@ -901,6 +901,15 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ].join('\n'),
     WORKING_METHOD,
     MIAOS_BOT_WEB_POLICY,
+    // A scheduled run drives the Mia browser through ghost-cli in its terminal,
+    // like the bot's chat does. Without this text the run finds no "browser"
+    // tool and reports browser steps as blocked.
+    MIAOS_AGENT_SEARCH_ONLY ? '' : [
+      'Mia browser: the browser is not a separate tool. Use ghost-cli in your terminal to reach your own tab group, the same way your chat does.',
+      MIAOS_BOT_BROWSER_NUDGE,
+      MIAOS_APP_OPEN_POLICY,
+      MIAOS_FOLDER_OPEN_POLICY,
+    ].join('\n\n'),
     `Automation:\nName: ${automationName}\nSchedule: ${botAutomationSchedule(automation)}`,
     automationPrompt ? `Task:\n${automationPrompt}` : '',
     // Steps run one at a time, in order, so a long task can't silently skip
