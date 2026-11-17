@@ -2407,10 +2407,14 @@ function enter(){
 function leave(){
   if(!open)return;
   if(R&&R.running)halt('');
+  // In Flow Tandem the stage is not on screen, so it is put away at once: fading it out
+  // would flash the Flow welcome over the app for a moment.
+  var away=tandem;
   open=false;clearTimeout(drawTimer);drawTimer=null;inkSet(false);hush();earStop();talkStop();seedId++;
   if(fullOwn&&document.fullscreenElement){fullOwn=false;try{document.exitFullscreen();}catch(e){}}
   var old=sock;sock=null;conv='';opening=null;try{if(old){old.onclose=null;old.close();}}catch(e){}closeBots();
   if(master)master.gain.setTargetAtTime(0,ac.currentTime,0.6);
+  if(away)host.hidden=true;
   host.classList.remove('tandem');tandem=false;tandemTalk=false;watchStop();tandemTell();
   site.open=false;sitePlace();if(webOff){webOff();webOff=null;}
   $('stage').classList.remove('on');$('hud').classList.remove('on');$('intent').classList.remove('on');

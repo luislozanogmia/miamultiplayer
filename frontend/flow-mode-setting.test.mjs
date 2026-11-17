@@ -60,3 +60,11 @@ test('Flow Tandem keeps its own button, whatever the Flow mode setting', () => {
   assert.match(html, /id="flowTandemEntry" data-flow-tandem-start/);
   assert.doesNotMatch(css, /flow-mode-on[^{]*#flowTandemEntry/);
 });
+
+test('leaving Flow Tandem puts the stage away at once, so the Flow welcome never flashes over the app', async () => {
+  const flow = await readFile(new URL('./ai-mode.js', import.meta.url), 'utf8');
+  const leave = flow.slice(flow.indexOf('function leave(){'), flow.indexOf("document.addEventListener('click'", flow.indexOf('function leave(){')));
+  const away = leave.indexOf('var away=tandem;'), hide = leave.indexOf('if(away)host.hidden=true;'), shown = leave.indexOf("host.classList.remove('tandem')");
+  assert.ok(away > 0 && hide > away && shown > hide, 'the stage is hidden before it stops being out of sight');
+  assert.match(leave, /setTimeout\(function\(\)\{if\(!open\)\{host\.hidden=true;/, 'leaving the Flow stage itself still fades out');
+});
