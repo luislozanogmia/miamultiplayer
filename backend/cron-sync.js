@@ -837,6 +837,31 @@ async function runBotAutomationNow(bot, automationId) {
   return { status: 'started', jobId: job.id };
 }
 
+// Stop a run that is going now. Mia writes a stop request named after the
+// run's execution id; the run-report plugin, loaded into every scheduled
+// run, sees it within a second and interrupts that run only. The automation
+// itself stays on; its next scheduled runs happen as usual.
+// -> { status: 'stopping'|'not_running'|'missing', executionId }
+const CRON_STOP_DIR = path.join(path.dirname(HERMES_CRON_EXECUTIONS_DB), 'mia-stop');
+const CRON_STOP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+function stopBotAutomationRun(conn, bot, automationId) {
+  const automation = botAutomations(bot).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  const run = listActiveBotCronRuns(conn, { includePaused: true }).find((item) => item.bot && item.bot.id === bot.id && item.automationId === automationId);
+  if (!run || !/^[A-Za-z0-9_-]{1,80}$/.test(String(run.sessionId || ''))) return { status: 'not_running' };
+  fs.mkdirSync(CRON_STOP_DIR, { recursive: true, mode: 0o700 });
+  // Old requests are cleared so the folder never grows.
+  for (const name of fs.readdirSync(CRON_STOP_DIR)) {
+    try {
+      const file = path.join(CRON_STOP_DIR, name);
+      if (Date.now() - fs.lstatSync(file).mtimeMs > CRON_STOP_MAX_AGE_MS) fs.rmSync(file, { force: true });
+    } catch (_) { /* gone already */ }
+  }
+  const file = path.join(CRON_STOP_DIR, run.sessionId);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
+  return { status: 'stopping', executionId: run.sessionId };
+}
+
 function schedulerUtcOffsetMinutes() {
   return new Promise((resolve, reject) => {
     const source = 'import sys; sys.path.insert(0, sys.argv[1]); from hermes_time import now; print(int(-now().utcoffset().total_seconds() / 60))';
@@ -1274,7 +1299,13 @@ function listInterruptedBotCronRuns(conn) {
   }
 }
 
-function listActiveBotCronRuns(conn) {
+function executionOwnerAlive(pid) {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0) return false;
+  try { process.kill(value, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+function listActiveBotCronRuns(conn, options = {}) {
   if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
   const registry = readHermesJobs();
   const Database = require('better-sqlite3');
@@ -1282,7 +1313,7 @@ function listActiveBotCronRuns(conn) {
   try {
     if (!hasSqliteTable(executions, 'executions')) return [];
     const latest = executions.prepare(
-      `SELECT id AS executionId, status,
+      `SELECT id AS executionId, status, pid,
               coalesce(started_at, claimed_at) AS startedAt
          FROM executions
         WHERE job_id = ?
@@ -1293,11 +1324,17 @@ function listActiveBotCronRuns(conn) {
       migrateBotAutomations(bot);
       for (const automation of bot.automations) {
         const jobId = bot.hermesCronJobIds[automation.id];
-        if (!jobId || !automationToCronExpr(automation) || !jobPromptFor(bot, automation)) continue;
+        if (!jobId) continue;
         const job = registry.byId.get(jobId) || null;
-        if (!jobOwnedByAutomation(job, bot, automation, true) || jobIsPaused(job)) continue;
+        if (!jobOwnedByAutomation(job, bot, automation, true)) continue;
+        const paused = !automationToCronExpr(automation) || !jobPromptFor(bot, automation) || jobIsPaused(job);
+        if (paused && !options.includePaused) continue;
         const row = latest.get(jobId);
         if (!row || !['claimed', 'running'].includes(row.status)) continue;
+        // A run keeps going after its automation is paused, so Stop can still
+        // find it; a paused job's row counts only while its owner is alive,
+        // so an abandoned session never shows as running.
+        if (paused && !executionOwnerAlive(row.pid)) continue;
         results.push({
           bot,
           automation,
@@ -1539,6 +1576,7 @@ module.exports = {
   syncBotAutomation,
   pauseBotCron,
   runBotAutomationNow,
+  stopBotAutomationRun,
   removeBotCron,
   reconcileBotCrons,
   listUndeliveredBotCronResults,

@@ -74,7 +74,7 @@
         rows.push({
           botId: String(bot.id), botName: String(bot.name || 'Bot'), color: bot.avatarColor || null,
           automationId: String(automation.id), name: String(automation.name || 'Automation'),
-          status: status, run: run, steps: steps(automation), checklist: checklist,
+          status: status, enabled: automation.enabled === true, run: run, steps: steps(automation), checklist: checklist,
           schedule: schedule(automation),
           detail: status === 'running' ? runningDetail(checklist) : status === 'needs' ? needsReason(automation, checklist) : schedule(automation)
         });

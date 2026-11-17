@@ -37,7 +37,7 @@ test('editing sits as a pencil beside the status; an automation with no steps ke
   vm.runInContext(slice('automationsDetailHtml'), ctx);
   const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});
   const head = html.slice(0, html.indexOf('<div class="automations-needs">'));
-  assert.match(head, /<span class="automations-row-side">Needs you<\/span><button type="button" class="automations-run-now" id="automationsRunNow"[^>]*>[\s\S]*?<\/button><button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">/, 'the pencil follows the status and Run now in the header');
+  assert.match(head, /<span class="automations-row-side">Needs you<\/span><button type="button" class="automations-run-now" id="automationsRunNow"[^>]*>[\s\S]*?<\/button><button type="button" class="automations-run-now automations-toggle" id="automationsToggle"[^>]*>[\s\S]*?<\/button><button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">/, 'the pencil follows the status and Run now in the header');
   assert.doesNotMatch(html, /automations-actions/, 'no bottom button when there are steps');
   assert.equal((html.match(/id="automationsEdit"/g) || []).length, 1);
   const empty = ctx.automationsDetailHtml({ ...row, status: 'scheduled', steps: [] }, { id: 'auto-1', prompt: '' }, {});
@@ -94,4 +94,60 @@ test('opening an automation leaves the chat on the right where it was', () => {
   assert.equal(JSON.stringify(automationsPage.tabs), JSON.stringify([{ botId: 'bot-1', automationId: 'auto-1' }]));
   assert.deepEqual(rendered, ['page']);
   assert.doesNotMatch(slice('openAutomationsDetail'), /loadChatRoom|navigateToAgentChat|showAutomationsChat/);
+});
+
+
+test('editing from the Automations page opens the editor in the middle, not the right panel', () => {
+  const page = slice('renderAutomationsPage');
+  assert.match(page, /edit\.addEventListener\('click', function\(\)\{ automationsPage\.editing = true; renderAutomationsPage\(\); \}\)/);
+  assert.doesNotMatch(page, /openAutomationDetail\(/, 'the page never sends editing to the right panel');
+  assert.match(page, /renderAutomationDetailPane\(el\('\.automations-edit-pane', body\), found\.bot, found\.automation, false, \{/);
+  // A background refresh keeps the open form (and what was typed).
+  assert.match(page, /if\(openForm && openForm\.getAttribute\('data-editing'\) === editKey\) return;/);
+  // Opening another automation or the board leaves the editor.
+  assert.match(slice('openAutomationsDetail'), /automationsPage\.editing = false;/);
+  assert.match(slice('showAutomationsBoard'), /automationsPage\.editing = false;/);
+  // In the middle, Back, Close and Cancel return to the automation; Save does too.
+  const editor = slice('renderAutomationDetailPane');
+  assert.match(editor, /\['#automationDetailBack', '#automationDetailClose', '#automationDetailCancel'\][\s\S]*host\.done\(\)/);
+  assert.match(editor, /if\(host\)\{\s*renderChatSidebar\(\);\s*host\.done\(\);\s*return;\s*\}/);
+  assert.match(editor, /if\(host\)\{ host\.deleted\(\); return; \}/);
+});
+
+
+test('an automation shows Active or Inactive, with Pause or Resume beside Run now', () => {
+  const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
+  vm.createContext(ctx);
+  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  const on = ctx.automationsDetailHtml({ ...row, status: 'scheduled' }, { id: 'auto-1', enabled: true }, {});
+  assert.match(on, /<span class="automations-state is-on">Active<\/span>/);
+  assert.match(on, /id="automationsToggle" data-enabled="true" title="Pause" aria-label="Pause"/);
+  const off = ctx.automationsDetailHtml({ ...row, status: 'paused' }, { id: 'auto-1', enabled: false }, {});
+  assert.match(off, /<span class="automations-state">Inactive<\/span>/);
+  assert.match(off, /id="automationsToggle" data-enabled="false" title="Resume" aria-label="Resume"/);
+  // The list rows say it too.
+  assert.match(slice('automationsRowHtml'), /row\.enabled \? 'Active' : 'Inactive'/);
+  // The button saves only this automation's enabled flag.
+  const set = slice('setAutomationEnabled');
+  assert.match(set, /Object\.assign\(\{\}, item, \{enabled: enabled\}\)/);
+  assert.match(set, /api\('\/api\/bots\/' \+ encodeURIComponent\(bot\.id\), \{method:'PUT', body:\{automations: automations\}\}\)/);
+  assert.match(slice('renderAutomationsPage'), /setAutomationEnabled\(found\.bot, found\.automation, found\.automation\.enabled !== true, toggleButton\)/);
+});
+
+
+test('while a run is going, Stop takes the place of Run now and ends that run only', () => {
+  const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
+  vm.createContext(ctx);
+  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  const running = ctx.automationsDetailHtml({ ...row, status: 'running', detail: '' }, { id: 'auto-1', enabled: true }, {});
+  assert.match(running, /<button type="button" class="automations-run-now automations-stop" id="automationsStop" title="Stop this run" aria-label="Stop this run">/);
+  assert.doesNotMatch(running, /id="automationsRunNow"/);
+  assert.match(running, /id="automationsToggle"/, 'Pause stays beside Stop');
+  // A paused automation whose run is still going can still be stopped.
+  assert.match(ctx.automationsDetailHtml({ ...row, status: 'running', detail: '' }, { id: 'auto-1', enabled: false }, {}), /id="automationsStop"/);
+  const idle = ctx.automationsDetailHtml({ ...row, status: 'scheduled' }, { id: 'auto-1', enabled: true }, {});
+  assert.doesNotMatch(idle, /automationsStop/);
+  assert.match(idle, /id="automationsRunNow"/);
+  // The button posts to the run's own stop route.
+  assert.match(source, /'\/automations\/' \+ encodeURIComponent\(found\.automation\.id\) \+ '\/stop'/);
 });

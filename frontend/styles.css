@@ -3042,6 +3042,9 @@
   @keyframes automations-live{50%{opacity:.35;}}
   .automations-empty{margin:60px auto;max-width:360px;text-align:center;font-size:14px;color:var(--sand-text-secondary);line-height:1.5;}
   .automations-detail-head{display:flex;align-items:flex-start;gap:12px;margin:6px 0 14px;}
+  /* The automation editor, open in the middle of the Automations page. */
+  .automations-edit-pane .cip-automation-detail-body{overflow:visible;padding:4px 0 22px;}
+  .automations-edit-pane .cip-automation-detail-head{padding:0 0 8px;}
   .automations-detail-head > div:first-child{flex:1;min-width:0;}
   .automations-detail-title{font-size:20px;font-weight:500;line-height:1.3;}
   .automations-detail-sub{margin-top:3px;font-size:13px;color:var(--sand-text-tertiary);}
@@ -3051,6 +3054,9 @@
   .automations-run-now:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:1px;}
   .automations-run-now:disabled{opacity:.38;cursor:not-allowed;}
   .automations-run-now svg{width:17px;height:17px;fill:currentColor;}
+  .automations-stop{color:var(--danger);}
+  .automations-state{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:11px;line-height:16px;color:var(--sand-text-tertiary);background:var(--sand-fill-ghost-hover);vertical-align:1px;}
+  .automations-state.is-on{color:var(--sand-text-success, #1a7f37);background:color-mix(in srgb, currentColor 12%, transparent);}
   .automations-edit-icon{appearance:none;flex:none;width:28px;height:28px;margin-top:1px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .automations-edit-icon:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
   .automations-edit-icon:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:1px;}

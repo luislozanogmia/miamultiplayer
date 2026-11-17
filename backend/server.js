@@ -6278,13 +6278,31 @@ app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAu
   }
 });
 
+// Stop the run of a bot automation that is going now. Only that run ends;
+// the automation stays on and its next scheduled runs happen as usual.
+app.post('/api/bots/:id/automations/:automationId/stop', requireInteractiveAuth, (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botReachable(bot, req)) return res.status(404).json({ status: 'missing' });
+  if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can stop this automation.' });
+  }
+  try {
+    const result = cronSync.stopBotAutomationRun(conn, bot, req.params.automationId);
+    return res.status(result.status === 'stopping' ? 200 : 409).json(result);
+  } catch (error) {
+    console.error('automation stop endpoint failed', error.message);
+    return res.status(503).json({ error: 'automation_stop_unavailable', message: 'Could not stop this run.' });
+  }
+});
+
 // Live automation status comes from active Hermes cron sessions, not from
 // normal native chat dispatches. Keep the payload workspace-scoped and expose
 // only the fields the right-hand Automations panel needs.
 app.get('/api/automations/active', requireAuth, (req, res) => {
   let runs;
   try {
-    runs = cronSync.listActiveBotCronRuns(conn);
+    // A paused automation's run that is still going shows, so it can be stopped.
+    runs = cronSync.listActiveBotCronRuns(conn, { includePaused: true });
   } catch (error) {
     console.error('active automation scan failed', error.message);
     return res.status(503).json({ error: 'automation_status_unavailable' });
@@ -7808,6 +7826,104 @@ function expireBrowserRun(target, source) {
 // Live Hermes session id -> a team bot running on this computer for its
 // owner, from a team channel or workflow. Kept only while the run lasts.
 const sharedBotRunSessions = new Map();
+
+// Notifications Mia's browser caught from a site the person chose to send to
+// Mia or one of their bots. The choice belongs to one workspace: Solo or a
+// company. A notification is posted in that chat as a notice from the site,
+// never as the person's message, so nothing starts a turn on it: what a site
+// says is its own words, not an instruction.
+const SITE_NOTIFICATION_LIMITS = { origin: 200, title: 200, body: 1000, tag: 200 };
+function siteNotificationWorkspace(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (key === 'solo') return 'solo';
+  return AUTOMATION_TEAM_WORKSPACE.test(key) ? key : null;
+}
+// The bots a notification can go to: the person's own, which work in Solo
+// and in a company's My Bots chat alike.
+function siteNotificationBots(email) {
+  const owner = String(email || '').trim().toLowerCase();
+  if (!owner || !isActiveWorkspaceUser(owner)) return [];
+  return db.loadAll(conn, 'bots')
+    .filter((bot) => bot && bot.id && workspaceIdForRecord(bot) === 'solo' && sameOwner(bot, owner))
+    .map((bot) => ({ id: String(bot.id), name: String(bot.name || bot.id) }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+// Mia's main chat in the workspace: Solo's own, or the company's Mia chat.
+function siteNotificationMiaChat(owner, workspace) {
+  const team = workspace === 'solo' ? '' : workspace;
+  const chats = nativeConversationRepository
+    .listConversations({ companyId: nativeCompanyId('solo', owner), limit: 1000 })
+    .filter((conversation) => {
+      const metadata = (conversation && conversation.metadata) || {};
+      return conversation.type === 'agent' && !conversation.archivedAt && !conversation.deletedAt
+        && metadata.agentId === GATEWAY_AGENT_ID && (metadata.teamWorkspace || '') === team
+        && metadata.source !== 'ai-mode';
+    })
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || left.id.localeCompare(right.id));
+  const main = team ? 'team-mia-chat' : 'native-ui';
+  return chats.find((conversation) => conversation.metadata.source === main) || chats[0] || null;
+}
+// The bot's chat in the workspace: its main chat in Solo, its chat with the
+// person in a company (made the first time, as for an automation).
+async function siteNotificationBotChat(bot, workspace) {
+  if (workspace === 'solo') return ensureNativeBotConversation(bot);
+  const existing = automationChatNow(bot, { teamWorkspace: workspace });
+  if (existing) return existing;
+  return nativeHandoffBotConversation(bot, { metadata: { teamWorkspace: workspace } }, ownerOf(bot));
+}
+function siteNotificationText({ origin, title, body }) {
+  let host = origin;
+  try { host = new URL(origin).hostname; } catch (_) { /* kept as given */ }
+  return [`🔔 Notification from ${host}`, title, body].filter(Boolean).join('\n');
+}
+app.get('/api/browser/site-notifications/bots', requireAuth, (req, res) => {
+  if (!siteNotificationWorkspace(req.query && req.query.workspace)) return res.status(400).json({ error: 'invalid_workspace' });
+  res.status(200).json({ bots: siteNotificationBots(req.userEmail) });
+});
+app.post('/api/browser/site-notifications/deliver', requireAuth, async (req, res) => {
+  const input = (req.body && typeof req.body === 'object') ? req.body : {};
+  const workspace = siteNotificationWorkspace(input.workspace);
+  const clip = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
+  const origin = clip(input.origin, SITE_NOTIFICATION_LIMITS.origin);
+  const title = clip(input.title, SITE_NOTIFICATION_LIMITS.title);
+  const body = clip(input.body, SITE_NOTIFICATION_LIMITS.body);
+  if (!workspace || !/^https:\/\/[^\s/]+$/.test(origin) || (!title && !body)) return res.status(400).json({ error: 'invalid_notification' });
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  let conversation = null;
+  let principal = null;
+  try {
+    if (input.target === 'mia') {
+      conversation = siteNotificationMiaChat(owner, workspace);
+      if (!conversation) return res.status(404).json({ error: 'chat_unavailable', message: "Mia's chat in this workspace is not there yet." });
+      principal = { companyId: conversation.companyId, principalId: GATEWAY_AGENT_ID, principalType: 'agent' };
+    } else if (input.target === 'bot') {
+      const botId = String(input.botId || '');
+      const bot = db.loadAll(conn, 'bots').find((record) => record && String(record.id) === botId);
+      // A bot that was archived, deleted or is no longer the person's: the
+      // browser stops sending, as if they had answered Not Now.
+      if (!bot || !siteNotificationBots(owner).some((candidate) => candidate.id === botId)) {
+        return res.status(410).json({ error: 'bot_unavailable' });
+      }
+      conversation = await siteNotificationBotChat(bot, workspace);
+      if (!conversation) return res.status(410).json({ error: 'bot_unavailable' });
+      principal = { companyId: conversation.companyId, principalId: bot.id, principalType: 'bot' };
+    } else {
+      return res.status(400).json({ error: 'invalid_target' });
+    }
+    const created = await nativeConversationService.createEvent({
+      companyId: conversation.companyId,
+      conversationId: conversation.id,
+      principal,
+      type: 'system',
+      content: { text: siteNotificationText({ origin, title, body }) },
+      metadata: { siteNotification: { origin, tag: clip(input.tag, SITE_NOTIFICATION_LIMITS.tag), workspace } },
+    });
+    res.status(201).json({ delivered: true, conversationId: conversation.id, eventId: created && created.event && created.event.id });
+  } catch (error) {
+    console.error('site notification delivery failed', error && error.message ? error.message : error);
+    res.status(500).json({ error: 'delivery_failed' });
+  }
+});
 
 // The workspace whose browser a chat's run may use. Each workspace keeps its
 // own tabs; a run only ever acts in its own, so Solo work never lands in a

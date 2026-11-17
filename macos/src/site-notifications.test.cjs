@@ -20,7 +20,7 @@ test("a site's notifications are taken only after the person allows that site", 
   assert.equal(notes.receive(`${SITE}/inbox`, { title: "Ana", body: "Hi" }), null);
   // Not Now is not remembered, so the next request asks again.
   assert.equal(await notes.request(`${SITE}/inbox`), "default");
-  answer = true;
+  answer = { mode: "desktop" };
   assert.equal(await notes.request(`${SITE}/inbox`), "granted");
   assert.equal(await notes.request(`${SITE}/other`), "granted");
   assert.deepEqual(asked, [SITE, SITE]);
@@ -33,7 +33,7 @@ test("a site's notifications are taken only after the person allows that site", 
   // The log says one came, never what it said.
   assert.equal(logs.length, 1);
   assert.doesNotMatch(logs[0], /Ana|xxx/);
-  assert.deepEqual(notes.toJSON(), { [SITE]: true });
+  assert.deepEqual(notes.toJSON(), { [SITE]: { mode: "desktop", workspace: "solo" } });
 });
 
 test("a blocked site, another site and a page that is not https are never taken", async () => {
@@ -48,18 +48,109 @@ test("a blocked site, another site and a page that is not https are never taken"
     assert.equal(notes.listening(url), false);
   }
   assert.deepEqual(caught, []);
-  assert.deepEqual(notes.toJSON(), { [SITE]: false });
+  assert.deepEqual(notes.toJSON(), { [SITE]: { mode: "block", workspace: "solo" } });
   assert.equal(siteOrigin(`${SITE}/a?b`), SITE);
   // The right-click menu turns a site on, and one question is asked at a time.
-  assert.equal(notes.set(SITE, true), true);
+  assert.equal(notes.set(SITE, { mode: "desktop" }), true);
   assert.equal(notes.receive(SITE, { title: "Hi" }).title, "Hi");
   let asks = 0, settle;
   const slow = createSiteNotifications({ ask: () => { asks++; return new Promise((resolve) => { settle = resolve; }); } });
   const both = [slow.request(SITE), slow.request(SITE)];
   await Promise.resolve();
-  settle(false);
+  settle({ mode: "block" });
   assert.deepEqual(await Promise.all(both), ["denied", "denied"]);
   assert.equal(asks, 1);
+});
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("Send to Mia and Send to Bot hand each notification over for that chat, not the desktop", async () => {
+  const caught = [], delivered = [], logs = [];
+  let answer = { mode: "mia" };
+  const notes = createSiteNotifications({
+    ask: async () => answer, caught: note => caught.push(note), log: line => logs.push(line),
+    deliver: async (note, decision) => { delivered.push([note.title, decision.mode, decision.botId || ""]); },
+  });
+  assert.equal(await notes.request(SITE), "granted");
+  notes.receive(SITE, { title: "Ana", body: "Lunch?" });
+  await tick();
+  assert.deepEqual(delivered, [["Ana", "mia", ""]]);
+  assert.deepEqual(caught, [], "a notification sent to Mia is not also shown on the desktop");
+  assert.doesNotMatch(logs.join("\n"), /Ana|Lunch/);
+  answer = { mode: "bot", botId: "bot-7", botName: "Admin Bot" };
+  const other = "https://mail.example.test";
+  assert.equal(await notes.request(other), "granted");
+  assert.equal(notes.listening(other), true);
+  notes.receive(other, { title: "Invoice" });
+  await tick();
+  assert.deepEqual(delivered[1], ["Invoice", "bot", "bot-7"]);
+  assert.deepEqual(notes.toJSON()[other], { mode: "bot", workspace: "solo", botId: "bot-7", botName: "Admin Bot" });
+  // A bot choice that names no bot, or an unknown mode, is Not Now.
+  const third = "https://third.example.test";
+  answer = { mode: "bot" };
+  assert.equal(await notes.request(third), "default");
+  answer = { mode: "everywhere" };
+  assert.equal(await notes.request(third), "default");
+  assert.equal(notes.toJSON()[third], undefined);
+});
+
+test("when the chosen bot is no longer there, sending stops as if the person had answered Not Now", async () => {
+  let saves = 0, asks = 0;
+  const notes = createSiteNotifications({
+    saved: { [SITE]: { mode: "bot", workspace: "solo", botId: "gone" } },
+    save: () => { saves++; }, ask: async () => { asks++; return null; },
+    deliver: async () => { throw Object.assign(new Error("bot unavailable"), { code: "BOT_UNAVAILABLE" }); },
+  });
+  assert.equal(notes.state(SITE), "granted");
+  notes.receive(SITE, { title: "Ana" });
+  await tick();
+  assert.equal(saves, 1);
+  assert.equal(notes.state(SITE), "default");
+  assert.equal(notes.listening(SITE), false);
+  assert.equal(notes.receive(SITE, { title: "Ana again" }), null, "nothing more is sent");
+  assert.equal(await notes.request(SITE), "default");
+  assert.equal(asks, 1, "the site is asked again, as after Not Now");
+  // Any other failure keeps the choice: the next notification tries again.
+  const flaky = createSiteNotifications({
+    saved: { [SITE]: { mode: "mia", workspace: "solo" } },
+    deliver: async () => { throw new Error("offline"); },
+  });
+  flaky.receive(SITE, { title: "Ana" });
+  await tick();
+  assert.equal(flaky.state(SITE), "granted");
+});
+
+test("a site's notifications are on in one workspace only; elsewhere it acts as Not Now without asking", async () => {
+  let key = "hub_" + "a".repeat(32), asks = 0;
+  const delivered = [];
+  const notes = createSiteNotifications({
+    workspace: () => key, ask: async () => { asks++; return { mode: "mia" }; },
+    deliver: async (note, decision) => { delivered.push(decision.workspace); },
+  });
+  assert.equal(await notes.request(SITE), "granted");
+  assert.equal(notes.toJSON()[SITE].workspace, key);
+  const company = key;
+  key = "solo";
+  assert.equal(notes.state(SITE), "default");
+  assert.equal(notes.elsewhere(SITE), true);
+  assert.equal(notes.decided(SITE), undefined);
+  assert.equal(await notes.request(SITE), "default");
+  assert.equal(asks, 1, "Solo does not ask while the company has the site");
+  assert.equal(notes.receive(SITE, { title: "Ana" }), null);
+  assert.equal(notes.listening(SITE), false);
+  key = company;
+  notes.receive(SITE, { title: "Ana" });
+  await tick();
+  assert.deepEqual(delivered, [company]);
+  // A question still open when the person switches workspace counts as Not Now.
+  let settle;
+  const later = createSiteNotifications({ workspace: () => key, ask: () => new Promise((resolve) => { settle = resolve; }) });
+  const asked = later.request(SITE);
+  await tick();
+  key = "solo";
+  settle({ mode: "mia" });
+  assert.equal(await asked, "default");
+  assert.deepEqual(later.toJSON(), {});
 });
 
 // The preload's page script, run in a made-up page.

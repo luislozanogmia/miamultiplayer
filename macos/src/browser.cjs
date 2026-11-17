@@ -413,26 +413,70 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       savedNotifications = (saved && saved.notifications) || {};
     } catch (_) { /* First run or unreadable state: prompt again. */ }
   }
-  // A site's notifications come to Mia instead of the desktop, once the person
-  // allows that site; the choice is kept in the same file.
+  // A site's notifications come to Mia instead of the desktop, going where the
+  // person chose for that site in this workspace; the choice is kept in the
+  // same file.
   const siteNotifications = createSiteNotifications({
     saved: savedNotifications,
     save: () => persistMediaDecisions(),
     log,
+    workspace: () => workspaceKey,
     caught: notification => { if (typeof options.onSiteNotification === "function") options.onSiteNotification(notification); },
-    ask: origin => dialog.showMessageBox(window, {
-      type: "question",
-      title: "Notifications",
-      message: `Let Mia catch notifications from ${origin}?`,
-      detail: "Mia and your bots can then see what this site notifies you about while its tab is open. Mia remembers Allow or Block for this site. You can change it later from the page's right-click menu.",
-      buttons: ["Allow", "Block", "Not Now"],
-      defaultId: 0,
-      cancelId: 2,
-    }).then((result) => {
-      const response = result && result.response;
-      return response === 0 ? true : response === 1 ? false : null;
+    ask: askSiteNotifications,
+    deliver: (notification, decision) => appRequest("/api/browser/site-notifications/deliver", {
+      method: "POST",
+      body: {
+        workspace: decision.workspace, target: decision.mode, botId: decision.botId || "",
+        origin: notification.origin, title: notification.title, body: notification.body, tag: notification.tag,
+      },
+    }).catch((error) => {
+      if (error && /bot_unavailable/.test(String(error.message))) throw Object.assign(new Error("bot unavailable"), { code: "BOT_UNAVAILABLE" });
+      throw error;
     }),
   });
+  // The question a site's first request (or the page's right-click menu)
+  // brings up. Send to Bot asks which of the person's bots; closing that
+  // list, or having none, is Not Now.
+  async function askSiteNotifications(origin, key) {
+    let host = origin;
+    try { host = new URL(origin).hostname; } catch (_) { /* shown as given */ }
+    const place = key === "solo" ? "Solo" : "this company";
+    const result = await dialog.showMessageBox(window, {
+      type: "question",
+      title: "Notifications",
+      message: `Where should notifications from ${host} go?`,
+      detail: `Send to Mia or Send to Bot posts each one in that chat in ${place}; nobody acts on it by itself. Allow shows them on your desktop. Mia remembers the choice for this site in ${place} only, and you can change it from the page's right-click menu.`,
+      buttons: ["Send to Bot…", "Send to Mia", "Allow", "Block", "Not Now"],
+      defaultId: 1,
+      cancelId: 4,
+    });
+    const response = result && result.response;
+    if (response === 1) return { mode: "mia" };
+    if (response === 2) return { mode: "desktop" };
+    if (response === 3) return { mode: "block" };
+    if (response !== 0) return null;
+    let bots = [];
+    try {
+      const listed = await appRequest(`/api/browser/site-notifications/bots?workspace=${encodeURIComponent(key)}`, { timeoutMs: 5000 });
+      bots = Array.isArray(listed && listed.bots) ? listed.bots.filter(bot => bot && bot.id).slice(0, 12) : [];
+    } catch (error) {
+      log(`browser site notification bot list failed: ${error.message}`);
+    }
+    if (window.isDestroyed() || key !== workspaceKey) return null;
+    if (!bots.length) {
+      await dialog.showMessageBox(window, { type: "info", title: "Notifications", message: "There is no bot to send them to here.", detail: "Nothing was changed. The site will ask again next time.", buttons: ["OK"] });
+      return null;
+    }
+    const pick = await dialog.showMessageBox(window, {
+      type: "question",
+      title: "Notifications",
+      message: `Which bot should get notifications from ${host}?`,
+      buttons: [...bots.map(bot => String(bot.name || bot.id).slice(0, 40)), "Cancel"],
+      cancelId: bots.length,
+    });
+    const bot = bots[pick && pick.response];
+    return bot ? { mode: "bot", botId: String(bot.id), botName: String(bot.name || "") } : null;
+  }
   function persistMediaDecisions() {
     if (!permissionsPath) return;
     try {
@@ -768,10 +812,26 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   function notificationMenuItems(wc) {
     const url = wc.isDestroyed() ? "" : wc.getURL();
     if (!siteOrigin(url)) return [];
-    const allowed = siteNotifications.decided(url) === true;
+    // For now a site's notifications are on in one workspace only.
+    if (siteNotifications.elsewhere(url)) {
+      return [{ label: "This Site's Notifications Are Set in Another Workspace", enabled: false }];
+    }
+    const decision = siteNotifications.decided(url);
+    const reload = () => { if (!wc.isDestroyed()) wc.reload(); };
+    if (decision && decision.mode !== "block") {
+      return [{ label: "Stop This Site's Notifications", click: () => { siteNotifications.set(url, { mode: "block" }); reload(); } }];
+    }
     return [{
-      label: allowed ? "Stop Catching This Site's Notifications" : "Let Mia Catch This Site's Notifications",
-      click: () => { siteNotifications.set(url, !allowed); if (!wc.isDestroyed()) wc.reload(); },
+      label: "Choose Where This Site's Notifications Go…",
+      click: () => {
+        const key = workspaceKey;
+        askSiteNotifications(siteOrigin(url), key).then((answer) => {
+          if (answer && key === workspaceKey && !wc.isDestroyed() && siteOrigin(wc.getURL()) === siteOrigin(url)) {
+            siteNotifications.set(url, answer);
+            reload();
+          }
+        }).catch(error => log(`browser site notification choice failed: ${error.message}`));
+      },
     }];
   }
   function mediaRequestOrigin(details, contents) {

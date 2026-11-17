@@ -13,7 +13,10 @@ import json
 import os
 import re
 import secrets
+import sys
+import threading
 import time
+import weakref
 
 TOOL = "report_step"
 TOOLSET = "mia_run_report"
@@ -170,5 +173,130 @@ def _report_step(args, task_id=None, **_):
         return json.dumps({"error": "the step report could not be saved"})
 
 
+# Stop from Mia: Mia's Automations page writes an empty file named after the
+# run's execution id into <Hermes home>/cron/mia-stop/. The run's own agent
+# is found once, from the hooks below (they run inside that run), and a
+# watcher interrupts it as soon as the file appears, even mid model call.
+# Only the run whose task id names that execution is stopped; nothing the
+# model says can start or skip a stop.
+STOP_DIR = "mia-stop"
+STOP_MESSAGE = ("The person stopped this automation run from Mia. Stop now: make no more "
+                "tool calls and reply with one short line saying the run was stopped.")
+_STOP_POLL_SECONDS = 1.0
+_watched = {}
+_watched_lock = threading.Lock()
+_watcher = None
+
+
+def _stop_folder():
+    try:
+        from hermes_constants import get_hermes_home
+        home = str(get_hermes_home())
+    except Exception:
+        home = os.environ.get("HERMES_HOME") or ""
+    return os.path.join(home, "cron", STOP_DIR) if home else ""
+
+
+def _execution_of(task_id):
+    match = _TASK_ID.match(task_id) if isinstance(task_id, str) else None
+    return match.group(2) if match else None
+
+
+def _stop_requested(execution_id):
+    folder = _stop_folder()
+    if not folder or not execution_id:
+        return False
+    path = os.path.join(folder, execution_id)
+    return os.path.isfile(path) and not os.path.islink(path)
+
+
+def _calling_agent():
+    frame = sys._getframe(2)
+    for _ in range(24):
+        if frame is None:
+            return None
+        for name in ("agent", "self"):
+            candidate = frame.f_locals.get(name)
+            if candidate is not None and callable(getattr(candidate, "interrupt", None)) \
+                    and hasattr(candidate, "session_id"):
+                return candidate
+        frame = frame.f_back
+    return None
+
+
+def _interrupt(agent):
+    try:
+        from agent.interrupt_compat import request_hard_interrupt
+        request_hard_interrupt(agent, STOP_MESSAGE, tool_reason="stopped from Mia")
+    except Exception:
+        try:
+            agent.interrupt(STOP_MESSAGE)
+        except Exception:
+            pass
+
+
+def _watch():
+    while True:
+        time.sleep(_STOP_POLL_SECONDS)
+        with _watched_lock:
+            items = list(_watched.items())
+        for execution_id, ref in items:
+            agent = ref()
+            if agent is None:
+                with _watched_lock:
+                    _watched.pop(execution_id, None)
+                continue
+            if _stop_requested(execution_id):
+                _interrupt(agent)
+                with _watched_lock:
+                    _watched.pop(execution_id, None)
+
+
+def _remember(task_id):
+    execution_id = _execution_of(task_id)
+    if not execution_id:
+        return None
+    global _watcher
+    with _watched_lock:
+        known = execution_id in _watched
+    if not known:
+        agent = _calling_agent()
+        if agent is not None:
+            try:
+                ref = weakref.ref(agent)
+            except TypeError:
+                ref = lambda agent=agent: agent
+            with _watched_lock:
+                _watched[execution_id] = ref
+                if _watcher is None or not _watcher.is_alive():
+                    _watcher = threading.Thread(target=_watch, name="mia-run-stop", daemon=True)
+                    _watcher.start()
+    return execution_id
+
+
+def _on_pre_api_request(task_id="", **_):
+    try:
+        execution_id = _remember(task_id)
+        if execution_id and _stop_requested(execution_id):
+            agent = _calling_agent()
+            if agent is not None:
+                _interrupt(agent)
+    except Exception:
+        pass
+    return None
+
+
+def _on_pre_tool_call(tool_name="", args=None, task_id="", **_):
+    try:
+        execution_id = _remember(task_id)
+        if execution_id and _stop_requested(execution_id):
+            return {"action": "block", "message": STOP_MESSAGE}
+    except Exception:
+        pass
+    return None
+
+
 def register(ctx):
     ctx.register_tool(name=TOOL, toolset=TOOLSET, schema=SCHEMA, handler=_report_step)
+    ctx.register_hook("pre_api_request", _on_pre_api_request)
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)

@@ -144,9 +144,9 @@ function setExecutions(rows) {
     INSERT INTO executions
       (id, job_id, source, process_id, pid, status, claimed_at, started_at, finished_at, error)
     VALUES
-      (@id, @job_id, 'builtin', 'test-process', 1, @status, @claimed_at, @started_at, @finished_at, @error)
+      (@id, @job_id, 'builtin', 'test-process', @pid, @status, @claimed_at, @started_at, @finished_at, @error)
   `);
-  for (const row of rows) insert.run({ finished_at: null, error: null, ...row });
+  for (const row of rows) insert.run({ finished_at: null, error: null, pid: 1, ...row });
   executions.close();
 }
 
@@ -1289,4 +1289,46 @@ test('a plugin already enabled where jobs run is not enabled again at startup', 
     fs.rmSync(config, { force: true });
   }
   assert.equal(cronSync.cronPluginEnabled('mia-ask-before-do'), false, 'no config yet');
+});
+
+
+test('Stop asks the running run to end, finds it after a pause, and never shows an abandoned paused run', () => {
+  setJobs([
+    { id: 'job-stop', name: 'Mia bot-stop · Stop me', enabled: false, state: 'paused' },
+    { id: 'job-gone', name: 'Mia bot-gone · Gone', enabled: false, state: 'paused' },
+  ]);
+  // A pid that is no longer running: spawn a process and let it exit.
+  const deadPid = require('node:child_process').spawnSync(process.execPath, ['-e', '0']).pid;
+  setExecutions([
+    { id: 'execution-stop', job_id: 'job-stop', status: 'running', pid: process.pid, claimed_at: '2026-09-07T10:00:00-06:00', started_at: '2026-09-07T10:00:01-06:00' },
+    { id: 'execution-gone', job_id: 'job-gone', status: 'running', pid: deadPid, claimed_at: '2026-09-07T10:01:00-06:00', started_at: '2026-09-07T10:01:01-06:00' },
+  ]);
+  const appDb = require('./db').openDb(':memory:');
+  const save = (id, jobId) => require('./db').saveOne(appDb, 'bots', id, {
+    id, name: id, kind: 'bot', hermesCronJobId: jobId,
+    automation: { enabled: false, frequency: 'interval', intervalMinutes: 5, prompt: 'Check it.' },
+  });
+  save('bot-stop', 'job-stop');
+  save('bot-gone', 'job-gone');
+
+  // Default view (the scheduler's own callers) is unchanged: paused runs are left out.
+  assert.deepEqual(cronSync.listActiveBotCronRuns(appDb), []);
+  const visible = cronSync.listActiveBotCronRuns(appDb, { includePaused: true });
+  assert.deepEqual(visible.map((run) => run.sessionId), ['execution-stop']);
+
+  const stopFolder = path.join(path.dirname(executionsDbFile), 'mia-stop');
+  const bot = require('./db').loadOne(appDb, 'bots', 'bot-stop');
+  const result = cronSync.stopBotAutomationRun(appDb, bot, visible[0].automationId);
+  assert.deepEqual(result, { status: 'stopping', executionId: 'execution-stop' });
+  assert.ok(fs.statSync(path.join(stopFolder, 'execution-stop')).isFile());
+  // Asking twice is fine and writes nothing new.
+  assert.equal(cronSync.stopBotAutomationRun(appDb, bot, visible[0].automationId).status, 'stopping');
+
+  const gone = require('./db').loadOne(appDb, 'bots', 'bot-gone');
+  const goneAutomation = cronSync.listActiveBotCronRuns(appDb, { includePaused: true }).length;
+  assert.equal(goneAutomation, 1);
+  assert.equal(cronSync.stopBotAutomationRun(appDb, gone, 'automation-1').status, 'not_running');
+  assert.equal(fs.existsSync(path.join(stopFolder, 'execution-gone')), false);
+  assert.equal(cronSync.stopBotAutomationRun(appDb, bot, 'no-such-automation').status, 'missing');
+  appDb.close();
 });
