@@ -4037,6 +4037,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   const siteNotificationRaised = (event, payload) => { siteNotifications.receive(siteNotificationPage(event), payload); };
   ipcMain.on("miaos-browser-site-notification", siteNotificationRaised);
   ipcMain.handle("miaos-browser-site-notification-state", event => siteNotifications.state(siteNotificationPage(event)));
+  const siteNotificationStateSync = (event) => {
+    try { event.returnValue = siteNotifications.state(siteNotificationPage(event)); } catch (_) { event.returnValue = "default"; }
+  };
+  ipcMain.on("miaos-browser-site-notification-state-sync", siteNotificationStateSync);
   ipcMain.handle("miaos-browser-site-notification-ask", event => siteNotifications.request(siteNotificationPage(event)));
   function authorized(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return false;
@@ -4440,6 +4444,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     ipcMain.removeListener("miaos-browser-print", pagePrintRequest);
     ipcMain.removeListener("miaos-browser-site-notification", siteNotificationRaised);
     ipcMain.removeHandler("miaos-browser-site-notification-state");
+    ipcMain.removeListener("miaos-browser-site-notification-state-sync", siteNotificationStateSync);
     ipcMain.removeHandler("miaos-browser-site-notification-ask");
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();

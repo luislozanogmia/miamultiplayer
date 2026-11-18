@@ -18,6 +18,18 @@ const { webFrame, ipcRenderer } = require("electron");
 const platform = process.platform === "darwin" ? "macOS"
   : process.platform === "win32" ? "Windows" : "Linux";
 
+// The site's notification answer, asked once, synchronously, before the page
+// script below is built; "default" when Mia gives none.
+function initialNotificationState() {
+  try {
+    if (location.protocol !== "https:" || window.top !== window) return "default";
+    const answer = ipcRenderer.sendSync("miaos-browser-site-notification-state-sync");
+    return answer === "granted" || answer === "denied" ? answer : "default";
+  } catch (_) {
+    return "default";
+  }
+}
+
 const script = `(() => {
   try {
     const start = Date.now();
@@ -109,7 +121,10 @@ const script = `(() => {
   // Mia (see site-notifications.cjs), which checks the choice again itself.
   try {
     if (location.protocol === "https:" && window.top === window) {
-      var state = "default", waiting = [];
+      // Mia's answer for this site, known before any page script runs: a page
+      // such as WhatsApp reads Notification.permission once at start and
+      // stays quiet if it reads "default" then.
+      var state = ${JSON.stringify(initialNotificationState())}, waiting = [];
       var tell = function (kind, more) {
         window.postMessage(Object.assign({ miaSiteNotification: kind }, more || {}), location.origin);
       };
@@ -156,6 +171,18 @@ const script = `(() => {
       }
       Object.defineProperty(SiteNotification, "name", { value: "Notification" });
       window.Notification = SiteNotification;
+      // Electron shows no service worker notifications, so a site that raises
+      // them from its page (registration.showNotification) is handed to Mia
+      // the same way; none stay open to be listed.
+      if (window.ServiceWorkerRegistration && ServiceWorkerRegistration.prototype) {
+        ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+          if (state !== "granted") return Promise.reject(new TypeError("No notification permission has been granted for this origin."));
+          options = options || {};
+          tell("show", { title: String(title), body: String(options.body == null ? "" : options.body), tag: String(options.tag == null ? "" : options.tag) });
+          return Promise.resolve();
+        };
+        ServiceWorkerRegistration.prototype.getNotifications = function () { return Promise.resolve([]); };
+      }
       var permissions = navigator.permissions, realQuery = permissions && permissions.query;
       if (realQuery) permissions.query = function (descriptor) {
         if (!descriptor || descriptor.name !== "notifications") return realQuery.call(permissions, descriptor);
