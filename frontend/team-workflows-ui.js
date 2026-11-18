@@ -36,6 +36,59 @@
     return (bots || []).map(function(b){ return {value: b.id, label: b.channel ? b.name + ' (' + b.channel + ')' : b.name}; });
   }
 
+  // ---- Who does a step: the bot's Mote, the bot, and its owner with their department ---
+  // The same look as the Multiplayer workflow demo: one row per step, the bot and the
+  // person whose Mia runs it on the right, so the whole team can read the line.
+  function toneOf(key){
+    var text = String(key || ''), hash = 0;
+    for(var i = 0; i < text.length; i++) hash = ((hash * 31) + text.charCodeAt(i)) >>> 0;
+    return hash % 6;
+  }
+  function initialsOf(name){
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if(!parts.length) return '?';
+    var first = parts[0].charAt(0), second = parts.length > 1 ? parts[parts.length - 1].charAt(0) : parts[0].charAt(1);
+    return (first + (second || '')).toUpperCase();
+  }
+  function moteHtml(botName){
+    var art = null;
+    try { art = root.MiaBots && typeof root.MiaBots.art === 'function' ? root.MiaBots.art(botName || 'Bot') : null; } catch(_){ art = null; }
+    if(!art || !art.src) return '<span class="twf-mote twf-mote-blank" aria-hidden="true"></span>';
+    return '<img class="twf-mote" src="' + esc(art.src) + '" alt="" aria-hidden="true"' + (art.filter ? ' style="filter:' + esc(art.filter) + '"' : '') + '>';
+  }
+  function whoHtml(botName, subject, people){
+    var name = wf.shortName(people, subject), member = people && people[subject];
+    var department = member && String(member.department || '').trim();
+    return '<span class="twf-who">' + moteHtml(botName) + '<span class="twf-who-names">'
+      + (botName ? '<b>' + esc(botName) + '</b>' : '')
+      + '<span class="twf-who-owner"><span class="human-avatar-initials human-avatar-tone-' + toneOf(subject) + '">' + esc(initialsOf(name)) + '</span>'
+      + esc(department ? name + ' \u00b7 ' + department : name) + '</span></span></span>';
+  }
+  function triggerRowHtml(trigger, fired){
+    if(!trigger) return '';
+    return '<div class="twf-trigger" data-state="' + (fired ? 'done' : 'pending') + '"><span class="twf-bolt" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>'
+      + '<span><span class="twf-trigger-k">Trigger</span>' + esc(wf.triggerLine(trigger)) + '</span></div>';
+  }
+  function departmentsOf(steps, ownerKey, people){
+    var seen = {};
+    (steps || []).forEach(function(step){
+      var member = people && people[step[ownerKey]], department = member && String(member.department || '').trim();
+      if(department) seen[department.toLowerCase()] = true;
+    });
+    return Object.keys(seen).length;
+  }
+  function shapeLine(steps, ownerKey, people){
+    var count = (steps || []).length, departments = departmentsOf(steps, ownerKey, people);
+    if(!count) return '';
+    return count + (count === 1 ? ' step' : ' steps') + (departments > 1 ? ' \u00b7 ' + departments + ' departments' : '');
+  }
+  function progressHtml(steps){
+    var list = steps || [];
+    if(!list.length) return '';
+    var done = list.filter(function(step){ return step.state === 'done'; }).length;
+    return '<p class="automations-note twf-progress">' + done + ' of ' + list.length + ' steps done</p>';
+  }
+
   // ---- Approval card: the same one in a channel, on the home list and in a run ------------
   function approvalCardHtml(approval, people, options){
     options = options || {};
@@ -203,12 +256,13 @@
   function runStepHtml(step, view){
     var run = view.run, people = view.people, me = view.me;
     var approval = (view.approvals || []).filter(function(a){ return a.step_n === step.n; }).slice(-1)[0];
-    var meta = wf.displayName(people, step.owner_id) + (step.bot_name ? ' · ' + step.bot_name : '');
     var hasReport = !!sr.normalize(step.report), mark = esc(wf.stepMarkOf(step));
-    var out = '<li class="automations-step" data-state="' + mark + '"><span class="automations-step-n"><span class="automations-step-mark" data-state="' + mark + '"></span>' + Number(step.n) + '</span><span>'
-      + '<div>' + esc(step.text) + '</div><div class="automations-step-note">' + esc(meta) + '</div>'
+    var line = wf.stepLine(step, people, view.now);
+    if(step.state === 'working' && step.bot_name) line = line.replace(/^Bot /, step.bot_name + ' ');
+    var out = '<li class="automations-step twf-step" data-state="' + mark + '"><span class="automations-step-n"><span class="automations-step-mark" data-state="' + mark + '"></span>' + Number(step.n) + '</span><span>'
+      + '<div>' + esc(step.text) + '</div>'
       // The report's own headline says the result, so it is not said twice.
-      + (hasReport && (step.state === 'done' || step.state === 'failed') ? '' : '<div class="automations-step-note">' + esc(wf.stepLine(step, people, view.now)) + '</div>');
+      + (hasReport && (step.state === 'done' || step.state === 'failed') ? '' : '<div class="automations-step-note">' + esc(line) + '</div>');
     if(step.state === 'working' && step.progress_note) out += '<div class="automations-step-note">' + esc(step.progress_note) + '</div>';
     if(hasReport) out += sr.summaryHtml(step, esc, 'report:' + run.id + ':' + step.n);
     else if(step.note) out += '<div class="twf-note">' + esc(step.note) + '</div>';
@@ -219,7 +273,7 @@
       if(wf.canFix(step, me, view.isAdmin)) out += fixCardHtml(step, view);
       else out += '<div class="automations-step-note">' + esc(step.fixer_id ? wf.shortName(people, step.fixer_id) + ' or an admin can fix this.' : 'An admin can fix this.') + '</div>';
     }
-    return out + '</span></li>';
+    return out + '</span>' + whoHtml(step.bot_name, step.owner_id, people) + '</li>';
   }
   function runHtml(view){
     var run = view.run;
@@ -229,21 +283,23 @@
     return '<div class="twf-head">' + backHtml() + (wf.canCancel(run, view.me, view.isAdmin) ? btn('Cancel run', 'data-wf-cancel') : '') + '</div>' + noticeHtml(view)
       + '<div class="automations-detail-head"><span><div class="automations-detail-title">' + esc(run.workflow_name) + '</div>'
       + (run.summary ? '<div class="automations-detail-sub">' + esc(run.summary) + '</div>' : '')
-      + '<div class="automations-detail-sub">' + esc(started) + ' · ' + esc(wf.sinceText(run.created_at, view.now)) + ' · version ' + Number(run.version) + '</div></span>'
+      + '<div class="automations-detail-sub">' + esc(started) + ' · ' + esc(wf.sinceText(run.created_at, view.now)) + ' · version ' + Number(run.version)
+      + (shapeLine(view.steps, 'owner_id', view.people) ? ' · ' + esc(shapeLine(view.steps, 'owner_id', view.people)) : '') + '</div></span>'
       + '<span class="automations-row-side">' + statePill(state) + '</span></div>'
       + (run.state === 'paused' ? '<div class="twf-card-text">This run stops at the paused step until someone fixes it. It never skips a step.</div>' : '')
       + (run.final_note ? '<div class="twf-note">' + esc(run.final_note) + '</div>' : '')
       + needsYouHtml(mine, view.people)
-      + '<ol class="automations-steps">' + (view.steps || []).map(function(step){ return runStepHtml(step, view); }).join('') + '</ol>';
+      + triggerRowHtml(view.workflow && view.workflow.id === run.workflow_id && view.workflow.definition && view.workflow.definition.trigger, true)
+      + '<ol class="automations-steps">' + (view.steps || []).map(function(step){ return runStepHtml(step, view); }).join('') + '</ol>'
+      + progressHtml(view.steps);
   }
 
   // ---- A workflow --------------------------------------------------------------------------
   function definitionStepsHtml(definition, people){
     return '<ol class="automations-steps">' + ((definition && definition.steps) || []).map(function(step, index){
-      var meta = wf.displayName(people, step.ownerMemberId) + (step.botName ? ' · ' + step.botName : '');
-      return '<li class="automations-step"><span class="automations-step-n">' + (index + 1) + '</span><span><div>' + esc(step.text) + '</div>'
-        + '<div class="automations-step-note">' + esc(meta) + '</div>'
-        + (step.approverMemberId ? '<div class="automations-step-note">Approved by ' + esc(wf.displayName(people, step.approverMemberId)) + '</div>' : '') + '</span></li>';
+      return '<li class="automations-step twf-step" data-state="pending"><span class="automations-step-n">' + (index + 1) + '</span><span><div>' + esc(step.text) + '</div>'
+        + (step.approverMemberId ? '<div class="automations-step-note">Approved by ' + esc(wf.displayName(people, step.approverMemberId)) + '</div>' : '') + '</span>'
+        + whoHtml(step.botName, step.ownerMemberId, people) + '</li>';
     }).join('') + '</ol>';
   }
   function workflowHtml(view){
@@ -269,7 +325,10 @@
         + '<div class="twf-actions">' + btn('Approve', 'data-wf-version="approve" data-wf-v="' + Number(proposal.version) + '"', 'primary')
         + btn('Reject', 'data-wf-version="reject" data-wf-v="' + Number(proposal.version) + '"') + '</div></div>';
     }
-    if(workflow.definition) out += '<div class="twf-section-sub">Steps</div>' + definitionStepsHtml(workflow.definition, view.people);
+    if(workflow.definition){
+      var shape = shapeLine(workflow.definition.steps, 'ownerMemberId', view.people);
+      out += '<div class="twf-section-sub">Steps' + (shape ? ' \u00b7 ' + esc(shape) : '') + '</div>' + triggerRowHtml(workflow.definition.trigger, false) + definitionStepsHtml(workflow.definition, view.people);
+    }
     out += '<div class="twf-section-sub">Runs</div>';
     out += (view.workflowRuns || []).length ? view.workflowRuns.map(function(r){ return runRowHtml(r, view.people, view.now); }).join('')
       : '<div class="twf-card-text">No runs yet.</div>';

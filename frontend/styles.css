@@ -3080,6 +3080,10 @@
   .automations-edit-icon:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:1px;}
   .automations-edit-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
   .automations-steps{list-style:none;margin:0;padding:0;}
+  .automations-step-text{display:block;border-radius:4px;outline:none;cursor:text;}
+  .automations-steps.is-editing .automations-step-text{box-shadow:inset 0 -1px 0 var(--sand-border-default);}
+  .automations-steps.is-editing .automations-step-text:focus{background:var(--sand-fill-ghost-hover);box-shadow:inset 0 -1px 0 #378add;}
+  .automations-steps.is-editing .automations-step-text:empty::before{content:'Describe this step';color:var(--sand-text-tertiary);}
   .automations-step{display:grid;grid-template-columns:24px minmax(0,1fr);gap:10px;padding:11px 0;border-top:1px solid var(--sand-border-subtle);font-size:14px;line-height:1.45;}
   .automations-step-n{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--sand-text-tertiary);padding-top:2px;}
   .automations-step{grid-template-columns:40px minmax(0,1fr);}
@@ -4622,3 +4626,26 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
   .hub-edit-channel-label{display:block;font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:12px;}
   .hub-edit-channel-label .app-prompt-input{margin-top:6px;font-weight:400;}
   .hub-edit-channel textarea.app-prompt-input{min-height:72px;}
+
+/* Team workflows, drawn like the Multiplayer workflow demo: each step shows the bot's
+   Mote, the bot and the person whose Mia runs it; the trigger sits above step 1. */
+.automations-step.twf-step{grid-template-columns:40px minmax(0,1fr) minmax(150px,200px);align-items:center;}
+.twf-step[data-state="pending"]>span:nth-child(2){color:var(--sand-text-secondary,#5b5b60);}
+.twf-who{display:flex;align-items:center;gap:9px;min-width:0;transition:opacity .3s;}
+.twf-step[data-state="pending"] .twf-who{opacity:.6;}
+.twf-mote{width:30px;height:30px;flex:none;object-fit:contain;}
+.twf-mote-blank{display:inline-block;border-radius:50%;background:var(--sand-border-subtle,#ece8e2);}
+.twf-step[data-state="working"] .twf-mote{animation:twfHop .9s ease-in-out infinite;}
+.twf-who-names{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.twf-who-names b{font-size:12.5px;font-weight:600;color:var(--sand-text-primary,#1d1d1f);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twf-who-owner{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sand-text-tertiary,#6b6560);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twf-who-owner .human-avatar-initials{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:7.5px;flex:none;line-height:1;}
+.twf-trigger{display:grid;grid-template-columns:40px minmax(0,1fr);align-items:center;margin:12px 0 0;padding:10px 0;border-top:1px solid var(--sand-border-subtle,#ece8e2);font-size:14px;}
+.twf-bolt{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#fff3e0;color:#e8590c;}
+.twf-bolt svg{width:14px;height:14px;fill:currentColor;}
+.twf-trigger[data-state="done"] .twf-bolt{background:#e8590c;color:#fff;}
+.twf-trigger-k{display:block;font:600 10.5px/1 var(--styled-mono,ui-monospace,monospace);letter-spacing:.08em;text-transform:uppercase;color:#e8590c;margin-bottom:4px;}
+.twf-trigger+.automations-steps .automations-step:first-child{border-top-style:dashed;}
+@keyframes twfHop{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
+@media (prefers-reduced-motion: reduce){.twf-step[data-state="working"] .twf-mote{animation:none;}}
+@media (max-width:640px){.automations-step.twf-step{grid-template-columns:40px minmax(0,1fr);}.twf-step .twf-who{grid-column:2;}}
