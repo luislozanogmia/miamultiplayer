@@ -9096,8 +9096,20 @@
 
   function automationsBoardRows(){
     if(!window.MiaAutomationsBoard) return [];
-    return window.MiaAutomationsBoard.entries(chatWs.botRecords || [], chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || [])
+    return window.MiaAutomationsBoard.entries(automationBotsInView(chatWs.botRecords || []), chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || [])
       .map(function(row){ return automationRowWithLiveStart(row, automationsPage.starting, Date.now()); });
+  }
+
+  // Each workspace lists only its own automations: a company's in that
+  // company, untagged ones only in Solo. Nothing moves between them.
+  function automationBotsInView(bots){
+    var here = hubWorkspace() ? activeWorkspaceKey : '';
+    return bots.map(function(bot){
+      if(!bot || !Array.isArray(bot.automations)) return bot;
+      return Object.assign({}, bot, {automations: bot.automations.filter(function(automation){
+        return ((automation && automation.teamWorkspace) || '') === here;
+      })});
+    });
   }
 
   // Play shows the run at once: step 1 circles from the click, before the
@@ -9179,6 +9191,60 @@
   function automationStepRowValues(list){
     return els('input', list).map(function(input){ return input.value.trim(); }).filter(Boolean);
   }
+  // The editable words of each step, read and wired in place.
+  function automationStepTextValues(list){
+    return els('.automations-step-text', list).map(function(node){ return String(node.textContent || '').replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  }
+  function wireAutomationStepTexts(list){
+    function renumber(){
+      els('.automations-step', list).forEach(function(item, index){
+        var n = el('.automations-step-n', item);
+        var mark = el('.automations-step-mark', n);
+        n.textContent = '';
+        if(mark) n.appendChild(mark);
+        n.appendChild(document.createTextNode(String(index + 1)));
+      });
+    }
+    list.addEventListener('keydown', function(event){
+      var text = event.target && event.target.closest && event.target.closest('.automations-step-text');
+      if(!text) return;
+      if(event.key === 'Enter' && !event.shiftKey){
+        event.preventDefault();
+        if(els('.automations-step', list).length >= AUTOMATION_STEP_MAX) return;
+        var item = text.closest('.automations-step');
+        item.insertAdjacentHTML('afterend', '<li class="automations-step" data-state=""><span class="automations-step-n"></span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text"></span></span></li>');
+        renumber();
+        var next = el('.automations-step-text', item.nextElementSibling);
+        if(next) next.focus();
+      } else if(event.key === 'Backspace' && !text.textContent && els('.automations-step', list).length > 1){
+        event.preventDefault();
+        var gone = text.closest('.automations-step');
+        var prev = gone.previousElementSibling || gone.nextElementSibling;
+        gone.remove();
+        renumber();
+        var focus = prev && el('.automations-step-text', prev);
+        if(focus) focus.focus();
+      }
+    });
+    // Pasting several lines fills one step per line.
+    list.addEventListener('paste', function(event){
+      var text = event.target && event.target.closest && event.target.closest('.automations-step-text');
+      var data = event.clipboardData && event.clipboardData.getData('text') || '';
+      if(!text) return;
+      event.preventDefault();
+      var lines = data.split(/\r?\n/).map(function(line){ return line.trim(); }).filter(Boolean);
+      if(!lines.length) return;
+      document.execCommand('insertText', false, lines[0]);
+      var item = text.closest('.automations-step');
+      lines.slice(1).forEach(function(line){
+        if(els('.automations-step', list).length >= AUTOMATION_STEP_MAX) return;
+        item.insertAdjacentHTML('afterend', '<li class="automations-step" data-state=""><span class="automations-step-n"></span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text"></span></span></li>');
+        item = item.nextElementSibling;
+        el('.automations-step-text', item).textContent = line;
+      });
+      renumber();
+    });
+  }
   function wireAutomationStepRows(list){
     if(!list) return;
     function inputs(){ return els('input', list); }
@@ -9252,6 +9318,12 @@
       '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
   }
 
+  function automationRunNoteHtml(checklist){
+    if(!checklist || !checklist.startedAt) return '';
+    var when = automationRunTime(checklist.startedAt);
+    var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
+    return '<p class="automations-note">' + esc(progress + (when ? ' started ' + when : '') + ' · ' + checklist.done + ' of ' + checklist.total + ' steps done') + '</p>';
+  }
   function automationsDetailHtml(row, automation, bot, editing){
     // The side stays short so the title keeps its width; what needs the
     // person shows in full under it, with a way to hand it to Mia.
@@ -9262,28 +9334,33 @@
       '<button type="button" class="styled-btn-secondary" id="automationsFix">Fix with Mia</button></div>' : '';
     var body;
     var checklist = row.checklist;
+    var states = {};
+    if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
     if(editing === 'steps'){
-      // The steps become fields in place: Enter adds a step, pasting lines
-      // fills several, an empty field is dropped on save.
-      body = (String(automation.prompt || '').trim() && !row.steps.length ? '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' : '') +
-        '<ol class="cip-automation-steps automations-steps-edit" id="automationsStepsEdit">' + automationStepRowsHtml(row.steps) + '</ol>' +
+      // Same page, same checklist: only the words of each step become
+      // editable where they sit. Enter adds a step below; an emptied step is
+      // dropped on save.
+      var editSteps = row.steps.length ? row.steps : [''];
+      body = window.MiaAutomationsBoard.stepsHtml(editSteps.map(function(step, index){
+        var item = states[index + 1] || {};
+        return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
+      }), esc).replace('<ol class="automations-steps">', '<ol class="automations-steps is-editing" id="automationsStepsEdit">')
+        .replace(/<li class="automations-step"([^>]*)><span class="automations-step-n">([\s\S]*?)<\/span><span>([\s\S]*?)(<div class="automations-step-note">[\s\S]*?<\/div>)?<\/span><\/li>/g,
+          function(_m, attrs, n, text, note){
+            return '<li class="automations-step"' + attrs + '><span class="automations-step-n">' + n + '</span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text">' + text + '</span>' + (note || '') + '</span></li>';
+          }) +
+        automationRunNoteHtml(checklist) +
         '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>' +
         '<div class="automations-actions automations-edit-actions"><button type="button" class="styled-btn-secondary danger" id="automationsDelete">Delete automation</button>' +
         '<span></span><button type="button" class="styled-btn-secondary" id="automationsEditCancel">Cancel</button>' +
         '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
     } else if(row.steps.length){
       // With a run on record, each step shows what the bot reported for it.
-      var states = {};
-      if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
       body = window.MiaAutomationsBoard.stepsHtml(row.steps.map(function(step, index){
         var item = states[index + 1] || {};
         return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
       }), esc);
-      if(checklist && checklist.startedAt){
-        var when = automationRunTime(checklist.startedAt);
-        var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
-        body += '<p class="automations-note">' + esc(progress + (when ? ' started ' + when : '') + ' · ' + checklist.done + ' of ' + checklist.total + ' steps done') + '</p>';
-      }
+      body += automationRunNoteHtml(checklist);
     } else if(String(automation.prompt || '').trim()){
       body = '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' +
         '<p class="automations-note">This runs as one instruction. Use the pencil to split it into steps the bot does one at a time, in order.</p>';
@@ -9291,7 +9368,7 @@
       body = '<p class="automations-note">No steps yet. Use the pencil to add the steps this automation should follow.</p>';
     }
     var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
-    var last = !editing && delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
+    var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
     function icon(id, label, svg, extra){
       return '<button type="button" class="automations-run-now' + (extra && extra.cls ? ' ' + extra.cls : '') + '" id="' + id + '" title="' + esc(extra && extra.title || label) + '" aria-label="' + esc(label) + '"' +
         (extra && extra.pressed !== undefined ? ' aria-pressed="' + (extra.pressed ? 'true' : 'false') + '"' : '') + (extra && extra.disabled ? ' disabled' : '') + '><svg viewBox="0 0 20 20" aria-hidden="true">' + svg + '</svg></button>';
@@ -9425,7 +9502,7 @@
     function setEditing(mode){
       automationsPage.editing = automationsPage.editing === mode ? false : mode;
       renderAutomationsPage();
-      var first = automationsPage.editing === 'steps' ? el('#automationsStepsEdit input', body) : el('#automationsEditFrequency', body);
+      var first = automationsPage.editing === 'steps' ? el('#automationsStepsEdit .automations-step-text', body) : el('#automationsEditFrequency', body);
       if(first) first.focus();
     }
     var pencil = el('#automationsEdit', body);
@@ -9434,7 +9511,7 @@
     if(clock) clock.addEventListener('click', function(){ setEditing('schedule'); });
     if(!automationsPage.editing) return;
     var stepsList = el('#automationsStepsEdit', body);
-    if(stepsList) wireAutomationStepRows(stepsList);
+    if(stepsList) wireAutomationStepTexts(stepsList);
     var scheduleEdit = el('#automationsScheduleEdit', body);
     var frequency = el('#automationsEditFrequency', body);
     function showScheduleParts(){
@@ -9474,7 +9551,7 @@
         model: record.model && record.modelProvider ? record.modelProvider + '|' + record.model : '',
         prompt: record.prompt || '', steps: (Array.isArray(record.steps) ? record.steps : []).join('\n')
       };
-      if(mode === 'steps') values.steps = automationStepRowValues(stepsList).join('\n');
+      if(mode === 'steps') values.steps = automationStepTextValues(stepsList).join('\n');
       if(mode === 'schedule'){
         values.frequency = frequency.value;
         values.intervalValue = el('#automationsEditInterval', body).value;

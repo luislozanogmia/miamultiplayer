@@ -23,7 +23,7 @@ const row = {
 test('a stuck automation keeps its title wide and shows the problem, escaped, with a Fix with Mia button', () => {
   const ctx = { esc: (s) => String(s).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';'), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
   vm.createContext(ctx);
-  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  vm.runInContext(slice('automationRunNoteHtml') + slice('automationsDetailHtml'), ctx);
   const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});
   assert.match(html, /<span class="automations-row-side">Needs you<\/span>/, 'the side stays short');
   assert.match(html, /<div class="automations-needs"><p>Step 1 needs you · The &#60;b&#62;tracker&#60;\/b&#62; connection is missing\. Reconnect it\.<\/p>/);
@@ -34,7 +34,7 @@ test('a stuck automation keeps its title wide and shows the problem, escaped, wi
 test('one header row: Play (Stop while running), the clock for the schedule and the pencil for steps', () => {
   const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
   vm.createContext(ctx);
-  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  vm.runInContext(slice('automationRunNoteHtml') + slice('automationsDetailHtml'), ctx);
   const html = ctx.automationsDetailHtml(row, { id: 'auto-1' }, {});
   const head = html.slice(0, html.indexOf('<div class="automations-needs">'));
   // Always four icons in the same order; no separate Pause or Resume icon.
@@ -111,10 +111,13 @@ test('editing happens on the same page: steps turn into fields in place, the sch
     automationIntervalParts: () => ({ value: 10, unit: 'minutes' }), AUTOMATION_WEEKDAYS: ['Monday'],
     automationStepRowsHtml: (steps) => steps.map((step, i) => '<li class="cip-automation-step"><input value="' + step + '"></li>').join('') };
   vm.createContext(ctx);
-  vm.runInContext(slice('automationsScheduleEditHtml') + slice('automationsDetailHtml'), ctx);
+  vm.runInContext(slice('automationsScheduleEditHtml') + slice('automationRunNoteHtml') + slice('automationsDetailHtml'), ctx);
   const steps = ctx.automationsDetailHtml(row, { id: 'auto-1', enabled: true }, {}, 'steps');
-  assert.match(steps, /<ol class="cip-automation-steps automations-steps-edit" id="automationsStepsEdit">/);
-  assert.doesNotMatch(steps, /class="automations-steps"/, 'the read-only list is replaced, not shown twice');
+  // Same checklist, same marks and notes: only each step's words become editable.
+  assert.match(steps, /<ol class="automations-steps is-editing" id="automationsStepsEdit">/);
+  assert.equal((steps.match(/<ol /g) || []).length, 1, 'the list is not shown twice');
+  assert.doesNotMatch(steps, /<input|cip-automation-steps/, 'no separate form of input boxes');
+  assert.equal((steps.match(/class="automations-step-text" contenteditable="plaintext-only"/g) || []).length, row.steps.length);
   assert.match(steps, /id="automationsEditSave"/);
   assert.match(steps, /id="automationsDelete"/);
   assert.match(steps, /id="automationsEdit"[^>]*aria-pressed="true"/);
@@ -129,7 +132,7 @@ test('editing happens on the same page: steps turn into fields in place, the sch
   assert.match(page, /wireAutomationsInlineEdit\(body, found\.bot, found\.automation\)/);
   const wire = slice('wireAutomationsInlineEdit');
   assert.match(wire, /normalizedAutomationEditorPayload\(owner, record\.id, values\)/);
-  assert.match(wire, /if\(mode === 'steps'\) values\.steps = automationStepRowValues\(stepsList\)\.join\('\\n'\);/);
+  assert.match(wire, /if\(mode === 'steps'\) values\.steps = automationStepTextValues\(stepsList\)\.join\('\\n'\);/);
   assert.match(slice('openAutomationsDetail'), /automationsPage\.editing = false;/);
   assert.match(slice('showAutomationsBoard'), /automationsPage\.editing = false;/);
 });
@@ -138,7 +141,7 @@ test('editing happens on the same page: steps turn into fields in place, the sch
 test('an automation shows Active or Inactive, and that label turns it on or off', () => {
   const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
   vm.createContext(ctx);
-  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  vm.runInContext(slice('automationRunNoteHtml') + slice('automationsDetailHtml'), ctx);
   const on = ctx.automationsDetailHtml({ ...row, status: 'scheduled' }, { id: 'auto-1', enabled: true }, {});
   assert.match(on, /<button type="button" id="automationsToggle" class="automations-state is-on" title="Runs on its schedule. Click to turn it off" aria-pressed="true">Active<\/button>/);
   assert.match(on, /id="automationsRunNow" title="Run now" aria-label="Run now"><svg/, 'Play is live while it is on');
@@ -158,7 +161,7 @@ test('an automation shows Active or Inactive, and that label turns it on or off'
 test('while a run is going, Play becomes Stop, which ends that run only', () => {
   const ctx = { esc: (s) => String(s), window: { MiaAutomationsBoard: board }, automationRunTime: () => '' };
   vm.createContext(ctx);
-  vm.runInContext(slice('automationsDetailHtml'), ctx);
+  vm.runInContext(slice('automationRunNoteHtml') + slice('automationsDetailHtml'), ctx);
   const running = ctx.automationsDetailHtml({ ...row, status: 'running', detail: '' }, { id: 'auto-1', enabled: true }, {});
   assert.match(running, /<button type="button" class="automations-run-now automations-line-icon automations-stop" id="automationsStop" title="Stop this run" aria-label="Stop this run">/);
   assert.doesNotMatch(running, /id="automationsRunNow"/, 'Stop takes Play\'s place');
@@ -198,4 +201,16 @@ test('Play shows the run at once: step 1 circles from the click until the bot re
   const render = slice('renderAutomationsPage');
   assert.match(render, /automationsPage\.starting\[startKey\] = Date\.now\(\);\s*renderAutomationsPage\(\);[\s\S]*?api\(/);
   assert.match(render, /delete automationsPage\.starting\[startKey\];\s*renderAutomationsPage\(\);\s*showToast\(reason\);/);
+});
+
+test('each workspace lists only its own automations', () => {
+  const ctx = { activeWorkspaceKey: 'hub_a', team: true };
+  vm.createContext(ctx);
+  vm.runInContext('function hubWorkspace(){ return team; }\n' + slice('automationBotsInView'), ctx);
+  const bots = [{ id: 'b', automations: [{ id: 'solo' }, { id: 'a', teamWorkspace: 'hub_a' }, { id: 'other', teamWorkspace: 'hub_b' }] }];
+  assert.deepEqual(ctx.automationBotsInView(bots)[0].automations.map((x) => x.id), ['a']);
+  ctx.team = false;
+  assert.deepEqual(ctx.automationBotsInView(bots)[0].automations.map((x) => x.id), ['solo']);
+  assert.equal(bots[0].automations.length, 3, 'the bot record itself is not changed');
+  assert.match(slice('automationsBoardRows'), /entries\(automationBotsInView\(chatWs\.botRecords/);
 });
