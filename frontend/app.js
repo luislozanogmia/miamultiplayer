@@ -9091,12 +9091,40 @@
     try { if(closedPageTabsStore()) closedPageTabsStore().set('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStateError) {}
     try { localStorage.setItem('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStorageError) {}
   }
-  var automationsPage = {open:false, botId:null, automationId:null, editing:false, group:'status', tabs:[], boardClosed:!!closedPageTabs.automations};
+  var automationsPage = {open:false, botId:null, automationId:null, editing:false, starting:{}, group:'status', tabs:[], boardClosed:!!closedPageTabs.automations};
   try { if(localStorage.getItem(AUTOMATIONS_GROUP_KEY) === 'bot') automationsPage.group = 'bot'; } catch(_automationsGroupError) {}
 
   function automationsBoardRows(){
     if(!window.MiaAutomationsBoard) return [];
-    return window.MiaAutomationsBoard.entries(chatWs.botRecords || [], chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || []);
+    return window.MiaAutomationsBoard.entries(chatWs.botRecords || [], chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || [])
+      .map(function(row){ return automationRowWithLiveStart(row, automationsPage.starting, Date.now()); });
+  }
+
+  // Play shows the run at once: step 1 circles from the click, before the
+  // bot's first report (Hermes takes a while to boot). The same goes for a
+  // run the server reports while the checklist is still the last run's: its
+  // old checkmarks never show as this run's progress. A start that never
+  // shows up as a run falls back after two minutes.
+  var AUTOMATION_START_GRACE_MS = 120000;
+  function automationRowWithLiveStart(row, starting, now){
+    var key = row.botId + '|' + row.automationId;
+    var clicked = starting && starting[key];
+    if(clicked && now - clicked > AUTOMATION_START_GRACE_MS){ delete starting[key]; clicked = 0; }
+    // Once the server reports the run, the click has done its job.
+    if(clicked && row.status === 'running'){ delete starting[key]; clicked = 0; }
+    if(!clicked && row.status !== 'running') return row;
+    var since = clicked || Date.parse(row.run && row.run.startedAt) || 0;
+    var reported = row.checklist && Date.parse(row.checklist.startedAt);
+    if(row.status === 'running' && (!since || (reported && reported >= since - 5000))) return row;
+    var steps = row.steps || [];
+    var first = steps.length ? 'Step 1 of ' + steps.length + ' · ' + steps[0] : '';
+    return Object.assign({}, row, {
+      status: 'running',
+      starting: row.status !== 'running',
+      detail: (row.status !== 'running' ? 'Starting' : 'Running now') + (first ? ' · ' + first : ''),
+      checklist: steps.length ? {startedAt: new Date(since).toISOString(), runStatus: 'running', done: 0, total: steps.length,
+        steps: steps.map(function(text, index){ return {n: index + 1, text: text, state: index === 0 ? 'working' : 'pending'}; })} : null
+    });
   }
 
   function automationsRowHtml(row){
@@ -9200,16 +9228,50 @@
     });
   }
 
-  function automationsDetailHtml(row, automation, bot){
+  // One page for an automation. The clock edits the schedule in its line
+  // under the title; the pencil turns the steps into fields right where they
+  // are. Only one of them edits at a time, and nothing opens a second screen.
+  var AUTOMATION_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function automationsScheduleEditHtml(automation){
+    var frequency = automation.frequency === 'daily' && automation.weekdaysOnly ? 'weekdays'
+      : ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
+    var interval = automationIntervalParts(automation.intervalMinutes || 5);
+    function options(list, current){
+      return list.map(function(item){
+        return '<option value="' + esc(item[0]) + '"' + (String(current) === String(item[0]) ? ' selected' : '') + '>' + esc(item[1]) + '</option>';
+      }).join('');
+    }
+    return '<div class="automations-schedule-edit" id="automationsScheduleEdit" data-frequency="' + frequency + '">' +
+      '<select id="automationsEditFrequency" aria-label="Schedule">' + options([['interval', 'Repeating timer'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], frequency) + '</select>' +
+      '<span data-when="interval">every <input type="number" id="automationsEditInterval" min="1" max="' + (interval.unit === 'hours' ? '24' : '60') + '" value="' + esc(interval.value) + '" aria-label="Every">' +
+      '<select id="automationsEditIntervalUnit" aria-label="Timer unit">' + options([['minutes', 'minutes'], ['hours', 'hours']], interval.unit) + '</select></span>' +
+      '<span data-when="weekly">on <select id="automationsEditWeekday" aria-label="Weekday">' + options(AUTOMATION_WEEKDAYS.map(function(day){ return [day, day]; }), automation.day || 'Monday') + '</select></span>' +
+      '<span data-when="monthly">on day <input type="number" id="automationsEditMonthDay" min="1" max="31" value="' + esc(automation.frequency === 'monthly' && automation.day || 1) + '" aria-label="Day of month"></span>' +
+      '<span data-when="time">at <input type="time" id="automationsEditTime" value="' + esc(automation.time || '09:00') + '" aria-label="Time"></span>' +
+      '<button type="button" class="styled-btn-secondary" id="automationsEditCancel">Cancel</button>' +
+      '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
+  }
+
+  function automationsDetailHtml(row, automation, bot, editing){
     // The side stays short so the title keeps its width; what needs the
     // person shows in full under it, with a way to hand it to Mia.
+    // Paused shows once, as Inactive beside the schedule.
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
-      : row.status === 'needs' ? 'Needs you' : row.status === 'paused' ? 'Paused' : '';
-    var needs = row.status === 'needs' && row.detail ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
+      : row.status === 'needs' ? 'Needs you' : '';
+    var needs = row.status === 'needs' && row.detail && !editing ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
       '<button type="button" class="styled-btn-secondary" id="automationsFix">Fix with Mia</button></div>' : '';
     var body;
     var checklist = row.checklist;
-    if(row.steps.length){
+    if(editing === 'steps'){
+      // The steps become fields in place: Enter adds a step, pasting lines
+      // fills several, an empty field is dropped on save.
+      body = (String(automation.prompt || '').trim() && !row.steps.length ? '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' : '') +
+        '<ol class="cip-automation-steps automations-steps-edit" id="automationsStepsEdit">' + automationStepRowsHtml(row.steps) + '</ol>' +
+        '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>' +
+        '<div class="automations-actions automations-edit-actions"><button type="button" class="styled-btn-secondary danger" id="automationsDelete">Delete automation</button>' +
+        '<span></span><button type="button" class="styled-btn-secondary" id="automationsEditCancel">Cancel</button>' +
+        '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
+    } else if(row.steps.length){
       // With a run on record, each step shows what the bot reported for it.
       var states = {};
       if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
@@ -9224,30 +9286,37 @@
       }
     } else if(String(automation.prompt || '').trim()){
       body = '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' +
-        '<p class="automations-note">This runs as one instruction. Split it into steps so the bot does them one at a time, in order.</p>';
+        '<p class="automations-note">This runs as one instruction. Use the pencil to split it into steps the bot does one at a time, in order.</p>';
     } else {
-      body = '<p class="automations-note">No steps yet. Add the steps this automation should follow.</p>';
+      body = '<p class="automations-note">No steps yet. Use the pencil to add the steps this automation should follow.</p>';
     }
     var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
-    var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
-    // With steps, editing is a pencil beside the status, reachable without
-    // scrolling past long step lists. Without steps, a worded button says what to do.
-    var canRunNow = window.MiaAutomationsBoard.canRunNow(automation, row.status);
-    var runNow = '<button type="button" class="automations-run-now" id="automationsRunNow" title="' + (canRunNow ? 'Run now' : automation.enabled === true ? 'Already running' : 'Turn on this automation to run it') + '" aria-label="Run now"' + (canRunNow ? '' : ' disabled') + '><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.8v12.4L16 10 6 3.8z"/></svg></button>';
-    // While a run is going, Stop ends that run only; the automation stays as it is.
-    if(row.status === 'running') runNow = '<button type="button" class="automations-run-now automations-stop" id="automationsStop" title="Stop this run" aria-label="Stop this run"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1.5"/></svg></button>';
-    var editIcon = row.steps.length ? '<button type="button" class="automations-edit-icon" id="automationsEdit" title="Edit steps" aria-label="Edit steps">' +
-      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10 11.7l-2.8.7.7-2.8z"/></svg></button>' : '';
-    var addSteps = row.steps.length ? '' : '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">Add steps</button></div>';
-    // Active means it runs on its schedule; Pause turns that off, Resume back on.
+    var last = !editing && delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
+    function icon(id, label, svg, extra){
+      return '<button type="button" class="automations-run-now' + (extra && extra.cls ? ' ' + extra.cls : '') + '" id="' + id + '" title="' + esc(extra && extra.title || label) + '" aria-label="' + esc(label) + '"' +
+        (extra && extra.pressed !== undefined ? ' aria-pressed="' + (extra.pressed ? 'true' : 'false') + '"' : '') + (extra && extra.disabled ? ' disabled' : '') + '><svg viewBox="0 0 20 20" aria-hidden="true">' + svg + '</svg></button>';
+    }
     var on = automation.enabled === true;
-    var state = '<span class="automations-state' + (on ? ' is-on' : '') + '">' + (on ? 'Active' : 'Inactive') + '</span>';
-    var toggle = '<button type="button" class="automations-run-now automations-toggle" id="automationsToggle" data-enabled="' + (on ? 'true' : 'false') + '" title="' + (on ? 'Pause' : 'Resume') + '" aria-label="' + (on ? 'Pause' : 'Resume') + '"><svg viewBox="0 0 20 20" aria-hidden="true">' +
-      (on ? '<rect x="5.5" y="4.5" width="3" height="11" rx="1"/><rect x="11.5" y="4.5" width="3" height="11" rx="1"/>'
-        : '<path d="M10 2.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zm-1.8 4.6 4.9 2.9-4.9 2.9z"/>') + '</svg></button>';
-    return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
-      '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + ' ' + state + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span>' + runNow + toggle + editIcon + '</div>' + needs + body + last + addSteps;
+    var running = row.status === 'running';
+    var canRunNow = on && window.MiaAutomationsBoard.canRunNow(automation, row.status);
+    // One run control: Play runs it once now and, while that run is going,
+    // becomes Stop, which ends that run only (the automation stays as it is).
+    var runNow = running
+      // Until the run itself is up there is nothing to stop yet.
+      ? icon('automationsStop', 'Stop this run', '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>', {cls:'automations-line-icon automations-stop',
+        title: row.starting ? 'Starting…' : 'Stop this run', disabled: !!row.starting})
+      : icon('automationsRunNow', 'Run now', '<path d="M6.5 4.5v11l9-5.5z"/>', {cls:'automations-line-icon',
+        title: on ? 'Run now' : 'Inactive. Click Inactive to turn it on, then run it', disabled: !canRunNow});
+    // Active means it runs on its schedule. The label itself switches it on or off.
+    var state = '<button type="button" id="automationsToggle" class="automations-state' + (on ? ' is-on' : '') + '" title="' +
+      (on ? 'Runs on its schedule. Click to turn it off' : 'Off. Click to turn it on') + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + (on ? 'Active' : 'Inactive') + '</button>';
+    var clock = icon('automationsSchedule', 'Edit schedule', '<circle cx="10" cy="10" r="7"/><path d="M10 6v4.2l2.8 1.7"/>', {cls:'automations-line-icon', pressed: editing === 'schedule'});
+    var pencil = icon('automationsEdit', 'Edit steps', '<path d="M11 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10 11.7l-2.8.7.7-2.8z"/>', {cls:'automations-line-icon', pressed: editing === 'steps'});
+    var schedule = String(row.schedule || '').replace(/^Paused · /, '');
+    var sub = editing === 'schedule' ? automationsScheduleEditHtml(automation) + '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>'
+      : '<div class="automations-detail-sub">' + esc([schedule, row.botName].filter(Boolean).join(' · ')) + ' ' + state + '</div>';
+    return '<div class="automations-detail-head"' + (editing ? ' data-editing="' + esc(editing) + '"' : '') + '><div><div class="automations-detail-title">' + esc(row.name) + '</div>' + sub + '</div>' +
+      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + needs + body + last;
   }
 
   function renderAutomationsPage(){
@@ -9275,25 +9344,16 @@
     if(toggle) toggle.hidden = !!found;
     var body = el('#automationsBody');
     if(!body) return;
-    // Editing happens here in the middle, not in the right panel. While the
-    // form is open, background refreshes leave it alone so typing isn't lost.
-    if(found && automationsPage.editing){
-      var editKey = automationsTabId(found.bot.id, found.automation.id);
-      var openForm = el('.automations-edit-pane', body);
-      if(openForm && openForm.getAttribute('data-editing') === editKey) return;
-      body.innerHTML = '<div class="automations-content"><div class="automations-edit-pane" data-editing="' + esc(editKey) + '"></div></div>';
-      renderAutomationDetailPane(el('.automations-edit-pane', body), found.bot, found.automation, false, {
-        done: function(){ automationsPage.editing = false; renderAutomationsPage(); },
-        deleted: function(){ automationsPage.editing = false; showAutomationsBoard(); }
-      });
-      body.scrollTop = 0;
-      return;
-    }
+    // Editing happens on the automation's own page, in place. While a field
+    // is open, background refreshes leave the page alone so typing isn't lost.
+    var editKey = found && automationsPage.editing ? automationsTabId(found.bot.id, found.automation.id) + '|' + automationsPage.editing : '';
+    var openEdit = el('[data-edit-key]', body);
+    if(editKey && openEdit && openEdit.getAttribute('data-edit-key') === editKey) return;
     var scroll = body.scrollTop;
     // Team workflows sit above the bot automations, in team workspaces only.
     var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
     body.innerHTML = '<div class="automations-content">' + (teamWorkflows ? '<div id="teamWorkflowsMount"></div>' : '')
-      + (found ? automationsDetailHtml(row, found.automation, found.bot) : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>' + automationsRunHistoryHtml()) + '</div>';
+      + (found ? '<div data-edit-key="' + esc(editKey) + '">' + automationsDetailHtml(row, found.automation, found.bot, automationsPage.editing) + '</div>' : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>' + automationsRunHistoryHtml()) + '</div>';
     if(teamWorkflows) teamWorkflows.mountInto(el('#teamWorkflowsMount', body));
     if(!found) body.scrollTop = scroll;
     els('[data-automations-id]', body).forEach(function(button){
@@ -9310,19 +9370,29 @@
     var runNow = el('#automationsRunNow', body);
     if(runNow && found) runNow.addEventListener('click', function(){
       runNow.disabled = true;
+      var startKey = found.bot.id + '|' + found.automation.id;
+      automationsPage.starting[startKey] = Date.now();
+      renderAutomationsPage();
+      var startFailed = function(reason){
+        delete automationsPage.starting[startKey];
+        renderAutomationsPage();
+        showToast(reason);
+      };
       api('/api/bots/' + encodeURIComponent(found.bot.id) + '/automations/' + encodeURIComponent(found.automation.id) + '/run-now', {method:'POST', body:{}}).then(function(res){
         if(res.status !== 200 || !res.data || res.data.status !== 'started'){
           var reason = res.data && res.data.status === 'off' ? 'Turn on this automation before running it.'
             : res.data && res.data.status === 'missing' ? 'Mia could not find its scheduled run. Save the automation again.'
               : res.data && (res.data.message || res.data.error) || 'Could not start this automation.';
-          showToast(reason);
+          startFailed(reason);
           return;
         }
-        showToast('Automation started');
         loadActiveAutomationRuns();
-        window.setTimeout(loadActiveAutomationRuns, 900);
-      }).catch(function(){ showToast('Could not start this automation. Try again.'); })
-        .finally(function(){ if(document.body.contains(runNow)) runNow.disabled = found.automation.enabled !== true; });
+        [1500, 4000].forEach(function(delay){ window.setTimeout(loadActiveAutomationRuns, delay); });
+        // Started but already over (or not reported yet): stop pretending after 6 s.
+        window.setTimeout(function(){
+          if(automationsPage.starting[startKey]){ delete automationsPage.starting[startKey]; renderAutomationsPage(); }
+        }, 6000);
+      }).catch(function(){ startFailed('Could not start this automation. Try again.'); });
     });
     var stop = el('#automationsStop', body);
     if(stop && found) stop.addEventListener('click', function(){
@@ -9346,10 +9416,113 @@
     if(toggleButton && found) toggleButton.addEventListener('click', function(){
       setAutomationEnabled(found.bot, found.automation, found.automation.enabled !== true, toggleButton);
     });
-    var edit = el('#automationsEdit', body);
-    if(edit && found) edit.addEventListener('click', function(){ automationsPage.editing = true; renderAutomationsPage(); });
+    if(found) wireAutomationsInlineEdit(body, found.bot, found.automation);
     var fix = el('#automationsFix', body);
     if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
+  }
+
+  function wireAutomationsInlineEdit(body, bot, automation){
+    function setEditing(mode){
+      automationsPage.editing = automationsPage.editing === mode ? false : mode;
+      renderAutomationsPage();
+      var first = automationsPage.editing === 'steps' ? el('#automationsStepsEdit input', body) : el('#automationsEditFrequency', body);
+      if(first) first.focus();
+    }
+    var pencil = el('#automationsEdit', body);
+    if(pencil) pencil.addEventListener('click', function(){ setEditing('steps'); });
+    var clock = el('#automationsSchedule', body);
+    if(clock) clock.addEventListener('click', function(){ setEditing('schedule'); });
+    if(!automationsPage.editing) return;
+    var stepsList = el('#automationsStepsEdit', body);
+    if(stepsList) wireAutomationStepRows(stepsList);
+    var scheduleEdit = el('#automationsScheduleEdit', body);
+    var frequency = el('#automationsEditFrequency', body);
+    function showScheduleParts(){
+      if(!scheduleEdit) return;
+      scheduleEdit.setAttribute('data-frequency', frequency.value);
+      els('[data-when]', scheduleEdit).forEach(function(part){
+        var when = part.getAttribute('data-when');
+        part.hidden = !(when === frequency.value || (when === 'time' && frequency.value !== 'interval'));
+      });
+    }
+    if(frequency){
+      frequency.addEventListener('change', showScheduleParts);
+      var unit = el('#automationsEditIntervalUnit', body);
+      if(unit) unit.addEventListener('change', function(){ el('#automationsEditInterval', body).max = unit.value === 'hours' ? '24' : '60'; });
+      showScheduleParts();
+    }
+    var cancel = el('#automationsEditCancel', body);
+    if(cancel) cancel.addEventListener('click', function(){ automationsPage.editing = false; renderAutomationsPage(); });
+    if(!body.hasAttribute('data-escape-wired')){
+      body.setAttribute('data-escape-wired', '');
+      body.addEventListener('keydown', function(event){
+        if(event.key === 'Escape' && automationsPage.editing){ automationsPage.editing = false; renderAutomationsPage(); }
+      });
+    }
+    var save = el('#automationsEditSave', body);
+    if(save) save.addEventListener('click', function(){
+      var errorNode = el('#automationsEditError', body);
+      if(errorNode) errorNode.textContent = '';
+      var current = automationRecordById(bot.id, automation.id);
+      var record = current ? current.automation : automation;
+      var owner = current ? current.bot : bot;
+      var mode = automationsPage.editing;
+      var values = {
+        name: record.name, enabled: record.enabled === true,
+        frequency: record.frequency === 'daily' && record.weekdaysOnly ? 'weekdays' : record.frequency,
+        intervalMinutes: record.intervalMinutes, day: record.day, time: record.time || '09:00',
+        model: record.model && record.modelProvider ? record.modelProvider + '|' + record.model : '',
+        prompt: record.prompt || '', steps: (Array.isArray(record.steps) ? record.steps : []).join('\n')
+      };
+      if(mode === 'steps') values.steps = automationStepRowValues(stepsList).join('\n');
+      if(mode === 'schedule'){
+        values.frequency = frequency.value;
+        values.intervalValue = el('#automationsEditInterval', body).value;
+        values.intervalUnit = el('#automationsEditIntervalUnit', body).value;
+        values.day = frequency.value === 'weekly' ? el('#automationsEditWeekday', body).value : el('#automationsEditMonthDay', body).value;
+        values.time = el('#automationsEditTime', body).value;
+      }
+      var payload;
+      try { payload = normalizedAutomationEditorPayload(owner, record.id, values); }
+      catch(error){ if(errorNode) errorNode.textContent = error.message || 'Check the automation fields.'; return; }
+      save.disabled = true;
+      save.textContent = 'Saving…';
+      api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:payload}).then(function(res){
+        if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && (res.data.message || res.data.error)) || 'Could not save automation.');
+        var saved = res.data.bot;
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(item){ return String(item.id) === String(saved.id) ? saved : item; });
+        chatWs.allAgents = (chatWs.allAgents || []).map(function(item){ return String(item.id) === String(saved.id) ? Object.assign({}, item, saved) : item; });
+        automationsPage.editing = false;
+        showToast(mode === 'schedule' ? 'Schedule saved' : 'Steps saved');
+        renderChatSidebar();
+        renderAutomationsPage();
+      }).catch(function(error){
+        if(errorNode) errorNode.textContent = error.message || 'Could not save automation.';
+        save.disabled = false;
+        save.textContent = 'Save';
+      });
+    });
+    var remove = el('#automationsDelete', body);
+    if(remove) remove.addEventListener('click', function(){
+      if(!window.confirm('Delete this automation? It will not run again.')) return;
+      remove.disabled = true;
+      var current = automationRecordById(bot.id, automation.id);
+      var owner = current ? current.bot : bot;
+      var remaining = botAutomationList(owner).filter(function(item){ return String(item.id) !== String(automation.id); });
+      api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:{automations:remaining}}).then(function(res){
+        if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && res.data.error) || 'Could not delete automation.');
+        var saved = res.data.bot;
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(item){ return String(item.id) === String(saved.id) ? saved : item; });
+        automationsPage.editing = false;
+        showToast('Automation deleted');
+        renderChatSidebar();
+        showAutomationsBoard();
+      }).catch(function(error){
+        var errorNode = el('#automationsEditError', body);
+        if(errorNode) errorNode.textContent = error.message || 'Could not delete automation.';
+        remove.disabled = false;
+      });
+    });
   }
 
   // Pause and Resume on the Automations page: the same save the editor's

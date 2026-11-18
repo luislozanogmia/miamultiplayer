@@ -29,6 +29,9 @@ const fs = require('fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(commandLog)}, JSON.stringify(args) + '\\n');
 if (args.includes('create')) console.log('Created job: replacement-id');
+// A real run lasts as long as the job does; Run now must not wait for it.
+if (args.includes('run') && args.includes('job-slow-run')) setTimeout(() => {}, 8000);
+if (args.includes('run') && args.includes('job-broken-run')) process.exit(3);
 `
 );
 fs.chmodSync(fakeHermes, 0o755);
@@ -168,7 +171,9 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 test('every cron subprocess receives the strict Hermes environment allowlist', () => {
   const source = fs.readFileSync(new URL('./cron-sync.js', import.meta.url), 'utf8');
-  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 4);
+  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 5);
+  // Run now starts its run detached, with the same allowlisted environment.
+  assert.match(source, /spawn\(launch\.command, \[\.\.\.launch\.prefixArgs, 'cron', '--accept-hooks', 'run', jobId\],\s*\{ detached: true, stdio: 'ignore', env: hermesProcessEnv\(\) \}\)/);
 });
 
 test('briefing schedules preserve selected UTC offset and weekday across midnight', () => {
@@ -1331,4 +1336,28 @@ test('Stop asks the running run to end, finds it after a pause, and never shows 
   assert.equal(fs.existsSync(path.join(stopFolder, 'execution-gone')), false);
   assert.equal(cronSync.stopBotAutomationRun(appDb, bot, 'no-such-automation').status, 'missing');
   appDb.close();
+});
+
+test('Run now starts a long run and answers at once instead of waiting for it to finish', async () => {
+  const bot = { id: 'bot-run', name: 'Disk Bot', automations: [
+    { id: 'slow', name: 'Daily disk check', enabled: true, frequency: 'daily', time: '09:00', prompt: 'Check the disk' },
+    { id: 'broken', name: 'Broken', enabled: true, frequency: 'daily', time: '09:00', prompt: 'x' },
+  ] };
+  const before = fs.readFileSync(jobsFile, 'utf8');
+  fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [
+    { id: 'job-slow-run', name: 'Mia bot-run/slow · Disk Bot · Daily disk check', enabled: true, state: 'scheduled' },
+    { id: 'job-broken-run', name: 'Mia bot-run/broken · Disk Bot · Broken', enabled: true, state: 'scheduled' },
+  ] }));
+  try {
+    const started = Date.now();
+    const result = await cronSync.runBotAutomationNow(bot, 'slow');
+    assert.deepEqual(result, { status: 'started', jobId: 'job-slow-run' });
+    assert.ok(Date.now() - started < 6000, 'answered before the 8 second run ended');
+    const ran = fs.readFileSync(commandLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.ok(ran.some((args) => args.join(' ') === 'cron --accept-hooks run job-slow-run'));
+    // A run that fails straight away is still reported as not started.
+    await assert.rejects(cronSync.runBotAutomationNow(bot, 'broken'), /exited/);
+  } finally {
+    fs.writeFileSync(jobsFile, before);
+  }
 });

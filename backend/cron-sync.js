@@ -24,7 +24,7 @@
 // namespace check remains a defense-in-depth
 // boundary before Mia edits, pauses, resumes, or removes a Hermes job.
 
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -833,8 +833,37 @@ async function runBotAutomationNow(bot, automationId) {
   const job = resolveOwnedAutomationJob(lookup, automation, readHermesJobs(), null, false);
   if (!job) return { status: 'missing' };
   if (jobIsPaused(job)) return { status: 'off' };
-  await runHermes(['run', job.id]);
+  await startHermesRun(job.id);
   return { status: 'started', jobId: job.id };
+}
+
+// `hermes cron run` runs the whole job before it exits, and a run can take
+// minutes. Waiting on it made Run now time out after 90 seconds, report
+// "Could not start" and kill the run halfway. The run now goes on in its own
+// process; Mia only waits long enough to see that it did not fail at once.
+const RUN_START_GRACE_MS = 2500;
+function startHermesRun(jobId) {
+  return new Promise((resolve, reject) => {
+    const launch = configuredHermesLaunch(HERMES_BIN);
+    let child;
+    try {
+      child = spawn(launch.command, [...launch.prefixArgs, 'cron', '--accept-hooks', 'run', jobId],
+        { detached: true, stdio: 'ignore', env: hermesProcessEnv() });
+    } catch (error) {
+      return reject(error);
+    }
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.unref();
+      if (error) reject(error); else resolve();
+    };
+    const timer = setTimeout(() => finish(null), RUN_START_GRACE_MS);
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code, signal) => finish(code === 0 ? null : new Error(`hermes cron run exited (${signal || code})`)));
+  });
 }
 
 // Stop a run that is going now. Mia writes a stop request named after the

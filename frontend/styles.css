@@ -3055,8 +3055,26 @@
   .automations-run-now:disabled{opacity:.38;cursor:not-allowed;}
   .automations-run-now svg{width:17px;height:17px;fill:currentColor;}
   .automations-stop{color:var(--danger);}
-  .automations-state{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:11px;line-height:16px;color:var(--sand-text-tertiary);background:var(--sand-fill-ghost-hover);vertical-align:1px;}
+  .automations-run-now.automations-line-icon:disabled{opacity:.4;cursor:default;}
+  .automations-state{appearance:none;border:0;font:inherit;cursor:pointer;display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:11px;line-height:16px;color:var(--sand-text-tertiary);background:var(--sand-fill-ghost-hover);vertical-align:1px;}
+  .automations-state:hover{box-shadow:inset 0 0 0 1px currentColor;}
+  .automations-state:disabled{cursor:default;opacity:.6;}
   .automations-state.is-on{color:var(--sand-text-success, #1a7f37);background:color-mix(in srgb, currentColor 12%, transparent);}
+  .automations-run-now.automations-line-icon svg{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;width:18px;height:18px;}
+  .automations-run-now[aria-pressed="true"]{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
+  .automations-schedule-edit{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:6px;font-size:13px;color:var(--sand-text-secondary);}
+  .automations-schedule-edit span{display:inline-flex;align-items:center;gap:6px;}
+  .automations-schedule-edit span[hidden]{display:none;}
+  .automations-schedule-edit select,.automations-schedule-edit input{font:inherit;color:var(--sand-text-primary);background:var(--sand-bg-base);border:1px solid var(--sand-border-default);border-radius:7px;padding:4px 7px;}
+  .automations-schedule-edit input[type="number"]{width:58px;}
+  .automations-schedule-edit .styled-btn-secondary,.automations-schedule-edit .styled-btn-primary{padding:4px 12px;font-size:13px;}
+  .automations-schedule-edit .styled-btn-secondary{margin-left:auto;}
+  .automations-steps-edit{margin:2px 0 10px;}
+  .automations-steps-edit .cip-automation-step{grid-template-columns:36px minmax(0,1fr);}
+  .automations-steps-edit .cip-automation-step input[type="text"]{width:100%;font:inherit;font-size:14px;color:var(--sand-text-primary);border:0;background:transparent;padding:10px 12px 10px 8px;outline:none;}
+  .automations-steps-edit .cip-automation-step:focus-within{background:var(--sand-fill-ghost-hover);}
+  .automations-edit-actions{display:flex;align-items:center;gap:8px;}
+  .automations-edit-actions > span{flex:1;}
   .automations-edit-icon{appearance:none;flex:none;width:28px;height:28px;margin-top:1px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--sand-text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;}
   .automations-edit-icon:hover{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);}
   .automations-edit-icon:focus-visible{outline:2px solid var(--sand-text-accent);outline-offset:1px;}
