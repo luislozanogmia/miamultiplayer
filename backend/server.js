@@ -42,7 +42,8 @@ const { DEMO_FRAME_CSP, DEMO_LIBRARY_CSP, isDemoFramePath, isDemoLibraryPath } =
 const { provisionHermesWebSearchConfig } = require('./hermes-web-search-config');
 const { approvalCard } = require('./ask-before-do');
 const { localDateString } = require('./local-date');
-const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisionHermesPrivateAgentProfile } = require('./hermes-bot-profile');
+const { provisionHermesRuntimeProfiles, googleWorkspaceToolsConfigured, provisionHermesPrivateAgentProfile, MCP_APP_PROFILES, botProfileFor } = require('./hermes-bot-profile');
+const botMcpRequests = require('./bot-mcp-requests');
 const { buildConnectedAppsTurn } = require('./connected-apps-turn');
 const browserSuggestions = require('./browser-suggestions');
 const meetingSuggestions = require('./meeting-suggestions');
@@ -1503,7 +1504,9 @@ async function runSharedBotTurn({ owner, bot, trigger, contextText, history, cha
         botWorker: true,
         maxTurns: MIAOS_BOT_MAX_TURNS,
         maxTokens: hermesTokenBudgetFromOptions(userOptions),
-        profile: workspace.connectionInventory.googleToolsEnabled ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE,
+        // The owner's MCP apps only when the owner at this computer asked.
+        profile: botProfileFor({ google: workspace.connectionInventory.googleToolsEnabled,
+          apps: !!(asker && asker.own) && botMcpAppsFor(bot, owner).apps.length > 0 }),
         ...(teamWorkFolder ? { workspaceDir: teamWorkFolder } : {}),
         onSession,
       },
@@ -6010,14 +6013,25 @@ app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
 const mcpApps = require('./mcp-apps');
 const { createMcpOAuthClientManager, requireMcpOwner } = require('./mcp-app-oauth-client');
 const requireMcpAppOwner = requireMcpOwner(DEFAULT_OWNER, { allowNoAuth: MIAOS_NO_AUTH });
-const mcpAppKeyFiles = () => [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]
-  .map((profile) => path.join(String(process.env.HERMES_HOME || ''), 'profiles', profile, '.env'));
+// Every profile that runs the apps gets their keys: Mia's two (the first is
+// the source), the bots' two apps profiles, and the Hermes home's own .env,
+// which scheduled runs read (cron-sync.js).
+const mcpAppKeyFiles = () => MCP_APP_PROFILES
+  .map((profile) => path.join(String(process.env.HERMES_HOME || ''), 'profiles', profile, '.env'))
+  .concat(path.join(String(process.env.HERMES_HOME || ''), '.env'));
 // An oauth app's sign-in (backend/mcp-app-sign-in.js) is made once, for Mia's
 // first profile; her second profile's sign-in folder is a link to it.
 const mcpAppSignIn = require('./mcp-app-sign-in');
 function shareMcpAppSignIns() {
-  try { mcpAppSignIn.shareSignIns(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE); }
-  catch (error) { console.error('[mcp-apps] could not share app sign-ins between Mia\u2019s profiles:', error.code || 'error'); }
+  try {
+    for (const profile of MCP_APP_PROFILES.slice(1)) mcpAppSignIn.shareSignIns(process.env.HERMES_HOME, MCP_APP_PROFILES[0], profile);
+    mcpAppSignIn.shareSignInsWithHome(process.env.HERMES_HOME, MCP_APP_PROFILES[0]);
+  } catch (error) { console.error('[mcp-apps] could not share app sign-ins between Mia\u2019s profiles:', error.code || 'error'); }
+  // Profiles added after a key or OAuth client was saved get the same one.
+  try { mcpApps.copyMissingProfileSecrets(mcpAppKeyFiles()[0], mcpAppKeyFiles(), mcpApps.defaultStore.list()); }
+  catch (error) { console.error('[mcp-apps] could not copy app keys to the bots\u2019 profiles:', error.code || 'error'); }
+  // Scheduled runs read the apps from the Hermes home's config.
+  cronSync.refreshScheduledMcpApps();
 }
 if (process.env.HERMES_HOME) shareMcpAppSignIns();
 const mcpAppSignedIn = (app) => mcpAppSignIn.hasSignIn(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, mcpApps.serverName(app.id));
@@ -6045,7 +6059,7 @@ const mcpOAuthClients = createMcpOAuthClientManager({
   envFiles: mcpAppKeyFiles(),
   cancelSignIn: id => mcpAppSignIns.cancel(id),
   forgetSignIn: id => {
-    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]) {
+    for (const profile of MCP_APP_PROFILES) {
       mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, profile, mcpApps.serverName(id));
     }
   },
@@ -6074,6 +6088,28 @@ function listedMcpApps() {
     app.auth !== 'key' || mcpAppKeyFiles().every((file) => mcpApps.hasProfileKey(file, mcpApps.keyEnvName(app.id)))))
     .concat(offered.map((app) => ({ ...mcpApps.publicMcpApp(app, false), offered: true })));
 }
+// A bot's turn gets these apps only when the person asking is the one who
+// added and signed in to them: the installation owner, asking their own bot.
+// A teammate in a company chat, or anyone else, gets none, so no one reaches
+// the owner's CRM through a bot. -> { available, apps: [{ name, ready }] }
+function botMcpAppsFor(bot, askerEmail) {
+  const asker = String(askerEmail || '').trim().toLowerCase();
+  if (MIAOS_AGENT_SEARCH_ONLY || !asker || asker !== String(DEFAULT_OWNER || '').toLowerCase() || !bot || !sameOwner(bot, asker)) {
+    return { available: false, apps: [] };
+  }
+  try {
+    const apps = listedMcpApps().filter((app) => !app.offered)
+      .map((app) => ({ name: app.name, ready: app.status === 'ready' || app.status === 'signed_in' }));
+    return { available: true, apps };
+  } catch (_) { return { available: false, apps: [] }; }
+}
+// Scheduled runs: a bot's automations get the apps only when the bot is the
+// installation owner's (cron-sync.js reads this when it saves each job).
+cronSync.setScheduledMcpAppsPolicy({
+  ownerOwnsApps: (bot) => !MIAOS_AGENT_SEARCH_ONLY && !!bot && sameOwner(bot, DEFAULT_OWNER),
+  servers: () => mcpApps.hermesMcpServerObjects(mcpApps.defaultStore.list()),
+  serverPrefix: mcpApps.SERVER_PREFIX,
+});
 app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
 app.post('/api/mcp-apps/:id/oauth-client', requireInteractiveAuth, requireMcpAppOwner, mcpAppRoute(async (req) => {
   return mcpOAuthClients.save(String(req.params.id || ''), req.body || {});
@@ -6123,12 +6159,13 @@ app.delete('/api/mcp-apps/:id', requireInteractiveAuth, requireMcpAppOwner, mcpA
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), null);
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileOAuthClient(file, found.id, null);
     if (found.auth === 'oauth') {
-      for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]) {
+      for (const profile of MCP_APP_PROFILES) {
         mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, profile, mcpApps.serverName(found.id));
       }
     }
     provisionHermesRuntimeProfiles();
   }));
+  cronSync.refreshScheduledMcpApps();
   return { removed: found.id };
 }));
 
@@ -8498,7 +8535,44 @@ function localTimezoneName() {
 // Action blocks are read by Mia, never shown: a bot's <MIA_AUTOMATION> and
 // Mia's own <MIA_BOT_SETUP>.
 function stripAgentActionBlocks(text) {
-  return botFilesTidy.stripTidyPlanBlocks(botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text))));
+  return botMcpRequests.stripMcpRequestBlocks(botFilesTidy.stripTidyPlanBlocks(botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text)))));
+}
+
+// Reads a bot's <MIA_MCP_REQUEST> block in its owner's own chat: the request
+// becomes a message from the owner in Mia's chat in the same workspace, and
+// Mia proposes the app there with her usual card. Nothing is added until the
+// owner accepts that card. Only the apps' owner can ask through a bot.
+async function nativeBotMcpRequest(agent, replyText, trigger, conversation) {
+  const extracted = botMcpRequests.extractMcpRequest(replyText);
+  if (!extracted.request && !extracted.error) return { text: extracted.text, metadata: null };
+  // A failed request says so under the bot's own words, which may claim it went.
+  const failed = (reason, note) => ({
+    text: [extracted.text, note || 'I couldn\u2019t pass that app request to Mia. Ask her directly in her chat.'].filter(Boolean).join('\n\n'),
+    metadata: { mcpAppRequest: { status: 'failed', reason: String(reason).slice(0, 200) } } });
+  if (extracted.error) return failed(extracted.error);
+  const asker = String(trigger.senderId || '').trim().toLowerCase();
+  if (!botMcpAppsFor(agent, asker).available) return failed('not_owner', 'Only the person who manages Connected apps can ask Mia for a new app.');
+  const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
+  const workspace = typeof team === 'string' && AUTOMATION_TEAM_WORKSPACE.test(team) ? team : 'solo';
+  const miaChat = siteNotificationMiaChat(asker, workspace);
+  if (!miaChat) return failed('mia_chat_unavailable', 'Mia\u2019s chat in this workspace isn\u2019t there yet. Ask her directly once it is.');
+  try {
+    const created = await nativeConversationService.createEvent({
+      companyId: miaChat.companyId,
+      conversationId: miaChat.id,
+      principal: { companyId: miaChat.companyId, principalId: asker, principalType: 'user' },
+      type: 'message',
+      content: { text: botMcpRequests.miaRequestText(agent.name || 'A bot', extracted.request) },
+      clientIdempotencyKey: `bot-mcp-request-${trigger.id}`,
+      metadata: { requestedByBot: { id: agent.id, name: agent.name || agent.id, conversationId: trigger.conversationId } },
+    });
+    return { text: extracted.text || `I asked Mia to add ${extracted.request.app}. Her card is in her chat for you to accept.`,
+      metadata: { mcpAppRequest: { status: 'sent', app: extracted.request.app, miaConversationId: miaChat.id,
+        eventId: created && created.event && created.event.id } } };
+  } catch (error) {
+    console.error('bot app request to Mia failed for', agent.id, error && error.message ? error.message : error);
+    return failed('delivery_failed');
+  }
 }
 
 // Reads a bot's <MIA_INSTRUCTIONS> block in its owner's own chat and saves it.
@@ -9161,9 +9235,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     ? MIAOS_AGENT_GOOGLE_HERMES_PROFILE
     : MIAOS_AGENT_HERMES_PROFILE;
   const googleGatewaySessionKey = googleGatewayProfile + ':' + connectionInventory.revision;
-  const googleBotProfile = googleProfileAuthorized
-    ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
-    : MIAOS_BOT_HERMES_PROFILE;
+  // The owner's own MCP apps only on the owner's own turns (botMcpAppsFor).
+  const botMcpApps = !isGatewayAgent ? botMcpAppsFor(agent, senderLabel) : { available: false, apps: [] };
+  const googleBotProfile = botProfileFor({ google: googleProfileAuthorized, apps: botMcpApps.available && botMcpApps.apps.length > 0 });
   const googleWorkspaceWriteAuthorized = googleWorkspaceWriteRequested
     && googleWorkspaceWriteKinds.length > 0
     && googleWorkspaceConnected;
@@ -9552,6 +9626,9 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       googleActionInstruction,
       slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName(), askBeforeDo: currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false }),
       slashCommand ? '' : botInstructionActions.instructionActionInstruction(),
+      // Asking Mia for a new app is for the owner's own chat with the bot.
+      slashCommand || EFFECTIVE_RELEASE_PROFILE.agentSearchOnly ? '' : botMcpRequests.mcpAppsInstruction({
+        apps: botMcpApps.apps, available: botMcpApps.available, canRequest: privateBotChat && botMcpApps.available }),
       sameSession ? newSkillsNotice(botPromptAgent, knownSkills) : '',
       nativePromptLine(trigger) || message,
       turnAttachments.note,
@@ -9687,9 +9764,13 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   // Only the bot's own chat may act on its automations; anywhere else the
   // block is dropped unread.
   // Mia's block only counts in her own chat.
+  // A bot's request for a new MCP app goes to Mia (nativeBotMcpRequest).
+  const mcpRequest = privateBotChat
+    ? await nativeBotMcpRequest(agent, actionReply, trigger, conversation)
+    : { text: botMcpRequests.stripMcpRequestBlocks(actionReply), metadata: null };
   const instructionUpdate = privateBotChat
-    ? nativeBotInstructionUpdate(agent, actionReply, trigger)
-    : { text: actionReply, metadata: null };
+    ? nativeBotInstructionUpdate(agent, mcpRequest.text, trigger)
+    : { text: mcpRequest.text, metadata: null };
   const tidyPlan = ownsMiaChat && conversation.companyId === nativeCompanyId('solo', senderLabel)
     ? nativeMiaTidyPlan(actionReply, senderLabel, trigger) : { text: actionReply, metadata: null };
   const automationAction = privateBotChat
@@ -9772,6 +9853,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
       agentName: agent.name,
       ...replyModelMetadata(inferenceOptions),
       ...(instructionUpdate.metadata || {}),
+      ...(mcpRequest.metadata || {}),
       ...(automationAction.metadata || {}),
       ...(tidyPlan.metadata || {}),
       ...nextStepMetadata,

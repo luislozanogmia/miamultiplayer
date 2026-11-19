@@ -465,6 +465,14 @@ const CRON_GUARD_SCRIPT = [
   'm.update({"google":gs}) if gs else m.pop("google",None)',
   'cfg["mcp_servers"]=m',
   'gs and cfg.setdefault("tools",{}).setdefault("tool_search",{}).update({"enabled":"off"})',
+  // The owner's own MCP apps (mcp-apps.js), replaced as a set: an app removed
+  // from Connected apps leaves the config too. Only the owner's bots' jobs
+  // may use them (restrictHermesJob); every other job lists no_mcp.
+  'ap=json.loads(sys.argv[4]) if len(sys.argv)>4 and sys.argv[4] else {}',
+  'px=sys.argv[5] if len(sys.argv)>5 and sys.argv[5] else ""',
+  'px and [m.pop(k) for k in list(m) if k.startswith(px)]',
+  'px and m.update(ap)',
+  'cfg["mcp_servers"]=m',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
@@ -473,8 +481,11 @@ function ensureCronGuards() {
       const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS, googleWorkspaceMcpServer } = require('./hermes-bot-profile');
       const guardPath = cronShellGuard(HERMES_HOME) || '';
       const google = googleWorkspaceMcpServer();
+      // No policy yet (the server sets it at boot): leave the apps as they are.
+      const apps = scheduledMcpAppsPolicy ? scheduledMcpAppsPolicy.servers() : null;
       await new Promise((resolve, reject) => {
-        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : ''], {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : '',
+          apps ? JSON.stringify(apps) : '', apps ? scheduledMcpAppsPolicy.serverPrefix : ''], {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -488,6 +499,34 @@ function ensureCronGuards() {
     });
   }
   return cronGuardsReady;
+}
+
+// The owner's MCP apps in scheduled runs. Set by server.js:
+// { ownerOwnsApps(bot) -> bool, servers() -> { name: server }, serverPrefix }.
+// Unset, no job gets them.
+let scheduledMcpAppsPolicy = null;
+function setScheduledMcpAppsPolicy(policy) {
+  scheduledMcpAppsPolicy = policy && typeof policy.ownerOwnsApps === 'function' && typeof policy.servers === 'function'
+    && typeof policy.serverPrefix === 'string' && policy.serverPrefix ? policy : null;
+}
+// After an app is added, removed or signed in to: rewrite the home config's
+// apps. Hermes reads them when its gateway next starts (Mia restarts it then).
+function refreshScheduledMcpApps() {
+  if (!scheduledMcpAppsPolicy) return Promise.resolve(false);
+  cronGuardsReady = null;
+  return ensureCronGuards().then(() => true, (error) => {
+    console.error('[cron-sync] could not update the apps for scheduled runs:', String(error && error.message || error).slice(0, 200));
+    return false;
+  });
+}
+// A job's tools: the bot's own list, and the owner's MCP apps only for the
+// owner's bots. Hermes adds every configured MCP server to a job that names
+// none, so every other job says no_mcp.
+// With no policy Mia writes no apps into the config, so jobs keep the plain list.
+function scheduledJobToolsets(bot) {
+  if (!scheduledMcpAppsPolicy) return scheduledBotToolsets();
+  const owns = scheduledMcpAppsPolicy.ownerOwnsApps(bot) === true;
+  return owns ? scheduledBotToolsets() : [...scheduledBotToolsets(), 'no_mcp'];
 }
 
 // Hermes loads plugins when its gateway starts, so Mia prepares scheduled
@@ -520,7 +559,7 @@ async function restrictHermesJob(jobId, bot, workdir, automation) {
     'raise SystemExit(0 if job else 2)',
   ].join(';');
   return new Promise((resolve, reject) => {
-    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(scheduledBotToolsets()), workdir, artifactWorkspace, JSON.stringify(runReport)], {
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(scheduledJobToolsets(bot)), workdir, artifactWorkspace, JSON.stringify(runReport)], {
       timeout: 30000,
       maxBuffer: 1024 * 1024,
       cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -732,7 +771,7 @@ function hermesTimestampMs(value) {
   return Date.parse(String(value));
 }
 
-function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReport = null) {
+function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReport = null, toolsets = scheduledBotToolsets()) {
   if (!job) return true;
   const sched = (job.schedule && job.schedule.expr) || job.schedule_display || '';
   return (
@@ -742,7 +781,7 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspa
     String(job.deliver || '') !== deliver ||
     String(job.model || '') !== model ||
     String(job.provider || '') !== provider ||
-    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(scheduledBotToolsets()) ||
+    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(toolsets) ||
     String(job.workdir || '') !== workdir ||
     String(job.artifact_workspace || '') !== artifactWorkspace ||
     JSON.stringify(job.mia_run_report || null) !== JSON.stringify(runReport)
@@ -950,7 +989,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   const { model, provider } = jobModel;
 
   if (job) {
-    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation))) {
+    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation), scheduledJobToolsets(bot))) {
       await runHermes([
         'edit',
         job.id,
@@ -1626,6 +1665,9 @@ module.exports = {
   listSessionArtifacts,
   validateBotArtifacts,
   scheduledBotToolsets,
+  scheduledJobToolsets,
+  setScheduledMcpAppsPolicy,
+  refreshScheduledMcpApps,
   CRON_GUARD_SCRIPT,
   prepareScheduledRuns,
   hasActiveMiaJobs,

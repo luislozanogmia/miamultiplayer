@@ -16,6 +16,24 @@ const MIAOS_AGENT_HERMES_PROFILE = 'miaos-agent-runtime';
 const MIAOS_AGENT_GOOGLE_HERMES_PROFILE = 'miaos-agent-google-runtime';
 const MIAOS_BOT_HERMES_PROFILE = 'miaos-bot-worker';
 const MIAOS_BOT_GOOGLE_HERMES_PROFILE = 'miaos-bot-google-worker';
+// The same two bot profiles plus the owner's own MCP apps (Asana, Attio, ...).
+// A bot's turn uses one of these only when the installation owner, who added
+// and signed in to those apps, is the one asking (server.js botProfileFor), so
+// a teammate in a company chat never reaches the owner's sign-ins.
+const MIAOS_BOT_APPS_HERMES_PROFILE = 'miaos-bot-apps-worker';
+const MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE = 'miaos-bot-google-apps-worker';
+const BOT_HERMES_PROFILES = Object.freeze([MIAOS_BOT_HERMES_PROFILE, MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_APPS_HERMES_PROFILE, MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE]);
+// The bot profile for a turn: with Google when the asker's Google is
+// connected, with MCP apps when the asker owns them.
+function botProfileFor({ google = false, apps = false } = {}) {
+  if (apps) return google ? MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE : MIAOS_BOT_APPS_HERMES_PROFILE;
+  return google ? MIAOS_BOT_GOOGLE_HERMES_PROFILE : MIAOS_BOT_HERMES_PROFILE;
+}
+// Every profile that runs the owner's MCP apps, so each gets their keys and
+// sign-ins: Mia's two first (the first holds the sign-ins), then the bots'.
+const MCP_APP_PROFILES = Object.freeze([MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_APPS_HERMES_PROFILE, MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE]);
 const CLAUDE_SUBSCRIPTION_PLUGIN = 'claude-subscription-directsdk-experimental';
 const CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE = path.join(__dirname, 'hermes-plugins', CLAUDE_SUBSCRIPTION_PLUGIN);
 // Refuses Hermes' own browser tools until the session has tried ghost-cli.
@@ -483,35 +501,27 @@ function provisionHermesBotProfile({
   profilesRoot = path.join(hermesHome(), 'profiles'),
   searchOnly = MIAOS_AGENT_SEARCH_ONLY,
   workspaceDir,
+  google = false,
+  apps = false,
 } = {}) {
-  // Bot and Google-enabled bot profiles share the same full-mode guarded
-  // terminal posture; the Google profile adds the app's MCP connection tools.
+  // Every bot profile shares the same full-mode guarded terminal posture; the
+  // Google ones add the app's Google tools, the apps ones the owner's MCP
+  // apps. Search-only bots get no MCP apps, like Mia.
   return provisionRuntimeProfile({
     profilesRoot,
-    profile: MIAOS_BOT_HERMES_PROFILE,
+    profile: botProfileFor({ google, apps }),
     toolsets: botToolsets({ searchOnly }),
     disabledToolsets: [...BOT_DISABLED_TOOLSETS],
     maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
     terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
+    googleWorkspace: google === true,
     backgroundReview: backgroundReviewEnabledForBot(),
+    mcpApps: apps && !searchOnly ? mcpApps() : [],
   });
 }
 
-function provisionHermesGoogleBotProfile({
-  profilesRoot = path.join(hermesHome(), 'profiles'),
-  searchOnly = MIAOS_AGENT_SEARCH_ONLY,
-  workspaceDir,
-} = {}) {
-  return provisionRuntimeProfile({
-    profilesRoot,
-    profile: MIAOS_BOT_GOOGLE_HERMES_PROFILE,
-    toolsets: botToolsets({ searchOnly }),
-    disabledToolsets: [...BOT_DISABLED_TOOLSETS],
-    maxTurns: searchOnly ? SEARCH_ONLY_TURN_LIMIT : FULL_AGENT_TURN_LIMIT,
-    terminal: guardedWorkspaceTerminal({ profilesRoot, searchOnly, workspaceDir }),
-    googleWorkspace: true,
-    backgroundReview: backgroundReviewEnabledForBot(),
-  });
+function provisionHermesGoogleBotProfile(options = {}) {
+  return provisionHermesBotProfile({ ...options, google: true, apps: false });
 }
 
 // The MCP apps Mia added for you; a missing or unreadable list is none.
@@ -618,8 +628,11 @@ function provisionHermesRuntimeProfiles(options = {}) {
   const googleAgent = provisionHermesGoogleAgentProfile(options);
   const bot = provisionHermesBotProfile(options);
   const googleBot = provisionHermesGoogleBotProfile(options);
-  return { agent, googleAgent, bot, googleBot,
-    changed: agent.changed || googleAgent.changed || bot.changed || googleBot.changed };
+  const appsBot = provisionHermesBotProfile({ ...options, google: false, apps: true });
+  const googleAppsBot = provisionHermesBotProfile({ ...options, google: true, apps: true });
+  return { agent, googleAgent, bot, googleBot, appsBot, googleAppsBot,
+    changed: agent.changed || googleAgent.changed || bot.changed || googleBot.changed
+      || appsBot.changed || googleAppsBot.changed };
 }
 
 module.exports = {
@@ -629,6 +642,11 @@ module.exports = {
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_APPS_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE,
+  BOT_HERMES_PROFILES,
+  MCP_APP_PROFILES,
+  botProfileFor,
   EFFECTIVE_RELEASE_PROFILE,
   MIAOS_RELEASE_PROFILE,
   MIAOS_AGENT_SEARCH_ONLY,
