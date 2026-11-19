@@ -7832,7 +7832,14 @@ const sharedBotRunSessions = new Map();
 // company. A notification is posted in that chat as a notice from the site,
 // never as the person's message, so nothing starts a turn on it: what a site
 // says is its own words, not an instruction.
-const SITE_NOTIFICATION_LIMITS = { origin: 200, title: 200, body: 1000, tag: 200 };
+const SITE_NOTIFICATION_LIMITS = { origin: 200, title: 200, body: 1000, tag: 200, icon: 32 * 1024 };
+// The site's own icon, as the browser keeps it for the tab: only an inline
+// image, never an address the chat would load.
+const SITE_NOTIFICATION_ICON = /^data:image\/(?:png|x-icon|vnd\.microsoft\.icon|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
+function siteNotificationIcon(value) {
+  const icon = typeof value === 'string' ? value.trim() : '';
+  return icon.length <= SITE_NOTIFICATION_LIMITS.icon && SITE_NOTIFICATION_ICON.test(icon) ? icon : '';
+}
 function siteNotificationWorkspace(value) {
   const key = String(value || '').trim().toLowerCase();
   if (key === 'solo') return 'solo';
@@ -7874,7 +7881,8 @@ async function siteNotificationBotChat(bot, workspace) {
 function siteNotificationText({ origin, title, body }) {
   let host = origin;
   try { host = new URL(origin).hostname; } catch (_) { /* kept as given */ }
-  return [`🔔 Notification from ${host}`, title, body].filter(Boolean).join('\n');
+  // Plain words: the chat draws Mia's icon for it (frontend site-notices.js).
+  return [`Notification from ${host}`, title, body].filter(Boolean).join('\n');
 }
 app.get('/api/browser/site-notifications/bots', requireAuth, (req, res) => {
   if (!siteNotificationWorkspace(req.query && req.query.workspace)) return res.status(400).json({ error: 'invalid_workspace' });
@@ -7916,7 +7924,7 @@ app.post('/api/browser/site-notifications/deliver', requireAuth, async (req, res
       principal,
       type: 'system',
       content: { text: siteNotificationText({ origin, title, body }) },
-      metadata: { siteNotification: { origin, tag: clip(input.tag, SITE_NOTIFICATION_LIMITS.tag), workspace } },
+      metadata: { siteNotification: { origin, tag: clip(input.tag, SITE_NOTIFICATION_LIMITS.tag), workspace, ...(siteNotificationIcon(input.icon) ? { icon: siteNotificationIcon(input.icon) } : {}) } },
     });
     res.status(201).json({ delivered: true, conversationId: conversation.id, eventId: created && created.event && created.event.id });
   } catch (error) {

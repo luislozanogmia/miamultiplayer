@@ -4649,3 +4649,34 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 @keyframes twfHop{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
 @media (prefers-reduced-motion: reduce){.twf-step[data-state="working"] .twf-mote{animation:none;}}
 @media (max-width:640px){.automations-step.twf-step{grid-template-columns:40px minmax(0,1fr);}.twf-step .twf-who{grid-column:2;}}
+
+/* A site's notification in a chat (site-notices.js): the site's icon with
+   Mia's gold dot; a run from one site folds into one line. */
+.site-notice{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;margin:4px 0;border-radius:10px;background:color-mix(in srgb,var(--ink) 4%,transparent);text-align:left;font-size:13px;line-height:1.4;color:var(--ink)}
+.chat-msg-system.site-notice,.chat-msg-system.site-notice-group{width:min(560px,92%);max-width:92%;margin:4px auto;font-family:inherit;font-size:13px;color:var(--ink);text-align:left}
+.chat-msg-system.site-notice{padding:8px 10px}
+.chat-msg-system.site-notice-group{padding:0}
+.site-notice-icon{position:relative;flex:0 0 auto;width:24px;height:24px}
+.site-notice-site{display:block;width:24px;height:24px;border-radius:6px;object-fit:contain}
+.site-notice-site.is-mia{display:grid;place-items:center;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.site-notice-mia .dot{fill:var(--mia-dot,#141414)}
+.site-notice-mia .gold,.site-notice-pip{fill:var(--mia-gold,#E4B43C);background:var(--mia-gold,#E4B43C)}
+.site-notice-pip{position:absolute;right:-3px;bottom:-3px;width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 2px var(--bg,#fff)}
+.site-notice-text{min-width:0;flex:1 1 auto;overflow-wrap:anywhere}
+.site-notice-meta{font-size:11.5px;color:var(--muted)}
+.site-notice-meta b{font-weight:600;color:var(--ink-soft)}
+.site-notice-title{font-weight:600}
+.site-notice-body{color:var(--ink-soft)}
+.site-notice-time{margin-left:auto;flex:0 0 auto;font-size:11px;color:var(--muted);white-space:nowrap}
+.site-notice-group{display:block;margin:4px 0;border-radius:10px;background:color-mix(in srgb,var(--ink) 4%,transparent);text-align:left}
+.site-notice-group>summary{list-style:none;cursor:pointer;margin:0;background:none;align-items:center}
+.site-notice-group>summary::-webkit-details-marker{display:none}
+.site-notice-count{flex:0 0 auto;background:var(--ink);color:var(--bg,#fff);border-radius:999px;padding:0 7px;font-size:11px;font-weight:600;line-height:18px}
+.site-notice-chev{flex:0 0 auto;color:var(--muted);transition:transform .15s}
+.site-notice-group[open] .site-notice-chev{transform:rotate(90deg)}
+.site-notice-list{display:flex;flex-direction:column;gap:6px;padding:0 10px 8px 44px;font-size:13px}
+.site-notice-item{border-top:1px solid color-mix(in srgb,var(--ink) 8%,transparent);padding-top:6px;overflow-wrap:anywhere}
+/* "Stopped by you": the stop button's square, not an emoji. */
+.chat-stopped-notice{display:flex;gap:8px;align-items:flex-start;color:var(--ink-soft)}
+.chat-stopped-icon{flex:0 0 auto;display:grid;place-items:center;width:18px;height:18px;margin-top:1px;border-radius:5px;border:1px solid color-mix(in srgb,var(--ink) 18%,transparent);color:var(--ink-soft)}
+.chat-stopped-icon i{display:block;width:7px;height:7px;border-radius:1px;background:currentColor}

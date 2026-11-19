@@ -493,7 +493,7 @@ test('a run cut off when Mia closed leaves one plain line in the chat', async ()
     assert.equal(notices.length, 1);
     assert.equal(notices[0].senderId, 'bot-helper');
     assert.equal(notices[0].type, 'bot_message');
-    assert.equal(notices[0].content.text, '⏹ Stopped when Mia closed — the bot was mid-response. Send it again to restart it.');
+    assert.equal(notices[0].content.text, 'Stopped when Mia closed — the bot was mid-response. Send it again to restart it.');
     assert.doesNotMatch(notices[0].content.text, /not processed|Stopped by you/);
   } finally {
     await app.close();
@@ -550,7 +550,7 @@ test('native HTTP stop exposes active work, cancels it durably, and prevents a q
     assert.equal(stopNotice.senderId, 'gateway');
     assert.equal(stopNotice.senderType, 'agent');
     assert.equal(stopNotice.type, 'agent_message');
-    assert.match(stopNotice.content.text, /^⏹ Stopped by you — the agent was mid-response\./);
+    assert.match(stopNotice.content.text, /^Stopped by you — the agent was mid-response\./);
     assert.equal(stopNotice.metadata.dispatchId, dispatchId);
 
     // Idempotent: stopping an already-terminal dispatch again must not post

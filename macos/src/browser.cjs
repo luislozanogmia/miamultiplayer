@@ -428,12 +428,24 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
       body: {
         workspace: decision.workspace, target: decision.mode, botId: decision.botId || "",
         origin: notification.origin, title: notification.title, body: notification.body, tag: notification.tag,
+        icon: siteNotificationIcon(notification.origin),
       },
     }).catch((error) => {
       if (error && /bot_unavailable/.test(String(error.message))) throw Object.assign(new Error("bot unavailable"), { code: "BOT_UNAVAILABLE" });
       throw error;
     }),
   });
+  // The site's own icon for its notification in the chat: an open tab's, or
+  // the one remembered with its history; none when it is too big to carry.
+  function siteNotificationIcon(origin) {
+    const fits = icon => typeof icon === "string" && /^data:image\//i.test(icon) && icon.length <= HISTORY_ICON_MAX_CHARS;
+    const tab = [...tabs.values()].find(candidate => !candidate.app && siteOrigin(candidate.url) === origin && fits(candidate.favicon));
+    if (tab) return tab.favicon;
+    let host = "";
+    try { host = new URL(origin).hostname.toLowerCase(); } catch (_) { return ""; }
+    const remembered = historyIcons.get(host);
+    return fits(remembered) ? remembered : "";
+  }
   // The question a site's first request (or the page's right-click menu)
   // brings up. Send to Bot asks which of the person's bots; closing that
   // list, or having none, is Not Now.

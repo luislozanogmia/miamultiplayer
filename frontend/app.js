@@ -13834,6 +13834,8 @@
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
+      // A site's notification: its own icon with Mia's dot, never an emoji.
+      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m);
       // A row from when bringing a bot was a request an admin answered.
       if(m.hubBotRequest && hubWorkspace()){
         return '<div class="chat-msg-system"><p>' + esc(displayNameForEmail(m.hubBotRequest.requester_email)) + (m.hubBotRequest.status === 'accepted' ? ' added ' : ' asked to add ') + esc(m.hubBotRequest.name) + '.</p></div>';
@@ -13935,6 +13937,8 @@
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     else if(!isHuman && !m.pending && (chatOutputLimitNotice(text) || chatPausedNotice(text))) messageHtml = chatContinueHtml(m.id, text);
+    // "Stopped by you" carries the stop button's own square (site-notices.js).
+    else if(!isHuman && !m.pending && window.MiaSiteNotices && window.MiaSiteNotices.stoppedText(text)) messageHtml = window.MiaSiteNotices.stoppedHtml(text);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
@@ -14789,6 +14793,8 @@
     // they render nested under their root instead, via chatThreadFooterHtml.
     var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && !shownByThinkingRow(state, m) && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
     mainMessages = MiaChatSteps.groupSteps(mainMessages);
+    // A site's notifications in a row fold into one line (site-notices.js).
+    if(window.MiaSiteNotices) mainMessages = window.MiaSiteNotices.groupNotices(mainMessages);
     var dateDivider = '';
     if(mainMessages.length){
       var dividerDate = new Date(mainMessages[0].ts || Date.now());
@@ -14800,6 +14806,7 @@
     var prevHumanKey = null;
     var html = mainMessages.map(function(m){
       if(m.steps) return chatStepsHtml(m);
+      if(m.siteNotices){ prevHumanKey = null; return window.MiaSiteNotices.groupHtml(m); }
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevHumanKey;
