@@ -423,12 +423,12 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     workspace: () => workspaceKey,
     caught: notification => { if (typeof options.onSiteNotification === "function") options.onSiteNotification(notification); },
     ask: askSiteNotifications,
-    deliver: (notification, decision) => appRequest("/api/browser/site-notifications/deliver", {
+    deliver: async (notification, decision) => appRequest("/api/browser/site-notifications/deliver", {
       method: "POST",
       body: {
         workspace: decision.workspace, target: decision.mode, botId: decision.botId || "",
         origin: notification.origin, title: notification.title, body: notification.body, tag: notification.tag,
-        icon: siteNotificationIcon(notification.origin),
+        icon: await siteNotificationIcon(notification.origin),
       },
     }).catch((error) => {
       if (error && /bot_unavailable/.test(String(error.message))) throw Object.assign(new Error("bot unavailable"), { code: "BOT_UNAVAILABLE" });
@@ -436,15 +436,49 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     }),
   });
   // The site's own icon for its notification in the chat: an open tab's, or
-  // the one remembered with its history; none when it is too big to carry.
-  function siteNotificationIcon(origin) {
-    const fits = icon => typeof icon === "string" && /^data:image\//i.test(icon) && icon.length <= HISTORY_ICON_MAX_CHARS;
-    const tab = [...tabs.values()].find(candidate => !candidate.app && siteOrigin(candidate.url) === origin && fits(candidate.favicon));
-    if (tab) return tab.favicon;
-    let host = "";
-    try { host = new URL(origin).hostname.toLowerCase(); } catch (_) { return ""; }
-    const remembered = historyIcons.get(host);
-    return fits(remembered) ? remembered : "";
+  // the one remembered with its history. A big one (WhatsApp's .ico is about
+  // 33 KB) is shrunk to a small PNG instead of being dropped; none only when
+  // it can't be read at all.
+  const NOTICE_ICON_PX = 64;
+  const noticeIconCache = new Map();
+  async function siteNotificationIcon(origin) {
+    const isImage = icon => typeof icon === "string" && /^data:image\//i.test(icon);
+    const fits = icon => isImage(icon) && icon.length <= HISTORY_ICON_MAX_CHARS;
+    const tab = [...tabs.values()].find(candidate => !candidate.app && siteOrigin(candidate.url) === origin && isImage(candidate.favicon));
+    let source = tab ? tab.favicon : "";
+    if (!source) {
+      let host = "";
+      try { host = new URL(origin).hostname.toLowerCase(); } catch (_) { return ""; }
+      source = historyIcons.get(host) || "";
+    }
+    if (!isImage(source)) return "";
+    if (fits(source) && !/^data:image\/(?:x-icon|vnd\.microsoft\.icon)/i.test(source)) return source;
+    const cached = noticeIconCache.get(origin);
+    if (cached && cached.source === source) return cached.icon;
+    const small = await shrinkNoticeIcon(source, tab);
+    const icon = fits(small) ? small : (fits(source) ? source : "");
+    noticeIconCache.set(origin, { source, icon });
+    return icon;
+  }
+  async function shrinkNoticeIcon(source, tab) {
+    try {
+      const image = nativeImage.createFromDataURL(source);
+      if (image && !image.isEmpty()) {
+        return image.resize({ width: NOTICE_ICON_PX, height: NOTICE_ICON_PX, quality: "best" }).toDataURL();
+      }
+    } catch (_) { /* not a format nativeImage reads; try the page's decoder */ }
+    // Chromium reads .ico; its own canvas in the tab's isolated world turns
+    // the icon into a small PNG without touching the site's page script.
+    const contents = tab && tab.view && tab.view.webContents;
+    if (!contents || contents.isDestroyed()) return "";
+    const script = `new Promise(resolve => { const img = new Image(); img.onload = () => { try { const c = document.createElement("canvas"); c.width = c.height = ${NOTICE_ICON_PX}; c.getContext("2d").drawImage(img, 0, 0, ${NOTICE_ICON_PX}, ${NOTICE_ICON_PX}); resolve(c.toDataURL("image/png")); } catch (_) { resolve(""); } }; img.onerror = () => resolve(""); img.src = ${JSON.stringify(source)}; })`;
+    try {
+      const result = await Promise.race([
+        contents.executeJavaScriptInIsolatedWorld(1002, [{ code: script }], false),
+        new Promise(resolve => setTimeout(() => resolve(""), 3000)),
+      ]);
+      return typeof result === "string" ? result : "";
+    } catch (_) { return ""; }
   }
   // The question a site's first request (or the page's right-click menu)
   // brings up. Send to Bot asks which of the person's bots; closing that
