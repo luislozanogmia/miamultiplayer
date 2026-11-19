@@ -132,8 +132,9 @@ function hubRouteLimits(method, route) {
 // token, no picture, no Hub address.
 const HUB_CHANNEL_EDIT = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/([a-f0-9]{32})(\/picture)?$/;
 function channelEditNote(method, route, logger) {
-  const edit = method !== 'GET' && typeof route === 'string' && HUB_CHANNEL_EDIT.exec(route);
-  if (!edit) return null;
+  // Reading the picture back is logged too: the sidebar shows # when it fails.
+  const edit = typeof route === 'string' && HUB_CHANNEL_EDIT.exec(route);
+  if (!edit || (method === 'GET' && !edit[2])) return null;
   const part = edit[2] ? 'picture' : 'details';
   return (code, data, detail, bytes) => {
     const sent = bytes ? ` (${Math.ceil(bytes / 1024)} KB sent)` : '';

@@ -270,7 +270,9 @@ test('channel edits leave one log line with the result, never the token or pictu
   const down=createHubClient({logger,fetcher:async()=>{throw new Error('connect ECONNREFUSED http://127.0.0.1:9876/x');}});
   await down({url:route,method:'DELETE',headers:{authorization:'Bearer secret-token'}},reply());
   await ok({url:route,method:'GET',headers:{authorization:'Bearer secret-token'}},reply());
-  assert.equal(lines.length,2);
+  await ok({url:route.replace('/picture',''),method:'GET',headers:{authorization:'Bearer secret-token'}},reply());
+  assert.equal(lines.length,3,'reading the picture back is logged, reading the channel is not');
+  assert.match(lines[2],/^hub channel edit: GET picture channel cccccccc -> 200$/);
   assert.match(lines[0],/^hub channel edit: PUT picture channel cccccccc \(8 KB sent\) -> 200$/);
   assert.match(lines[1],/DELETE picture channel cccccccc .*-> 503 hub_unavailable \(connect ECONNREFUSED <hub>\)$/);
   for(const line of lines){assert.doesNotMatch(line,/secret-token|QUJD|9876/);}
