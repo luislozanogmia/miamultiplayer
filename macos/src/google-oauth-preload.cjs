@@ -18,6 +18,18 @@ const { webFrame, ipcRenderer } = require("electron");
 const platform = process.platform === "darwin" ? "macOS"
   : process.platform === "win32" ? "Windows" : "Linux";
 
+// The site's notification answer, asked once, synchronously, before the page
+// script below is built; "default" when Mia gives none.
+function initialNotificationState() {
+  try {
+    if (location.protocol !== "https:" || window.top !== window) return "default";
+    const answer = ipcRenderer.sendSync("miaos-browser-site-notification-state-sync");
+    return answer === "granted" || answer === "denied" ? answer : "default";
+  } catch (_) {
+    return "default";
+  }
+}
+
 const script = `(() => {
   try {
     const start = Date.now();
@@ -103,6 +115,85 @@ const script = `(() => {
       });
     }
   } catch (_) {}
+  // A site's notifications go to Mia instead of the desktop. The page sees the
+  // person's choice for this site as its notification permission; asking for
+  // it asks the person, and a notification raised after Allow is handed to
+  // Mia (see site-notifications.cjs), which checks the choice again itself.
+  try {
+    if (location.protocol === "https:" && window.top === window) {
+      // Mia's answer for this site, known before any page script runs: a page
+      // such as WhatsApp reads Notification.permission once at start and
+      // stays quiet if it reads "default" then.
+      var state = ${JSON.stringify(initialNotificationState())}, waiting = [];
+      var tell = function (kind, more) {
+        window.postMessage(Object.assign({ miaSiteNotification: kind }, more || {}), location.origin);
+      };
+      window.addEventListener("message", function (event) {
+        var data = event.data;
+        if (event.source !== window || !data || typeof data.miaSiteNotificationState !== "string") return;
+        state = data.miaSiteNotificationState;
+        if (data.answered) waiting.splice(0).forEach(function (done) { done(state); });
+      });
+      class SiteNotification extends EventTarget {
+        constructor(title, options) {
+          super();
+          if (!arguments.length) throw new TypeError("Failed to construct 'Notification': 1 argument required, but only 0 present.");
+          options = options || {};
+          this.title = String(title);
+          this.body = String(options.body == null ? "" : options.body);
+          this.tag = String(options.tag == null ? "" : options.tag);
+          this.data = options.data === undefined ? null : options.data;
+          this.icon = String(options.icon || "");
+          this.lang = String(options.lang || "");
+          this.dir = options.dir || "auto";
+          this.silent = options.silent == null ? null : !!options.silent;
+          this.requireInteraction = !!options.requireInteraction;
+          this.onclick = this.onshow = this.onclose = this.onerror = null;
+          var self = this, name = state === "granted" ? "show" : "error";
+          if (name === "show") tell("show", { title: this.title, body: this.body, tag: this.tag });
+          setTimeout(function () {
+            var event = new Event(name);
+            if (typeof self["on" + name] === "function") self["on" + name](event);
+            self.dispatchEvent(event);
+          }, 0);
+        }
+        close() {}
+        static get permission() { return state; }
+        static get maxActions() { return 0; }
+        static requestPermission(done) {
+          var answer = state !== "default" ? Promise.resolve(state) : new Promise(function (resolve) {
+            waiting.push(resolve);
+            if (waiting.length === 1) tell("ask");
+          });
+          if (typeof done === "function") answer.then(done);
+          return answer;
+        }
+      }
+      Object.defineProperty(SiteNotification, "name", { value: "Notification" });
+      window.Notification = SiteNotification;
+      // Electron shows no service worker notifications, so a site that raises
+      // them from its page (registration.showNotification) is handed to Mia
+      // the same way; none stay open to be listed.
+      if (window.ServiceWorkerRegistration && ServiceWorkerRegistration.prototype) {
+        ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+          if (state !== "granted") return Promise.reject(new TypeError("No notification permission has been granted for this origin."));
+          options = options || {};
+          tell("show", { title: String(title), body: String(options.body == null ? "" : options.body), tag: String(options.tag == null ? "" : options.tag) });
+          return Promise.resolve();
+        };
+        ServiceWorkerRegistration.prototype.getNotifications = function () { return Promise.resolve([]); };
+      }
+      var permissions = navigator.permissions, realQuery = permissions && permissions.query;
+      if (realQuery) permissions.query = function (descriptor) {
+        if (!descriptor || descriptor.name !== "notifications") return realQuery.call(permissions, descriptor);
+        var status = new EventTarget();
+        status.name = "notifications";
+        status.state = state === "default" ? "prompt" : state;
+        status.onchange = null;
+        return Promise.resolve(status);
+      };
+    }
+  } catch (_) {}
   // Electron's print dialog has no Save as PDF, so a page's Print asks Mia,
   // which offers Save as PDF and Print (see browser.cjs printChoice).
   try {
@@ -116,8 +207,33 @@ window.addEventListener("mia-print-request", () => {
   try { ipcRenderer.send("miaos-browser-print"); } catch (_) {}
 });
 
+// The page's notifications, relayed the same way: its messages to itself are
+// read here, and Mia's answer for this site is posted back. A page can only
+// fool itself with a made-up answer; Mia checks the site's choice on her side.
+const STATES = ["granted", "denied"];
+function siteNotificationState(channel, answered) {
+  if (location.protocol !== "https:") return;
+  ipcRenderer.invoke(channel).catch(() => "default").then((state) => {
+    try {
+      window.postMessage({ miaSiteNotificationState: STATES.includes(state) ? state : "default", answered }, location.origin);
+    } catch (_) {}
+  });
+}
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (event.source !== window || !data || typeof data.miaSiteNotification !== "string") return;
+  if (data.miaSiteNotification === "ask") return siteNotificationState("miaos-browser-site-notification-ask", true);
+  if (data.miaSiteNotification !== "show") return;
+  try {
+    ipcRenderer.send("miaos-browser-site-notification", {
+      title: String(data.title || ""), body: String(data.body || ""), tag: String(data.tag || ""),
+    });
+  } catch (_) {}
+});
+
 try {
-  webFrame.executeJavaScript(script).catch(() => {});
+  webFrame.executeJavaScript(script).catch(() => {})
+    .then(() => siteNotificationState("miaos-browser-site-notification-state", false));
 } catch (_) {
   // A frame torn down before injection needs nothing.
 }

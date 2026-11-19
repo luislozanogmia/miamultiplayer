@@ -5745,15 +5745,10 @@
       applyNativeConversationList(results[1]);
     }).catch(function(){});
   }
-  // The chat you last had open with a bot in this team, else its main chat,
+  // The bot's chat in this team with the newest message (teamBotChat),
   // made the first time you open it.
   function openTeamBotChat(bot){
-    var lastChat=rememberedAgentChats()[bot.id];
-    var botChats=(chatWs.nativeConversations||[]).filter(function(conversation){
-      return (conversation.metadata||{}).botId===bot.id;
-    });
-    var existing=botChats.filter(function(conversation){ return conversation.id===lastChat; })[0]
-      || botChats.filter(function(conversation){ return (conversation.metadata||{}).conversationMode!=='fresh'; })[0];
+    var existing=teamBotChat(bot);
     if(existing)return loadChatRoom(existing.id,'agent',bot.name);
     var workspace=activeWorkspaceKey;
     // Same chat bot setup makes (createNativeAgentConversation), so a bot
@@ -5768,10 +5763,7 @@
   // In a company, Mia is your own 1:1 chat, never in a channel and never
   // @-mentioned. Each company has its own Mia chat, apart from Solo's.
   function teamMiaChat(){
-    return (chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return isNativeMiaConversation(conversation) && metadata.teamWorkspace===activeWorkspaceKey && metadata.conversationMode!=='fresh';
-    })[0]||null;
+    return latestOwnerConversation('gateway');
   }
   function openTeamMiaChat(){
     var existing=teamMiaChat();
@@ -6288,13 +6280,10 @@
   function companyCopyFilesReviewed(copy,reviews){
     return !copy || copy.skills.every(function(skill,i){ return (skill.files||[]).every(function(file,j){ return !!reviews[i+':'+j]; }); });
   }
-  // A bot row in a team opens your private chat with it for this team.
-  // A company bot's row opens its ongoing chat on this computer, if any.
+  // The bot's chat its company row shows and opens: the one with the newest
+  // message, so the preview and the chat that opens match.
   function teamBotChat(bot){
-    return (chatWs.nativeConversations||[]).filter(function(conversation){
-      var metadata=conversation.metadata||{};
-      return metadata.botId===bot.id && metadata.conversationMode!=='fresh';
-    })[0] || null;
+    return latestOwnerConversation(String(bot.id));
   }
   function teamBotRow(bot,pinned){
     var chat=teamBotChat(bot);
@@ -7684,6 +7673,29 @@
     var team = conversation && conversation.metadata && conversation.metadata.teamWorkspace || '';
     return hubWorkspace() ? !!conversation && (conversation.type === 'bot' || isNativeMiaConversation(conversation)) && team === activeWorkspaceKey : !team;
   }
+  // A bot's or Mia's row shows the newest message across all of its chats in
+  // this view (main chat, "New conversation" chats, the chat an automation
+  // posts to) and opens the chat that message is in, so the preview and the
+  // chat that opens always match. A tie goes to the chat you last had open.
+  function latestOwnerConversation(ownerId, conversations){
+    var remembered = rememberedAgentChats()[ownerId];
+    var best = null, bestTs = -1;
+    (conversations || chatWs.nativeConversations || []).forEach(function(conversation){
+      if(!conversation || agentChatOwnerId(conversation) !== String(ownerId) || !nativeConversationInView(conversation)) return;
+      if(conversation.metadata && conversation.metadata.botArchived === true) return;
+      var ts = conversationHistoryTimestamp(conversation);
+      if(ts > bestTs || (ts === bestTs && conversation.id === remembered)){ best = conversation; bestTs = ts; }
+    });
+    return best;
+  }
+  // Solo rows read agent.roomId; point each at its newest chat before drawing.
+  function followAgentsToLatestChat(){
+    (chatWs.allAgents || []).concat(chatWs.gatewayAgent ? [chatWs.gatewayAgent] : []).forEach(function(agent){
+      var latest = agent && latestOwnerConversation(String(agent.id));
+      if(!latest || latest.id === agent.roomId) return;
+      agent.roomId = latest.id; agent.nativeConversationId = latest.id; agent.conversationId = latest.id;
+    });
+  }
   function applyNativeConversationList(conversations){
     var listWorkspace = conversations && conversations.workspaceKey;
     setMiaServiceUnavailable(false);
@@ -7717,9 +7729,10 @@
     // A bot's sidebar row opens the chat you last had open with it, else its
     // main chat; chats started with "New conversation" live in History and only
     // stand in when nothing else exists.
-    var agentChats = rememberedAgentChats();
+    // The row follows the chat with the newest message (latestOwnerConversation).
     function currentAgentRoom(main, ownerId, candidates){
-      return candidates.filter(function(room){ return room.id === agentChats[ownerId]; })[0] || main;
+      var latest = latestOwnerConversation(ownerId, candidates.map(function(room){ return room.nativeConversation; }));
+      return (latest && candidates.filter(function(room){ return room.id === latest.id; })[0]) || main;
     }
     var uniqueBotRooms = agentRooms.filter(function(room){ return !isNativeMiaConversation(room.nativeConversation); })
       .sort(function(left, right){
@@ -8949,6 +8962,22 @@
     return false;
   }
 
+  // Something the person opens from a chat (a link, an attachment preview)
+  // gets a tab of its own. Loading it in the tab in front would take over a
+  // page a bot may be working in, such as its WhatsApp tab.
+  function localBrowserOpenInNewTab(value){
+    var target;
+    try { target = localBrowserNormalizeUrl(value, localBrowserSearchEngine); }
+    catch(error){ showBenchToast(error.message || 'Enter a valid web address.'); return false; }
+    if(window.miaNativeBrowser && typeof window.miaNativeBrowser.openTab === 'function'){
+      window.miaNativeBrowser.openTab(target);
+      return true;
+    }
+    if(window.miaNativeBrowser) return window.miaNativeBrowser.navigate(target);
+    showBenchToast('The browser is available only in Mia.');
+    return false;
+  }
+
   function closeLocalBrowser(){
     if(!localBrowserState.open) return;
     stopLocalBrowserPromptRotation();
@@ -9062,12 +9091,52 @@
     try { if(closedPageTabsStore()) closedPageTabsStore().set('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStateError) {}
     try { localStorage.setItem('miaClosedPageTabs', JSON.stringify(closedPageTabs)); } catch(_closedTabsStorageError) {}
   }
-  var automationsPage = {open:false, botId:null, automationId:null, group:'status', tabs:[], boardClosed:!!closedPageTabs.automations};
+  var automationsPage = {open:false, botId:null, automationId:null, editing:false, starting:{}, group:'status', tabs:[], boardClosed:!!closedPageTabs.automations};
   try { if(localStorage.getItem(AUTOMATIONS_GROUP_KEY) === 'bot') automationsPage.group = 'bot'; } catch(_automationsGroupError) {}
 
   function automationsBoardRows(){
     if(!window.MiaAutomationsBoard) return [];
-    return window.MiaAutomationsBoard.entries(chatWs.botRecords || [], chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || []);
+    return window.MiaAutomationsBoard.entries(automationBotsInView(chatWs.botRecords || []), chatWs.automationRuns || [], automationScheduleText, chatWs.automationChecklists || [])
+      .map(function(row){ return automationRowWithLiveStart(row, automationsPage.starting, Date.now()); });
+  }
+
+  // Each workspace lists only its own automations: a company's in that
+  // company, untagged ones only in Solo. Nothing moves between them.
+  function automationBotsInView(bots){
+    var here = hubWorkspace() ? activeWorkspaceKey : '';
+    return bots.map(function(bot){
+      if(!bot || !Array.isArray(bot.automations)) return bot;
+      return Object.assign({}, bot, {automations: bot.automations.filter(function(automation){
+        return ((automation && automation.teamWorkspace) || '') === here;
+      })});
+    });
+  }
+
+  // Play shows the run at once: step 1 circles from the click, before the
+  // bot's first report (Hermes takes a while to boot). The same goes for a
+  // run the server reports while the checklist is still the last run's: its
+  // old checkmarks never show as this run's progress. A start that never
+  // shows up as a run falls back after two minutes.
+  var AUTOMATION_START_GRACE_MS = 120000;
+  function automationRowWithLiveStart(row, starting, now){
+    var key = row.botId + '|' + row.automationId;
+    var clicked = starting && starting[key];
+    if(clicked && now - clicked > AUTOMATION_START_GRACE_MS){ delete starting[key]; clicked = 0; }
+    // Once the server reports the run, the click has done its job.
+    if(clicked && row.status === 'running'){ delete starting[key]; clicked = 0; }
+    if(!clicked && row.status !== 'running') return row;
+    var since = clicked || Date.parse(row.run && row.run.startedAt) || 0;
+    var reported = row.checklist && Date.parse(row.checklist.startedAt);
+    if(row.status === 'running' && (!since || (reported && reported >= since - 5000))) return row;
+    var steps = row.steps || [];
+    var first = steps.length ? 'Step 1 of ' + steps.length + ' · ' + steps[0] : '';
+    return Object.assign({}, row, {
+      status: 'running',
+      starting: row.status !== 'running',
+      detail: (row.status !== 'running' ? 'Starting' : 'Running now') + (first ? ' · ' + first : ''),
+      checklist: steps.length ? {startedAt: new Date(since).toISOString(), runStatus: 'running', done: 0, total: steps.length,
+        steps: steps.map(function(text, index){ return {n: index + 1, text: text, state: index === 0 ? 'working' : 'pending'}; })} : null
+    });
   }
 
   function automationsRowHtml(row){
@@ -9078,7 +9147,7 @@
         (row.status === 'needs' ? '<span class="automations-row-blocked">Blocked</span>' : '') + '</span>' +
       '<span><div class="automations-row-name">' + esc(automationsPage.group === 'bot' ? row.name : row.botName + ' · ' + row.name) + '</div>' +
       '<div class="automations-row-detail">' + esc(row.detail || '') + '</div></span>' +
-      '<span class="automations-row-side">' + side + '</span></button>';
+      '<span class="automations-row-side">' + side + '<span class="automations-state' + (row.enabled ? ' is-on' : '') + '">' + (row.enabled ? 'Active' : 'Inactive') + '</span></span></button>';
   }
 
   function automationsBoardHtml(rows){
@@ -9121,6 +9190,60 @@
   }
   function automationStepRowValues(list){
     return els('input', list).map(function(input){ return input.value.trim(); }).filter(Boolean);
+  }
+  // The editable words of each step, read and wired in place.
+  function automationStepTextValues(list){
+    return els('.automations-step-text', list).map(function(node){ return String(node.textContent || '').replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  }
+  function wireAutomationStepTexts(list){
+    function renumber(){
+      els('.automations-step', list).forEach(function(item, index){
+        var n = el('.automations-step-n', item);
+        var mark = el('.automations-step-mark', n);
+        n.textContent = '';
+        if(mark) n.appendChild(mark);
+        n.appendChild(document.createTextNode(String(index + 1)));
+      });
+    }
+    list.addEventListener('keydown', function(event){
+      var text = event.target && event.target.closest && event.target.closest('.automations-step-text');
+      if(!text) return;
+      if(event.key === 'Enter' && !event.shiftKey){
+        event.preventDefault();
+        if(els('.automations-step', list).length >= AUTOMATION_STEP_MAX) return;
+        var item = text.closest('.automations-step');
+        item.insertAdjacentHTML('afterend', '<li class="automations-step" data-state=""><span class="automations-step-n"></span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text"></span></span></li>');
+        renumber();
+        var next = el('.automations-step-text', item.nextElementSibling);
+        if(next) next.focus();
+      } else if(event.key === 'Backspace' && !text.textContent && els('.automations-step', list).length > 1){
+        event.preventDefault();
+        var gone = text.closest('.automations-step');
+        var prev = gone.previousElementSibling || gone.nextElementSibling;
+        gone.remove();
+        renumber();
+        var focus = prev && el('.automations-step-text', prev);
+        if(focus) focus.focus();
+      }
+    });
+    // Pasting several lines fills one step per line.
+    list.addEventListener('paste', function(event){
+      var text = event.target && event.target.closest && event.target.closest('.automations-step-text');
+      var data = event.clipboardData && event.clipboardData.getData('text') || '';
+      if(!text) return;
+      event.preventDefault();
+      var lines = data.split(/\r?\n/).map(function(line){ return line.trim(); }).filter(Boolean);
+      if(!lines.length) return;
+      document.execCommand('insertText', false, lines[0]);
+      var item = text.closest('.automations-step');
+      lines.slice(1).forEach(function(line){
+        if(els('.automations-step', list).length >= AUTOMATION_STEP_MAX) return;
+        item.insertAdjacentHTML('afterend', '<li class="automations-step" data-state=""><span class="automations-step-n"></span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text"></span></span></li>');
+        item = item.nextElementSibling;
+        el('.automations-step-text', item).textContent = line;
+      });
+      renumber();
+    });
   }
   function wireAutomationStepRows(list){
     if(!list) return;
@@ -9171,40 +9294,106 @@
     });
   }
 
-  function automationsDetailHtml(row, automation, bot){
+  // One page for an automation. The clock edits the schedule in its line
+  // under the title; the pencil turns the steps into fields right where they
+  // are. Only one of them edits at a time, and nothing opens a second screen.
+  var AUTOMATION_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function automationsScheduleEditHtml(automation){
+    var frequency = automation.frequency === 'daily' && automation.weekdaysOnly ? 'weekdays'
+      : ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
+    var interval = automationIntervalParts(automation.intervalMinutes || 5);
+    function options(list, current){
+      return list.map(function(item){
+        return '<option value="' + esc(item[0]) + '"' + (String(current) === String(item[0]) ? ' selected' : '') + '>' + esc(item[1]) + '</option>';
+      }).join('');
+    }
+    return '<div class="automations-schedule-edit" id="automationsScheduleEdit" data-frequency="' + frequency + '">' +
+      '<select id="automationsEditFrequency" aria-label="Schedule">' + options([['interval', 'Repeating timer'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], frequency) + '</select>' +
+      '<span data-when="interval">every <input type="number" id="automationsEditInterval" min="1" max="' + (interval.unit === 'hours' ? '24' : '60') + '" value="' + esc(interval.value) + '" aria-label="Every">' +
+      '<select id="automationsEditIntervalUnit" aria-label="Timer unit">' + options([['minutes', 'minutes'], ['hours', 'hours']], interval.unit) + '</select></span>' +
+      '<span data-when="weekly">on <select id="automationsEditWeekday" aria-label="Weekday">' + options(AUTOMATION_WEEKDAYS.map(function(day){ return [day, day]; }), automation.day || 'Monday') + '</select></span>' +
+      '<span data-when="monthly">on day <input type="number" id="automationsEditMonthDay" min="1" max="31" value="' + esc(automation.frequency === 'monthly' && automation.day || 1) + '" aria-label="Day of month"></span>' +
+      '<span data-when="time">at <input type="time" id="automationsEditTime" value="' + esc(automation.time || '09:00') + '" aria-label="Time"></span>' +
+      '<button type="button" class="styled-btn-secondary" id="automationsEditCancel">Cancel</button>' +
+      '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
+  }
+
+  function automationRunNoteHtml(checklist){
+    if(!checklist || !checklist.startedAt) return '';
+    var when = automationRunTime(checklist.startedAt);
+    var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
+    return '<p class="automations-note">' + esc(progress + (when ? ' started ' + when : '') + ' · ' + checklist.done + ' of ' + checklist.total + ' steps done') + '</p>';
+  }
+  function automationsDetailHtml(row, automation, bot, editing){
     // The side stays short so the title keeps its width; what needs the
     // person shows in full under it, with a way to hand it to Mia.
+    // Paused shows once, as Inactive beside the schedule.
     var side = row.status === 'running' ? '<span class="automations-live" aria-hidden="true"></span>Running now'
-      : row.status === 'needs' ? 'Needs you' : row.status === 'paused' ? 'Paused' : '';
-    var needs = row.status === 'needs' && row.detail ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
+      : row.status === 'needs' ? 'Needs you' : '';
+    var needs = row.status === 'needs' && row.detail && !editing ? '<div class="automations-needs"><p>' + esc(row.detail) + '</p>' +
       '<button type="button" class="styled-btn-secondary" id="automationsFix">Fix with Mia</button></div>' : '';
     var body;
     var checklist = row.checklist;
-    if(row.steps.length){
+    var states = {};
+    if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
+    if(editing === 'steps'){
+      // Same page, same checklist: only the words of each step become
+      // editable where they sit. Enter adds a step below; an emptied step is
+      // dropped on save.
+      var editSteps = row.steps.length ? row.steps : [''];
+      body = window.MiaAutomationsBoard.stepsHtml(editSteps.map(function(step, index){
+        var item = states[index + 1] || {};
+        return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
+      }), esc).replace('<ol class="automations-steps">', '<ol class="automations-steps is-editing" id="automationsStepsEdit">')
+        .replace(/<li class="automations-step"([^>]*)><span class="automations-step-n">([\s\S]*?)<\/span><span>([\s\S]*?)(<div class="automations-step-note">[\s\S]*?<\/div>)?<\/span><\/li>/g,
+          function(_m, attrs, n, text, note){
+            return '<li class="automations-step"' + attrs + '><span class="automations-step-n">' + n + '</span><span><span class="automations-step-text" contenteditable="plaintext-only" spellcheck="true" role="textbox" aria-label="Step text">' + text + '</span>' + (note || '') + '</span></li>';
+          }) +
+        automationRunNoteHtml(checklist) +
+        '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>' +
+        '<div class="automations-actions automations-edit-actions"><button type="button" class="styled-btn-secondary danger" id="automationsDelete">Delete automation</button>' +
+        '<span></span><button type="button" class="styled-btn-secondary" id="automationsEditCancel">Cancel</button>' +
+        '<button type="button" class="styled-btn-primary" id="automationsEditSave">Save</button></div>';
+    } else if(row.steps.length){
       // With a run on record, each step shows what the bot reported for it.
-      var states = {};
-      if(checklist) (checklist.steps || []).forEach(function(item){ states[item.n] = item; });
       body = window.MiaAutomationsBoard.stepsHtml(row.steps.map(function(step, index){
         var item = states[index + 1] || {};
         return {n: index + 1, text: step, state: item.state || '', note: item.note || ''};
       }), esc);
-      if(checklist && checklist.startedAt){
-        var when = automationRunTime(checklist.startedAt);
-        var progress = checklist.runStatus === 'claimed' || checklist.runStatus === 'running' ? 'This run' : 'Last run';
-        body += '<p class="automations-note">' + esc(progress + (when ? ' started ' + when : '') + ' · ' + checklist.done + ' of ' + checklist.total + ' steps done') + '</p>';
-      }
+      body += automationRunNoteHtml(checklist);
     } else if(String(automation.prompt || '').trim()){
       body = '<div class="automations-instructions">' + esc(automation.prompt) + '</div>' +
-        '<p class="automations-note">This runs as one instruction. Split it into steps so the bot does them one at a time, in order.</p>';
+        '<p class="automations-note">This runs as one instruction. Use the pencil to split it into steps the bot does one at a time, in order.</p>';
     } else {
-      body = '<p class="automations-note">No steps yet. Add the steps this automation should follow.</p>';
+      body = '<p class="automations-note">No steps yet. Use the pencil to add the steps this automation should follow.</p>';
     }
     var delivery = bot && bot.hermesCronDeliveries && bot.hermesCronDeliveries[automation.id];
     var last = delivery && delivery.deliveredAt ? '<p class="automations-note">Last result posted ' + esc(new Date(delivery.deliveredAt).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})) + '</p>' : '';
-    return '<div class="automations-detail-head"><div><div class="automations-detail-title">' + esc(row.name) + '</div>' +
-      '<div class="automations-detail-sub">' + esc([row.schedule, row.botName].filter(Boolean).join(' · ')) + '</div></div>' +
-      '<span class="automations-row-side">' + side + '</span></div>' + needs + body + last +
-      '<div class="automations-actions"><button type="button" class="styled-btn-secondary" id="automationsEdit">' + (row.steps.length ? 'Edit' : 'Add steps') + '</button></div>';
+    function icon(id, label, svg, extra){
+      return '<button type="button" class="automations-run-now' + (extra && extra.cls ? ' ' + extra.cls : '') + '" id="' + id + '" title="' + esc(extra && extra.title || label) + '" aria-label="' + esc(label) + '"' +
+        (extra && extra.pressed !== undefined ? ' aria-pressed="' + (extra.pressed ? 'true' : 'false') + '"' : '') + (extra && extra.disabled ? ' disabled' : '') + '><svg viewBox="0 0 20 20" aria-hidden="true">' + svg + '</svg></button>';
+    }
+    var on = automation.enabled === true;
+    var running = row.status === 'running';
+    var canRunNow = on && window.MiaAutomationsBoard.canRunNow(automation, row.status);
+    // One run control: Play runs it once now and, while that run is going,
+    // becomes Stop, which ends that run only (the automation stays as it is).
+    var runNow = running
+      // Until the run itself is up there is nothing to stop yet.
+      ? icon('automationsStop', 'Stop this run', '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>', {cls:'automations-line-icon automations-stop',
+        title: row.starting ? 'Starting…' : 'Stop this run', disabled: !!row.starting})
+      : icon('automationsRunNow', 'Run now', '<path d="M6.5 4.5v11l9-5.5z"/>', {cls:'automations-line-icon',
+        title: on ? 'Run now' : 'Inactive. Click Inactive to turn it on, then run it', disabled: !canRunNow});
+    // Active means it runs on its schedule. The label itself switches it on or off.
+    var state = '<button type="button" id="automationsToggle" class="automations-state' + (on ? ' is-on' : '') + '" title="' +
+      (on ? 'Runs on its schedule. Click to turn it off' : 'Off. Click to turn it on') + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + (on ? 'Active' : 'Inactive') + '</button>';
+    var clock = icon('automationsSchedule', 'Edit schedule', '<circle cx="10" cy="10" r="7"/><path d="M10 6v4.2l2.8 1.7"/>', {cls:'automations-line-icon', pressed: editing === 'schedule'});
+    var pencil = icon('automationsEdit', 'Edit steps', '<path d="M11 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16h9a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10 11.7l-2.8.7.7-2.8z"/>', {cls:'automations-line-icon', pressed: editing === 'steps'});
+    var schedule = String(row.schedule || '').replace(/^Paused · /, '');
+    var sub = editing === 'schedule' ? automationsScheduleEditHtml(automation) + '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>'
+      : '<div class="automations-detail-sub">' + esc([schedule, row.botName].filter(Boolean).join(' · ')) + ' ' + state + '</div>';
+    return '<div class="automations-detail-head"' + (editing ? ' data-editing="' + esc(editing) + '"' : '') + '><div><div class="automations-detail-title">' + esc(row.name) + '</div>' + sub + '</div>' +
+      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + needs + body + last;
   }
 
   function renderAutomationsPage(){
@@ -9227,15 +9416,21 @@
     })[0] : null;
     var found = row && automationRecordById(row.botId, row.automationId);
     if(automationsPage.automationId && !found){ automationsPage.botId = null; automationsPage.automationId = null; }
+    if(!found) automationsPage.editing = false;
     renderAutomationsTabs(rows);
     if(toggle) toggle.hidden = !!found;
     var body = el('#automationsBody');
     if(!body) return;
+    // Editing happens on the automation's own page, in place. While a field
+    // is open, background refreshes leave the page alone so typing isn't lost.
+    var editKey = found && automationsPage.editing ? automationsTabId(found.bot.id, found.automation.id) + '|' + automationsPage.editing : '';
+    var openEdit = el('[data-edit-key]', body);
+    if(editKey && openEdit && openEdit.getAttribute('data-edit-key') === editKey) return;
     var scroll = body.scrollTop;
     // Team workflows sit above the bot automations, in team workspaces only.
     var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
     body.innerHTML = '<div class="automations-content">' + (teamWorkflows ? '<div id="teamWorkflowsMount"></div>' : '')
-      + (found ? automationsDetailHtml(row, found.automation, found.bot) : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>' + automationsRunHistoryHtml()) + '</div>';
+      + (found ? '<div data-edit-key="' + esc(editKey) + '">' + automationsDetailHtml(row, found.automation, found.bot, automationsPage.editing) + '</div>' : '<div data-wf-board>' + automationsBoardHtml(rows) + '</div>' + automationsRunHistoryHtml()) + '</div>';
     if(teamWorkflows) teamWorkflows.mountInto(el('#teamWorkflowsMount', body));
     if(!found) body.scrollTop = scroll;
     els('[data-automations-id]', body).forEach(function(button){
@@ -9249,10 +9444,184 @@
         if(run) openAutomationsDetail(run.botId, run.automationId);
       });
     });
-    var edit = el('#automationsEdit', body);
-    if(edit && found) edit.addEventListener('click', function(){ openAutomationDetail(found.bot.id, found.automation.id); });
+    var runNow = el('#automationsRunNow', body);
+    if(runNow && found) runNow.addEventListener('click', function(){
+      runNow.disabled = true;
+      var startKey = found.bot.id + '|' + found.automation.id;
+      automationsPage.starting[startKey] = Date.now();
+      renderAutomationsPage();
+      var startFailed = function(reason){
+        delete automationsPage.starting[startKey];
+        renderAutomationsPage();
+        showToast(reason);
+      };
+      api('/api/bots/' + encodeURIComponent(found.bot.id) + '/automations/' + encodeURIComponent(found.automation.id) + '/run-now', {method:'POST', body:{}}).then(function(res){
+        if(res.status !== 200 || !res.data || res.data.status !== 'started'){
+          var reason = res.data && res.data.status === 'off' ? 'Turn on this automation before running it.'
+            : res.data && res.data.status === 'missing' ? 'Mia could not find its scheduled run. Save the automation again.'
+              : res.data && (res.data.message || res.data.error) || 'Could not start this automation.';
+          startFailed(reason);
+          return;
+        }
+        loadActiveAutomationRuns();
+        [1500, 4000].forEach(function(delay){ window.setTimeout(loadActiveAutomationRuns, delay); });
+        // Started but already over (or not reported yet): stop pretending after 6 s.
+        window.setTimeout(function(){
+          if(automationsPage.starting[startKey]){ delete automationsPage.starting[startKey]; renderAutomationsPage(); }
+        }, 6000);
+      }).catch(function(){ startFailed('Could not start this automation. Try again.'); });
+    });
+    var stop = el('#automationsStop', body);
+    if(stop && found) stop.addEventListener('click', function(){
+      stop.disabled = true;
+      api('/api/bots/' + encodeURIComponent(found.bot.id) + '/automations/' + encodeURIComponent(found.automation.id) + '/stop', {method:'POST', body:{}}).then(function(res){
+        if(res.status !== 200 || !res.data || res.data.status !== 'stopping'){
+          showToast(res.data && res.data.status === 'not_running' ? 'This run has already finished.'
+            : res.data && (res.data.message || res.data.error) || 'Could not stop this run.');
+          loadActiveAutomationRuns();
+          if(document.body.contains(stop)) stop.disabled = false;
+          return;
+        }
+        showToast('Stopping this run…');
+        [1500, 4000, 9000].forEach(function(delay){ window.setTimeout(loadActiveAutomationRuns, delay); });
+      }).catch(function(){
+        showToast('Could not stop this run. Try again.');
+        if(document.body.contains(stop)) stop.disabled = false;
+      });
+    });
+    var toggleButton = el('#automationsToggle', body);
+    if(toggleButton && found) toggleButton.addEventListener('click', function(){
+      setAutomationEnabled(found.bot, found.automation, found.automation.enabled !== true, toggleButton);
+    });
+    if(found) wireAutomationsInlineEdit(body, found.bot, found.automation);
     var fix = el('#automationsFix', body);
     if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
+  }
+
+  function wireAutomationsInlineEdit(body, bot, automation){
+    function setEditing(mode){
+      automationsPage.editing = automationsPage.editing === mode ? false : mode;
+      renderAutomationsPage();
+      var first = automationsPage.editing === 'steps' ? el('#automationsStepsEdit .automations-step-text', body) : el('#automationsEditFrequency', body);
+      if(first) first.focus();
+    }
+    var pencil = el('#automationsEdit', body);
+    if(pencil) pencil.addEventListener('click', function(){ setEditing('steps'); });
+    var clock = el('#automationsSchedule', body);
+    if(clock) clock.addEventListener('click', function(){ setEditing('schedule'); });
+    if(!automationsPage.editing) return;
+    var stepsList = el('#automationsStepsEdit', body);
+    if(stepsList) wireAutomationStepTexts(stepsList);
+    var scheduleEdit = el('#automationsScheduleEdit', body);
+    var frequency = el('#automationsEditFrequency', body);
+    function showScheduleParts(){
+      if(!scheduleEdit) return;
+      scheduleEdit.setAttribute('data-frequency', frequency.value);
+      els('[data-when]', scheduleEdit).forEach(function(part){
+        var when = part.getAttribute('data-when');
+        part.hidden = !(when === frequency.value || (when === 'time' && frequency.value !== 'interval'));
+      });
+    }
+    if(frequency){
+      frequency.addEventListener('change', showScheduleParts);
+      var unit = el('#automationsEditIntervalUnit', body);
+      if(unit) unit.addEventListener('change', function(){ el('#automationsEditInterval', body).max = unit.value === 'hours' ? '24' : '60'; });
+      showScheduleParts();
+    }
+    var cancel = el('#automationsEditCancel', body);
+    if(cancel) cancel.addEventListener('click', function(){ automationsPage.editing = false; renderAutomationsPage(); });
+    if(!body.hasAttribute('data-escape-wired')){
+      body.setAttribute('data-escape-wired', '');
+      body.addEventListener('keydown', function(event){
+        if(event.key === 'Escape' && automationsPage.editing){ automationsPage.editing = false; renderAutomationsPage(); }
+      });
+    }
+    var save = el('#automationsEditSave', body);
+    if(save) save.addEventListener('click', function(){
+      var errorNode = el('#automationsEditError', body);
+      if(errorNode) errorNode.textContent = '';
+      var current = automationRecordById(bot.id, automation.id);
+      var record = current ? current.automation : automation;
+      var owner = current ? current.bot : bot;
+      var mode = automationsPage.editing;
+      var values = {
+        name: record.name, enabled: record.enabled === true,
+        frequency: record.frequency === 'daily' && record.weekdaysOnly ? 'weekdays' : record.frequency,
+        intervalMinutes: record.intervalMinutes, day: record.day, time: record.time || '09:00',
+        model: record.model && record.modelProvider ? record.modelProvider + '|' + record.model : '',
+        prompt: record.prompt || '', steps: (Array.isArray(record.steps) ? record.steps : []).join('\n')
+      };
+      if(mode === 'steps') values.steps = automationStepTextValues(stepsList).join('\n');
+      if(mode === 'schedule'){
+        values.frequency = frequency.value;
+        values.intervalValue = el('#automationsEditInterval', body).value;
+        values.intervalUnit = el('#automationsEditIntervalUnit', body).value;
+        values.day = frequency.value === 'weekly' ? el('#automationsEditWeekday', body).value : el('#automationsEditMonthDay', body).value;
+        values.time = el('#automationsEditTime', body).value;
+      }
+      var payload;
+      try { payload = normalizedAutomationEditorPayload(owner, record.id, values); }
+      catch(error){ if(errorNode) errorNode.textContent = error.message || 'Check the automation fields.'; return; }
+      save.disabled = true;
+      save.textContent = 'Saving…';
+      api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:payload}).then(function(res){
+        if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && (res.data.message || res.data.error)) || 'Could not save automation.');
+        var saved = res.data.bot;
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(item){ return String(item.id) === String(saved.id) ? saved : item; });
+        chatWs.allAgents = (chatWs.allAgents || []).map(function(item){ return String(item.id) === String(saved.id) ? Object.assign({}, item, saved) : item; });
+        automationsPage.editing = false;
+        showToast(mode === 'schedule' ? 'Schedule saved' : 'Steps saved');
+        renderChatSidebar();
+        renderAutomationsPage();
+      }).catch(function(error){
+        if(errorNode) errorNode.textContent = error.message || 'Could not save automation.';
+        save.disabled = false;
+        save.textContent = 'Save';
+      });
+    });
+    var remove = el('#automationsDelete', body);
+    if(remove) remove.addEventListener('click', function(){
+      if(!window.confirm('Delete this automation? It will not run again.')) return;
+      remove.disabled = true;
+      var current = automationRecordById(bot.id, automation.id);
+      var owner = current ? current.bot : bot;
+      var remaining = botAutomationList(owner).filter(function(item){ return String(item.id) !== String(automation.id); });
+      api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:{automations:remaining}}).then(function(res){
+        if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && res.data.error) || 'Could not delete automation.');
+        var saved = res.data.bot;
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(item){ return String(item.id) === String(saved.id) ? saved : item; });
+        automationsPage.editing = false;
+        showToast('Automation deleted');
+        renderChatSidebar();
+        showAutomationsBoard();
+      }).catch(function(error){
+        var errorNode = el('#automationsEditError', body);
+        if(errorNode) errorNode.textContent = error.message || 'Could not delete automation.';
+        remove.disabled = false;
+      });
+    });
+  }
+
+  // Pause and Resume on the Automations page: the same save the editor's
+  // Active switch makes, changing only this automation's enabled flag. A run
+  // already going finishes; pausing stops the next ones.
+  function setAutomationEnabled(bot, automation, enabled, button){
+    if(button) button.disabled = true;
+    var automations = botAutomationList(bot).map(function(item){
+      return String(item.id) === String(automation.id) ? Object.assign({}, item, {enabled: enabled}) : item;
+    });
+    return api('/api/bots/' + encodeURIComponent(bot.id), {method:'PUT', body:{automations: automations}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && (res.data.message || res.data.error)) || 'Could not change this automation.');
+      var saved = res.data.bot;
+      chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
+      chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
+      showToast(enabled ? 'Automation resumed' : 'Automation paused');
+      renderChatSidebar();
+      renderAutomationsPage();
+    }).catch(function(error){
+      showToast(error && error.message || 'Could not change this automation.');
+      if(button && document.body.contains(button)) button.disabled = false;
+    });
   }
 
   // What the automation page knows about a stuck automation, sent to Mia as
@@ -9345,6 +9714,7 @@
     setPageTabClosed('automations', false);
     automationsPage.botId = null;
     automationsPage.automationId = null;
+    automationsPage.editing = false;
     if(chatWs.gatewayAgent) navigateToAgentChat(chatWs.gatewayAgent, true);
     renderAutomationsPage();
   }
@@ -9378,6 +9748,7 @@
   // none of them is "its" chat. Explicit actions (Fix with Mia, a running
   // automation's row) still open a chat themselves.
   function openAutomationsDetail(botId, automationId){
+    automationsPage.editing = false;
     automationsPage.botId = String(botId);
     automationsPage.automationId = String(automationId);
     if(!automationsTabById(automationsTabId(botId, automationId))) automationsPage.tabs.push({botId:String(botId), automationId:String(automationId)});
@@ -11508,7 +11879,10 @@
       if(changed) renderChatSidebar();
       return [];
     };
-    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey())).then(function(res){
+    // A company's screen also names the company, so it gets that company's
+    // automations of your bots and not your Solo ones.
+    var team = hubWorkspace() ? '&team=' + encodeURIComponent(activeWorkspaceKey) : '';
+    return api('/api/automations/active?workspace=' + encodeURIComponent(localChatWorkspaceKey()) + team).then(function(res){
       if(res.status !== 200 || !res.data || !Array.isArray(res.data.runs)) return clearStaleRuns();
       var next = res.data.runs;
       var checklists = Array.isArray(res.data.checklists) ? res.data.checklists : [];
@@ -12825,14 +13199,15 @@
     var proposal = message && message.nativeEvent.metadata && message.nativeEvent.metadata.automationProposal;
     if(!proposal) return;
     var cardState = automationCardStates[eventId] = automationCardStates[eventId] || {};
-    var fields = window.MiaAutomationProposalCard.readFields(card);
-    cardState.draft = fields;
+    var resume = proposal.action === 'resume';
+    var fields = resume ? null : window.MiaAutomationProposalCard.readFields(card);
+    if(!resume) cardState.draft = fields;
     cardState.busy = true;
     cardState.error = '';
     renderChatThread();
     api('/api/bots/' + encodeURIComponent(proposal.botId) + '/automation-proposals/' + encodeURIComponent(eventId), {
       method: 'POST',
-      body: decision === 'accept' ? {decision: 'accept', automation: fields} : {decision: 'dismiss'}
+      body: decision === 'accept' ? (resume ? {decision: 'accept'} : {decision: 'accept', automation: fields}) : {decision: 'dismiss'}
     }).then(function(res){
       cardState.busy = false;
       if(res.status !== 200 || !res.data.event){
@@ -13346,7 +13721,7 @@
         return;
       }
       openWebBrowserTool();
-      localBrowserNavigate(result.url);
+      localBrowserOpenInNewTab(result.url);
     }).catch(function(error){
       showBenchToast(error && error.message || 'Attachment could not be opened.');
     });
@@ -13460,6 +13835,8 @@
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
+      // A site's notification: its own icon with Mia's dot, never an emoji.
+      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m);
       // A row from when bringing a bot was a request an admin answered.
       if(m.hubBotRequest && hubWorkspace()){
         return '<div class="chat-msg-system"><p>' + esc(displayNameForEmail(m.hubBotRequest.requester_email)) + (m.hubBotRequest.status === 'accepted' ? ' added ' : ' asked to add ') + esc(m.hubBotRequest.name) + '.</p></div>';
@@ -13561,6 +13938,8 @@
     var mediaHtml = '';
     if(m.askBeforeDo) messageHtml = askBeforeDoHtml(m.askBeforeDo);
     else if(!isHuman && !m.pending && (chatOutputLimitNotice(text) || chatPausedNotice(text))) messageHtml = chatContinueHtml(m.id, text);
+    // "Stopped by you" carries the stop button's own square (site-notices.js).
+    else if(!isHuman && !m.pending && window.MiaSiteNotices && window.MiaSiteNotices.stoppedText(text)) messageHtml = window.MiaSiteNotices.stoppedHtml(text);
     messageHtml += googleDriveMessageChips(driveDisplay.files);
     if(m.hubRunLabel) messageHtml += providerRunChipHtml(m.hubRunLabel);
     if(hasMedia) mediaHtml = '<div class="chat-msg-artifacts">' + attachments.map(chatArtifactCardHtml).join('') + '</div>';
@@ -14415,6 +14794,8 @@
     // they render nested under their root instead, via chatThreadFooterHtml.
     var mainMessages = moveLiveProgressBelow(state.messages.filter(function(m){ return !m.threadRoot && !shownByThinkingRow(state, m) && (m.system || isHumanSender(m.sender) || displayBotBody(m.body) || chatMessageHasAttachments(m)); }), isSupersededNativeProgressMessage);
     mainMessages = MiaChatSteps.groupSteps(mainMessages);
+    // A site's notifications in a row fold into one line (site-notices.js).
+    if(window.MiaSiteNotices) mainMessages = window.MiaSiteNotices.groupNotices(mainMessages);
     var dateDivider = '';
     if(mainMessages.length){
       var dividerDate = new Date(mainMessages[0].ts || Date.now());
@@ -14426,6 +14807,7 @@
     var prevHumanKey = null;
     var html = mainMessages.map(function(m){
       if(m.steps) return chatStepsHtml(m);
+      if(m.siteNotices){ prevHumanKey = null; return window.MiaSiteNotices.groupHtml(m); }
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevHumanKey;
@@ -15559,7 +15941,10 @@
     });
   }
 
-  function renderAutomationDetailPane(pane, bot, automation, isNew){
+  // host: given when the editor sits in the Automations page (the middle)
+  // instead of the right panel; it says where Back, Cancel, Save and Delete
+  // lead. Without it the editor belongs to the right panel.
+  function renderAutomationDetailPane(pane, bot, automation, isNew, host){
     automation = automation || {name:'New automation', enabled:false, frequency:'none'};
     var promptMissing = automation.enabled === true && !automationHasTask(automation);
     var frequency = automation.frequency === 'daily' && automation.weekdaysOnly ? 'weekdays' : ['interval', 'daily', 'weekly', 'monthly'].indexOf(automation.frequency) !== -1 ? automation.frequency : 'interval';
@@ -15665,6 +16050,11 @@
         chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
         var savedAutomations = botAutomationList(saved);
         var savedAutomation = isNew ? savedAutomations[savedAutomations.length - 1] : savedAutomations.filter(function(item){ return String(item.id) === String(automation.id); })[0];
+        if(host){
+          renderChatSidebar();
+          host.done();
+          return;
+        }
         chatInfo.automationBotId = saved.id;
         chatInfo.automationId = savedAutomation ? savedAutomation.id : null;
         renderAutomationDetailPane(pane, saved, savedAutomation, false);
@@ -15676,13 +16066,19 @@
         save.textContent = isNew ? 'Add automation' : 'Save';
       });
     });
-    var back = el('#automationDetailBack', pane);
+    if(host){
+      ['#automationDetailBack', '#automationDetailClose', '#automationDetailCancel'].forEach(function(selector){
+        var button = el(selector, pane);
+        if(button) button.addEventListener('click', function(){ host.done(); });
+      });
+    }
+    var back = host ? null : el('#automationDetailBack', pane);
     if(back) back.addEventListener('click', function(){
       chatInfo.automationBotId = null;
       chatInfo.automationId = null;
       renderChatInfoPane();
     });
-    var close = el('#automationDetailClose', pane);
+    var close = host ? null : el('#automationDetailClose', pane);
     if(close) close.addEventListener('click', function(){
       chatInfo.automationBotId = null;
       chatInfo.automationId = null;
@@ -15691,7 +16087,7 @@
       renderChatInfoPane();
       renderChatHeaderBar();
     });
-    var cancel = el('#automationDetailCancel', pane);
+    var cancel = host ? null : el('#automationDetailCancel', pane);
     if(cancel) cancel.addEventListener('click', function(){
       chatInfo.automationBotId = null;
       chatInfo.automationId = null;
@@ -15706,6 +16102,7 @@
         if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && res.data.error) || 'Could not delete automation.');
         var saved = res.data.bot;
         chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
+        if(host){ host.deleted(); return; }
         chatInfo.automationBotId = null;
         chatInfo.automationId = null;
         renderChatInfoPane();
@@ -18425,7 +18822,7 @@
       event.stopPropagation();
       var href = link.href;
       openWebBrowserTool();
-      localBrowserNavigate(href);
+      localBrowserOpenInNewTab(href);
     }
     var thread = el('#chatThread');
     if(thread) thread.addEventListener('click', openInsideMia);
@@ -18454,6 +18851,8 @@
       var chat = teamBotChat(bot);
       if(chat && ids.indexOf(chat.id) < 0) ids.push(chat.id);
     });
+    var mia = teamMiaChat();
+    if(mia && ids.indexOf(mia.id) < 0) ids.push(mia.id);
     return ids;
   }
   function loadNativeRoomPreview(roomId, state){
@@ -18606,6 +19005,7 @@
     var botsGroup = el('#chatBotsGroup');
     if(botsGroup) botsGroup.hidden = hubWorkspace();
     if(hubWorkspace()) return renderHubSidebar();
+    followAgentsToLatestChat();
     var pinnedWrap = el('#chatPinned');
     var botsWrap = el('#chatBots');
     var allWrap = el('#chatAllConversations');

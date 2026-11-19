@@ -28,7 +28,7 @@ function hermes(code, args = [], extraEnv = {}) {
   return run.stdout;
 }
 
-test('a scheduled run keeps the bot\'s guards: rm blocked without waiting, shell guard on', { skip: !fs.existsSync(hermesPython) }, () => {
+test('a scheduled run works like the bot\'s chat: commands allowed, hardline floor kept, shell guard on', { skip: !fs.existsSync(hermesPython) }, () => {
   // Someone switched approvals off in the Hermes home; that must not reach scheduled runs.
   fs.writeFileSync(path.join(home, 'config.yaml'), 'approvals:\n  mode: "off"\n');
   const guard = cronShellGuard(home, { searchOnly: false });
@@ -37,7 +37,7 @@ test('a scheduled run keeps the bot\'s guards: rm blocked without waiting, shell
   assert.equal(config.compression.threshold_tokens, COMPRESSION_THRESHOLD_TOKENS, 'long runs compress at the same point as chat');
   assert.equal(config.compression.enabled, true);
   assert.equal(config.approvals.mode, 'manual');
-  assert.equal(config.approvals.cron_mode, 'deny');
+  assert.equal(config.approvals.cron_mode, 'approve', 'only ask-before-do asks, as in chat');
   assert.equal(config.desktop.auto_continue.enabled, false, 'work cut off by a close is not resumed by Hermes itself');
   assert.equal(config.security.protected_instruction_files, true, 'the instruction-file guard stays on for bots');
   assert.deepEqual(config.terminal.shell_init_files, [guard]);
@@ -48,13 +48,33 @@ test('a scheduled run keeps the bot\'s guards: rm blocked without waiting, shell
     'from tools.environments.local import _resolve_shell_init_files',
     'out = {c: check_all_command_guards(c, "local") for c in sys.argv[1:]}',
     'print(json.dumps({"checks": {c: [r.get("approved"), r.get("message") or ""] for c, r in out.items()}, "init": _resolve_shell_init_files()}))',
-  ].join('\n'), ['rm -rf ~/Library/Caches/old', 'df -h /', 'du -sh ~/Library/Caches'], { HERMES_CRON_SESSION: '1' }));
-  const [approved, message] = checks.checks['rm -rf ~/Library/Caches/old'];
-  assert.equal(approved, false, 'rm is still blocked in a scheduled run');
-  assert.match(message, /^BLOCKED: .*cron jobs run without a user present/, 'blocked at once, not waiting for an answer');
+  ].join('\n'), ['rm -rf ~/Library/Caches/old', 'rm -rf /', 'df -h /', 'du -sh ~/Library/Caches'], { HERMES_CRON_SESSION: '1' }));
+  assert.equal(checks.checks['rm -rf ~/Library/Caches/old'][0], true, 'a command the bot may run in chat also runs on a schedule');
+  assert.equal(checks.checks['rm -rf /'][0], false, 'Hermes\' hardline floor still blocks a catastrophic command');
   assert.equal(checks.checks['df -h /'][0], true);
   assert.equal(checks.checks['du -sh ~/Library/Caches'][0], true);
   assert.deepEqual(checks.init, [guard], 'the browser-launch guard wraps the scheduled terminal');
+});
+
+test('a scheduled run gets the Google server of the bot\'s chat, and loses it when Google is not there', { skip: !fs.existsSync(hermesPython) }, () => {
+  fs.writeFileSync(path.join(home, 'config.yaml'), '');
+  const google = { command: hermesPython, args: ['/opt/mia/mia-google-workspace-mcp.py'], tools: { include: ['google_gmail_list'] } };
+  const read = () => JSON.parse(hermes('import json\nfrom hermes_cli.config import load_config\nprint(json.dumps(load_config()))'));
+  hermes(CRON_GUARD_SCRIPT, ['', String(COMPRESSION_THRESHOLD_TOKENS), JSON.stringify(google)]);
+  let config = read();
+  assert.deepEqual(config.mcp_servers.google, google);
+  assert.equal(config.tools.tool_search.enabled, 'off', 'Google\'s tools are shown directly, as in chat');
+  assert.doesNotMatch(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8'), /BROKER|run_token|Bearer/i, 'no credential is written');
+  const toolsets = JSON.parse(hermes([
+    'import json',
+    'from hermes_cli.config import load_config',
+    'from cron.scheduler import _resolve_cron_enabled_toolsets',
+    'print(json.dumps(_resolve_cron_enabled_toolsets({"enabled_toolsets": ["web", "terminal", "mia_run_report"]}, load_config())))',
+  ].join('\n')));
+  assert.ok(toolsets.includes('google'), 'a bot job\'s fixed tool list gains Google');
+  hermes(CRON_GUARD_SCRIPT, ['', String(COMPRESSION_THRESHOLD_TOKENS), '']);
+  config = read();
+  assert.equal((config.mcp_servers || {}).google, undefined, 'no broker, no Google server');
 });
 
 test('a search-only bot gets no terminal guard because it has no terminal', () => {

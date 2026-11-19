@@ -24,7 +24,7 @@
 // namespace check remains a defense-in-depth
 // boundary before Mia edits, pauses, resumes, or removes a Hermes job.
 
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -429,21 +429,24 @@ function ensureCronPlugin(plugin) {
   return cronPluginsReady.get(plugin);
 }
 
-// Scheduled jobs run from the Hermes home, not from a bot's profile, so the
-// guards a bot has in chat are set there too, once per process: the shell
-// guard on the terminal (a search-only bot has no terminal and gets none),
-// the instruction-file guard, and approvals that fail closed with nobody
-// watching (cron_mode deny; mode "off" would skip every gate). Ask-before-do
-// runs as in chat, except that nobody can answer: a blocked action becomes a
-// "needs you" step (ask-before-do.js decide).
+// Scheduled jobs run from the Hermes home, not from a bot's profile, so a
+// bot's chat setup is repeated there, once per process: the shell guard on
+// the terminal (a search-only bot has no terminal and gets none), the
+// instruction-file guard, and the same tools as the bot's chat. Commands are
+// allowed the way chat allows them (its approvals are off; Hermes' hardline
+// floor still blocks catastrophic ones), so the one gate is ask-before-do:
+// when it is on, a blocked action asks in the bot's chat or becomes a "needs
+// you" step (ask-before-do.js decide); when it is off, the run just does it.
+// Google's server is the one in the bot's chat (hermes-bot-profile.js); it
+// carries no credential, which the gateway sends over the MCP pipe.
 let cronGuardsReady = null;
 // Run by Hermes' own Python so Hermes writes its own config.yaml.
 const CRON_GUARD_SCRIPT = [
-  'import sys',
+  'import json,sys',
   'from hermes_cli.config import load_config, save_config',
   'cfg=load_config() or {}',
   'a=cfg.setdefault("approvals",{})',
-  'a["cron_mode"]="deny"',
+  'a["cron_mode"]="approve"',
   'a["mode"]="manual" if str(a.get("mode") or "").lower()=="off" else (a.get("mode") or "manual")',
   'cfg.setdefault("security",{})["protected_instruction_files"]=True',
   'g=sys.argv[1] if len(sys.argv)>1 else ""',
@@ -456,15 +459,22 @@ const CRON_GUARD_SCRIPT = [
   // reopens, whichever profile the chat runs in, so the profile line in
   // hermes-bot-profile.js alone did not stop its own resume.
   'cfg.setdefault("desktop",{}).setdefault("auto_continue",{})["enabled"]=False',
+  // A bot's chat gets Google's tools shown directly, not behind tool_search.
+  'gs=json.loads(sys.argv[3]) if len(sys.argv)>3 and sys.argv[3] else None',
+  'm=dict(cfg.get("mcp_servers") or {})',
+  'm.update({"google":gs}) if gs else m.pop("google",None)',
+  'cfg["mcp_servers"]=m',
+  'gs and cfg.setdefault("tools",{}).setdefault("tool_search",{}).update({"enabled":"off"})',
   'save_config(cfg)',
 ].join('\n');
 function ensureCronGuards() {
   if (!cronGuardsReady) {
     cronGuardsReady = (async () => {
-      const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS } = require('./hermes-bot-profile');
+      const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS, googleWorkspaceMcpServer } = require('./hermes-bot-profile');
       const guardPath = cronShellGuard(HERMES_HOME) || '';
+      const google = googleWorkspaceMcpServer();
       await new Promise((resolve, reject) => {
-        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS)], {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : ''], {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
@@ -823,8 +833,62 @@ async function runBotAutomationNow(bot, automationId) {
   const job = resolveOwnedAutomationJob(lookup, automation, readHermesJobs(), null, false);
   if (!job) return { status: 'missing' };
   if (jobIsPaused(job)) return { status: 'off' };
-  await runHermes(['run', job.id]);
+  await startHermesRun(job.id);
   return { status: 'started', jobId: job.id };
+}
+
+// `hermes cron run` runs the whole job before it exits, and a run can take
+// minutes. Waiting on it made Run now time out after 90 seconds, report
+// "Could not start" and kill the run halfway. The run now goes on in its own
+// process; Mia only waits long enough to see that it did not fail at once.
+const RUN_START_GRACE_MS = 2500;
+function startHermesRun(jobId) {
+  return new Promise((resolve, reject) => {
+    const launch = configuredHermesLaunch(HERMES_BIN);
+    let child;
+    try {
+      child = spawn(launch.command, [...launch.prefixArgs, 'cron', '--accept-hooks', 'run', jobId],
+        { detached: true, stdio: 'ignore', env: hermesProcessEnv() });
+    } catch (error) {
+      return reject(error);
+    }
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.unref();
+      if (error) reject(error); else resolve();
+    };
+    const timer = setTimeout(() => finish(null), RUN_START_GRACE_MS);
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code, signal) => finish(code === 0 ? null : new Error(`hermes cron run exited (${signal || code})`)));
+  });
+}
+
+// Stop a run that is going now. Mia writes a stop request named after the
+// run's execution id; the run-report plugin, loaded into every scheduled
+// run, sees it within a second and interrupts that run only. The automation
+// itself stays on; its next scheduled runs happen as usual.
+// -> { status: 'stopping'|'not_running'|'missing', executionId }
+const CRON_STOP_DIR = path.join(path.dirname(HERMES_CRON_EXECUTIONS_DB), 'mia-stop');
+const CRON_STOP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+function stopBotAutomationRun(conn, bot, automationId) {
+  const automation = botAutomations(bot).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  const run = listActiveBotCronRuns(conn, { includePaused: true }).find((item) => item.bot && item.bot.id === bot.id && item.automationId === automationId);
+  if (!run || !/^[A-Za-z0-9_-]{1,80}$/.test(String(run.sessionId || ''))) return { status: 'not_running' };
+  fs.mkdirSync(CRON_STOP_DIR, { recursive: true, mode: 0o700 });
+  // Old requests are cleared so the folder never grows.
+  for (const name of fs.readdirSync(CRON_STOP_DIR)) {
+    try {
+      const file = path.join(CRON_STOP_DIR, name);
+      if (Date.now() - fs.lstatSync(file).mtimeMs > CRON_STOP_MAX_AGE_MS) fs.rmSync(file, { force: true });
+    } catch (_) { /* gone already */ }
+  }
+  const file = path.join(CRON_STOP_DIR, run.sessionId);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
+  return { status: 'stopping', executionId: run.sessionId };
 }
 
 function schedulerUtcOffsetMinutes() {
@@ -1264,7 +1328,13 @@ function listInterruptedBotCronRuns(conn) {
   }
 }
 
-function listActiveBotCronRuns(conn) {
+function executionOwnerAlive(pid) {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0) return false;
+  try { process.kill(value, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+function listActiveBotCronRuns(conn, options = {}) {
   if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
   const registry = readHermesJobs();
   const Database = require('better-sqlite3');
@@ -1272,7 +1342,7 @@ function listActiveBotCronRuns(conn) {
   try {
     if (!hasSqliteTable(executions, 'executions')) return [];
     const latest = executions.prepare(
-      `SELECT id AS executionId, status,
+      `SELECT id AS executionId, status, pid,
               coalesce(started_at, claimed_at) AS startedAt
          FROM executions
         WHERE job_id = ?
@@ -1283,11 +1353,17 @@ function listActiveBotCronRuns(conn) {
       migrateBotAutomations(bot);
       for (const automation of bot.automations) {
         const jobId = bot.hermesCronJobIds[automation.id];
-        if (!jobId || !automationToCronExpr(automation) || !jobPromptFor(bot, automation)) continue;
+        if (!jobId) continue;
         const job = registry.byId.get(jobId) || null;
-        if (!jobOwnedByAutomation(job, bot, automation, true) || jobIsPaused(job)) continue;
+        if (!jobOwnedByAutomation(job, bot, automation, true)) continue;
+        const paused = !automationToCronExpr(automation) || !jobPromptFor(bot, automation) || jobIsPaused(job);
+        if (paused && !options.includePaused) continue;
         const row = latest.get(jobId);
         if (!row || !['claimed', 'running'].includes(row.status)) continue;
+        // A run keeps going after its automation is paused, so Stop can still
+        // find it; a paused job's row counts only while its owner is alive,
+        // so an abandoned session never shows as running.
+        if (paused && !executionOwnerAlive(row.pid)) continue;
         results.push({
           bot,
           automation,
@@ -1529,6 +1605,7 @@ module.exports = {
   syncBotAutomation,
   pauseBotCron,
   runBotAutomationNow,
+  stopBotAutomationRun,
   removeBotCron,
   reconcileBotCrons,
   listUndeliveredBotCronResults,

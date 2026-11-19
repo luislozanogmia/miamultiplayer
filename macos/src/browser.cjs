@@ -7,6 +7,7 @@ const { checkDownload } = require("./download-check.cjs");
 const { fileURLToPath, pathToFileURL } = require("node:url");
 const { WebContentsView, BrowserWindow, app, session, ipcMain, Menu, nativeImage, nativeTheme, dialog, shell, systemPreferences, desktopCapturer } = require("electron");
 const { sanitizeUserAgent, installClientHints } = require("./browser-identity.cjs");
+const { createSiteNotifications, siteOrigin } = require("./site-notifications.cjs");
 const { createAttachmentPreviewAccess } = require("./browser-attachment-auth.cjs");
 const { createChromeCookieHandoff, chatGptSignInHost } = require("./chrome-cookie-handoff.cjs");
 const { validClerkNonce } = require("./clerk-nonce.cjs");
@@ -402,18 +403,130 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
   const permissionsPath = statePath ? `${statePath.replace(/\.json$/, "")}-permissions.json` : "";
   const mediaDecisions = new Map();
   const mediaPrompts = new Map();
+  let savedNotifications = {};
   if (permissionsPath) {
     try {
       const saved = JSON.parse(fs.readFileSync(permissionsPath, "utf8"));
       for (const [origin, allowed] of Object.entries((saved && saved.media) || {})) {
         if (/^https:\/\//.test(origin)) mediaDecisions.set(origin, allowed === true);
       }
+      savedNotifications = (saved && saved.notifications) || {};
     } catch (_) { /* First run or unreadable state: prompt again. */ }
+  }
+  // A site's notifications come to Mia instead of the desktop, going where the
+  // person chose for that site in this workspace; the choice is kept in the
+  // same file.
+  const siteNotifications = createSiteNotifications({
+    saved: savedNotifications,
+    save: () => persistMediaDecisions(),
+    log,
+    workspace: () => workspaceKey,
+    caught: notification => { if (typeof options.onSiteNotification === "function") options.onSiteNotification(notification); },
+    ask: askSiteNotifications,
+    deliver: async (notification, decision) => appRequest("/api/browser/site-notifications/deliver", {
+      method: "POST",
+      body: {
+        workspace: decision.workspace, target: decision.mode, botId: decision.botId || "",
+        origin: notification.origin, title: notification.title, body: notification.body, tag: notification.tag,
+        icon: await siteNotificationIcon(notification.origin),
+      },
+    }).catch((error) => {
+      if (error && /bot_unavailable/.test(String(error.message))) throw Object.assign(new Error("bot unavailable"), { code: "BOT_UNAVAILABLE" });
+      throw error;
+    }),
+  });
+  // The site's own icon for its notification in the chat: an open tab's, or
+  // the one remembered with its history. A big one (WhatsApp's .ico is about
+  // 33 KB) is shrunk to a small PNG instead of being dropped; none only when
+  // it can't be read at all.
+  const NOTICE_ICON_PX = 64;
+  const noticeIconCache = new Map();
+  async function siteNotificationIcon(origin) {
+    const isImage = icon => typeof icon === "string" && /^data:image\//i.test(icon);
+    const fits = icon => isImage(icon) && icon.length <= HISTORY_ICON_MAX_CHARS;
+    const tab = [...tabs.values()].find(candidate => !candidate.app && siteOrigin(candidate.url) === origin && isImage(candidate.favicon));
+    let source = tab ? tab.favicon : "";
+    if (!source) {
+      let host = "";
+      try { host = new URL(origin).hostname.toLowerCase(); } catch (_) { return ""; }
+      source = historyIcons.get(host) || "";
+    }
+    if (!isImage(source)) return "";
+    if (fits(source) && !/^data:image\/(?:x-icon|vnd\.microsoft\.icon)/i.test(source)) return source;
+    const cached = noticeIconCache.get(origin);
+    if (cached && cached.source === source) return cached.icon;
+    const small = await shrinkNoticeIcon(source, tab);
+    const icon = fits(small) ? small : (fits(source) ? source : "");
+    noticeIconCache.set(origin, { source, icon });
+    return icon;
+  }
+  async function shrinkNoticeIcon(source, tab) {
+    try {
+      const image = nativeImage.createFromDataURL(source);
+      if (image && !image.isEmpty()) {
+        return image.resize({ width: NOTICE_ICON_PX, height: NOTICE_ICON_PX, quality: "best" }).toDataURL();
+      }
+    } catch (_) { /* not a format nativeImage reads; try the page's decoder */ }
+    // Chromium reads .ico; its own canvas in the tab's isolated world turns
+    // the icon into a small PNG without touching the site's page script.
+    const contents = tab && tab.view && tab.view.webContents;
+    if (!contents || contents.isDestroyed()) return "";
+    const script = `new Promise(resolve => { const img = new Image(); img.onload = () => { try { const c = document.createElement("canvas"); c.width = c.height = ${NOTICE_ICON_PX}; c.getContext("2d").drawImage(img, 0, 0, ${NOTICE_ICON_PX}, ${NOTICE_ICON_PX}); resolve(c.toDataURL("image/png")); } catch (_) { resolve(""); } }; img.onerror = () => resolve(""); img.src = ${JSON.stringify(source)}; })`;
+    try {
+      const result = await Promise.race([
+        contents.executeJavaScriptInIsolatedWorld(1002, [{ code: script }], false),
+        new Promise(resolve => setTimeout(() => resolve(""), 3000)),
+      ]);
+      return typeof result === "string" ? result : "";
+    } catch (_) { return ""; }
+  }
+  // The question a site's first request (or the page's right-click menu)
+  // brings up. Send to Bot asks which of the person's bots; closing that
+  // list, or having none, is Not Now.
+  async function askSiteNotifications(origin, key) {
+    let host = origin;
+    try { host = new URL(origin).hostname; } catch (_) { /* shown as given */ }
+    const place = key === "solo" ? "Solo" : "this company";
+    const result = await dialog.showMessageBox(window, {
+      type: "question",
+      title: "Notifications",
+      message: `Where should notifications from ${host} go?`,
+      detail: `Send to Mia or Send to Bot posts each one in that chat in ${place}; nobody acts on it by itself. Allow shows them on your desktop. Mia remembers the choice for this site in ${place} only, and you can change it from the page's right-click menu.`,
+      buttons: ["Send to Bot…", "Send to Mia", "Allow", "Block", "Not Now"],
+      defaultId: 1,
+      cancelId: 4,
+    });
+    const response = result && result.response;
+    if (response === 1) return { mode: "mia" };
+    if (response === 2) return { mode: "desktop" };
+    if (response === 3) return { mode: "block" };
+    if (response !== 0) return null;
+    let bots = [];
+    try {
+      const listed = await appRequest(`/api/browser/site-notifications/bots?workspace=${encodeURIComponent(key)}`, { timeoutMs: 5000 });
+      bots = Array.isArray(listed && listed.bots) ? listed.bots.filter(bot => bot && bot.id).slice(0, 12) : [];
+    } catch (error) {
+      log(`browser site notification bot list failed: ${error.message}`);
+    }
+    if (window.isDestroyed() || key !== workspaceKey) return null;
+    if (!bots.length) {
+      await dialog.showMessageBox(window, { type: "info", title: "Notifications", message: "There is no bot to send them to here.", detail: "Nothing was changed. The site will ask again next time.", buttons: ["OK"] });
+      return null;
+    }
+    const pick = await dialog.showMessageBox(window, {
+      type: "question",
+      title: "Notifications",
+      message: `Which bot should get notifications from ${host}?`,
+      buttons: [...bots.map(bot => String(bot.name || bot.id).slice(0, 40)), "Cancel"],
+      cancelId: bots.length,
+    });
+    const bot = bots[pick && pick.response];
+    return bot ? { mode: "bot", botId: String(bot.id), botName: String(bot.name || "") } : null;
   }
   function persistMediaDecisions() {
     if (!permissionsPath) return;
     try {
-      fs.writeFileSync(permissionsPath, JSON.stringify({ media: Object.fromEntries(mediaDecisions) }), { mode: 0o600 });
+      fs.writeFileSync(permissionsPath, JSON.stringify({ media: Object.fromEntries(mediaDecisions), notifications: siteNotifications.toJSON() }), { mode: 0o600 });
     } catch (error) {
       log(`browser permission save failed: ${error.message}`);
     }
@@ -738,6 +851,33 @@ function createBrowser(window, trustedOrigin, log, options = {}) {
     return [{
       label: allowed ? "Block Camera and Microphone for This Site" : "Allow Camera and Microphone for This Site",
       click: () => { rememberMediaDecision(origin, !allowed); if (!wc.isDestroyed()) wc.reload(); },
+    }];
+  }
+  // The same for a site's notifications. It is there on every https page, so
+  // a site can be listened to before it asks.
+  function notificationMenuItems(wc) {
+    const url = wc.isDestroyed() ? "" : wc.getURL();
+    if (!siteOrigin(url)) return [];
+    // For now a site's notifications are on in one workspace only.
+    if (siteNotifications.elsewhere(url)) {
+      return [{ label: "This Site's Notifications Are Set in Another Workspace", enabled: false }];
+    }
+    const decision = siteNotifications.decided(url);
+    const reload = () => { if (!wc.isDestroyed()) wc.reload(); };
+    if (decision && decision.mode !== "block") {
+      return [{ label: "Stop This Site's Notifications", click: () => { siteNotifications.set(url, { mode: "block" }); reload(); } }];
+    }
+    return [{
+      label: "Choose Where This Site's Notifications Go…",
+      click: () => {
+        const key = workspaceKey;
+        askSiteNotifications(siteOrigin(url), key).then((answer) => {
+          if (answer && key === workspaceKey && !wc.isDestroyed() && siteOrigin(wc.getURL()) === siteOrigin(url)) {
+            siteNotifications.set(url, answer);
+            reload();
+          }
+        }).catch(error => log(`browser site notification choice failed: ${error.message}`));
+      },
     }];
   }
   function mediaRequestOrigin(details, contents) {
@@ -3002,6 +3142,8 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
   function canSleep(tab) {
     if (!tab.url || tab.asleep || tab.id === activeId || tab.id === docked.id || tab.id === fullscreenId || inPane(tab.id)) return false;
     if (sessionGroupId && tab.groupId === sessionGroupId) return false;
+    // A site Mia catches notifications from says nothing while it sleeps.
+    if (siteNotifications.listening(tab.url)) return false;
     if ((tab.botWork || 0) > 0 || (tab.actorOperationCount || 0) > 0 || heldByRenderer.has(tab.id)) return false;
     if (actorRuntime.list().some(actor => actor.tabId === tab.id)) return false;
     const wc = tab.view.webContents;
@@ -3331,6 +3473,7 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         { label: "Forward", enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
         { label: "Reload", click: () => wc.reload() },
         ...mediaMenuItems(wc),
+        ...notificationMenuItems(wc),
         { type: "separator" }, ...printMenuItems(tab));
       Menu.buildFromTemplate(items).popup({ window });
     });
@@ -3930,6 +4073,21 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (tab && tab.id === activeId) printChoice(tab);
   }
   ipcMain.on("miaos-browser-print", pagePrintRequest);
+  // A page's notifications (see google-oauth-preload.cjs). Only a web tab's
+  // own page is answered, by the address Mia sees, never one the page names.
+  function siteNotificationPage(event) {
+    const tab = [...tabs.values()].find(candidate => candidate.view.webContents === event.sender);
+    if (!tab || tab.app || event.sender.isDestroyed() || (event.senderFrame && event.senderFrame !== event.sender.mainFrame)) return "";
+    return event.sender.getURL();
+  }
+  const siteNotificationRaised = (event, payload) => { siteNotifications.receive(siteNotificationPage(event), payload); };
+  ipcMain.on("miaos-browser-site-notification", siteNotificationRaised);
+  ipcMain.handle("miaos-browser-site-notification-state", event => siteNotifications.state(siteNotificationPage(event)));
+  const siteNotificationStateSync = (event) => {
+    try { event.returnValue = siteNotifications.state(siteNotificationPage(event)); } catch (_) { event.returnValue = "default"; }
+  };
+  ipcMain.on("miaos-browser-site-notification-state-sync", siteNotificationStateSync);
+  ipcMain.handle("miaos-browser-site-notification-ask", event => siteNotifications.request(siteNotificationPage(event)));
   function authorized(event) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) return false;
     try { return new URL(event.senderFrame.url).origin === trustedOrigin(); } catch (_) { return false; }
@@ -4330,6 +4488,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     window.removeListener("leave-full-screen", leaveWindowFullscreen);
     ipcMain.removeHandler(channel);
     ipcMain.removeListener("miaos-browser-print", pagePrintRequest);
+    ipcMain.removeListener("miaos-browser-site-notification", siteNotificationRaised);
+    ipcMain.removeHandler("miaos-browser-site-notification-state");
+    ipcMain.removeListener("miaos-browser-site-notification-state-sync", siteNotificationStateSync);
+    ipcMain.removeHandler("miaos-browser-site-notification-ask");
     profile.removeListener("will-download", downloadStarted);
     for (const tab of tabs.values()) if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
     tabs.clear();

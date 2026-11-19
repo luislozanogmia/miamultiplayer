@@ -901,6 +901,15 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     ].join('\n'),
     WORKING_METHOD,
     MIAOS_BOT_WEB_POLICY,
+    // A scheduled run drives the Mia browser through ghost-cli in its terminal,
+    // like the bot's chat does. Without this text the run finds no "browser"
+    // tool and reports browser steps as blocked.
+    MIAOS_AGENT_SEARCH_ONLY ? '' : [
+      'Mia browser: the browser is not a separate tool. Use ghost-cli in your terminal to reach your own tab group, the same way your chat does.',
+      MIAOS_BOT_BROWSER_NUDGE,
+      MIAOS_APP_OPEN_POLICY,
+      MIAOS_FOLDER_OPEN_POLICY,
+    ].join('\n\n'),
     `Automation:\nName: ${automationName}\nSchedule: ${botAutomationSchedule(automation)}`,
     automationPrompt ? `Task:\n${automationPrompt}` : '',
     // Steps run one at a time, in order, so a long task can't silently skip
@@ -914,7 +923,7 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     steps.length && automationId ? [
       'Progress reports:',
       'Use the report_step tool (step number, state, one-line note) as you go: state "working" when you start a step, "done", "failed" or "skipped" when you finish it.',
-      'Nobody is watching this run, so nothing can be approved or answered during it, and you never wait. If an action is blocked (deleting, sending, publishing, or anything else that needs the user\'s yes), or you need the user to decide, sign in or provide something: do not try another way. Call report_step with state "needs_you" and exactly what you wanted to do (for example, which files you would delete and how much space that frees), then carry on with the steps that do not depend on it.',
+      'If an action is blocked and the BLOCKED message gives a request_id, ask with request_approval: the user sees it in this bot\'s chat, and a yes lets you run that exact call once. If the user says no or does not answer, the message gives no request_id, or you need the user to decide, sign in or provide something: do not try another way. Call report_step with state "needs_you" and exactly what you wanted to do (for example, which files you would delete and how much space that frees), then carry on with the steps that do not depend on it.',
       'End with the full report, including everything waiting for the user.',
     ].join('\n') : '',
   ].filter(Boolean).join('\n\n');

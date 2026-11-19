@@ -43,6 +43,27 @@ function serverName(id) {
 }
 function keyEnvName(id) { return 'MIA_MCP_' + id.replace(/-/g, '_').toUpperCase().slice(0, 40) + '_KEY'; }
 
+function oauthClientEnvNames(id) {
+  if (typeof id !== 'string' || !id || id.length > 40 || /[^a-z0-9-]/.test(id) || !/^[a-z0-9]/.test(id)) fail('invalid_mcp_app', 'That is not an app identifier.');
+  const prefix = 'MIA_MCP_' + id.replace(/-/g, '_').toUpperCase();
+  return { clientId: prefix + '_CLIENT_ID', clientSecret: prefix + '_CLIENT_SECRET' };
+}
+
+function cleanOAuthClient(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || !Number.isInteger(value.redirectPort) || value.redirectPort < 1 || value.redirectPort > 65535) {
+    fail('invalid_oauth_client', 'The OAuth redirect port must be an integer between 1 and 65535.');
+  }
+  return { redirectPort: value.redirectPort };
+}
+
+function requiresOAuthClient(app) {
+  if (app.auth !== 'oauth') return false;
+  if (app.oauthClient) return true;
+  try { const url = new URL(app.url); return url.protocol === 'https:' && url.hostname === 'mcp.asana.com'; }
+  catch (_) { return false; }
+}
+
 function httpsUrl(value, field) {
   let url;
   try { url = new URL(String(value || '')); } catch (_) { fail('invalid_mcp_app', `${field} must be an https address.`); }
@@ -98,6 +119,7 @@ function cleanMcpApp(input, existingIds = []) {
     id, name, description, auth, ...server,
     docsUrl: input.docsUrl ? httpsUrl(input.docsUrl, 'The docs link') : null,
     logo: cleanLogo(input.logo),
+    ...(auth === 'oauth' && input.oauthClient != null ? { oauthClient: cleanOAuthClient(input.oauthClient) } : {}),
   };
 }
 
@@ -139,7 +161,17 @@ function createMcpAppsStore(file = defaultMcpAppsFile) {
     if (!apps.some((app) => app.id === id)) fail('mcp_app_not_found', 'That app is no longer in Connected apps.', 404);
     write(apps.filter((app) => app.id !== id));
   }
-  return { list, add, remove, get: (id) => list().find((app) => app.id === id) || null };
+  function setOAuthClient(id, value) {
+    const apps = list();
+    const app = apps.find((item) => item.id === id);
+    if (!app) fail('mcp_app_not_found', 'That app is no longer in Connected apps.', 404);
+    if (app.auth !== 'oauth') fail('invalid_oauth_client', 'OAuth client settings need an OAuth app.');
+    if (value === null) delete app.oauthClient;
+    else app.oauthClient = cleanOAuthClient(value);
+    write(apps);
+    return app;
+  }
+  return { list, add, remove, setOAuthClient, get: (id) => list().find((app) => app.id === id) || null };
 }
 
 // The Hermes mcp_servers entries for these apps, as YAML lines indented under
@@ -151,6 +183,16 @@ function hermesMcpServerLines(apps) {
     if (app.url) {
       lines.push(`    url: ${JSON.stringify(app.url)}`);
       if (app.auth === 'oauth') lines.push('    auth: oauth');
+      if (app.auth === 'oauth' && app.oauthClient) {
+        const names = oauthClientEnvNames(app.id);
+        const { redirectPort } = cleanOAuthClient(app.oauthClient);
+        lines.push('    oauth:',
+          `      client_id: ${JSON.stringify(`\${${names.clientId}}`)}`,
+          `      client_secret: ${JSON.stringify(`\${${names.clientSecret}}`)}`,
+          `      redirect_port: ${redirectPort}`,
+          '      token_endpoint_auth_method: client_secret_post',
+          '      cimd: false');
+      }
       if (app.auth === 'key') {
         lines.push('    headers:', `      ${app.keyHeader}: ${JSON.stringify(`${app.keyPrefix || ''}\${${keyEnvName(app.id)}}`)}`);
       }
@@ -169,10 +211,14 @@ function hermesMcpServerLines(apps) {
 // { signedIn, state } with state 'starting' | 'waiting' | 'error' | null.
 function publicMcpApp(app, hasKey, signIn = {}) {
   const signingIn = signIn.state === 'starting' || signIn.state === 'waiting';
+  const oauthClientRequired = requiresOAuthClient(app);
+  const oauthClientConfigured = app.auth === 'oauth' && signIn.oauthClientConfigured === true;
   return {
     id: app.id, name: app.name, description: app.description, auth: app.auth, docsUrl: app.docsUrl, logo: app.logo,
     where: app.url ? new URL(app.url).host : `${app.runner} ${app.package}`, addedAt: app.addedAt,
-    status: app.auth === 'key' ? (hasKey ? 'ready' : 'needs_key')
+    oauthClientRequired, oauthClientConfigured,
+    ...(app.auth === 'oauth' ? { oauthRedirectUri: `http://127.0.0.1:${app.oauthClient ? cleanOAuthClient(app.oauthClient).redirectPort : 27890}/callback` } : {}),
+    status: oauthClientRequired && !oauthClientConfigured ? 'needs_oauth_client' : app.auth === 'key' ? (hasKey ? 'ready' : 'needs_key')
       : app.auth !== 'oauth' ? 'ready' : signingIn ? 'signing_in' : signIn.signedIn ? 'signed_in' : 'needs_sign_in',
     ...(app.auth === 'oauth' && signIn.state === 'error' && !signIn.signedIn ? { signInFailed: true } : {}),
   };
@@ -208,10 +254,66 @@ function readProfileKey(envPath, name) {
   } catch (_) { return ''; }
 }
 
+// Deliberately unquoted dotenv tokens: no expansion, escapes, comments or
+// whitespace can change the value Hermes reads. Never reflect rejected input.
+function validOAuthCredential(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4096
+    && !/[^A-Za-z0-9._~:/+=-]/.test(value);
+}
+function oauthEnvAssignment(name) { return new RegExp('^\\s*(?:export\\s+)?' + name + '\\s*='); }
+
+function hasProfileOAuthClient(envPath, id) {
+  const names = Object.values(oauthClientEnvNames(id));
+  try {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    return names.every((name) => {
+      const matcher = oauthEnvAssignment(name);
+      const matches = lines.filter((line) => matcher.test(line));
+      return matches.length === 1 && validOAuthCredential(matches[0].replace(matcher, '').replace(/\r$/, ''));
+    });
+  } catch (_) { return false; }
+}
+
+function validateOAuthClientCredentials(credentials) {
+  if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)
+      || !validOAuthCredential(credentials.clientId) || !validOAuthCredential(credentials.clientSecret)) {
+    fail('invalid_oauth_client', 'Enter a valid OAuth client ID and secret using only safe ASCII token characters.');
+  }
+  return { clientId: credentials.clientId, clientSecret: credentials.clientSecret };
+}
+
+function setProfileOAuthClient(envPath, id, credentials) {
+  const names = oauthClientEnvNames(id);
+  if (credentials !== null) credentials = validateOAuthClientCredentials(credentials);
+  let temporary;
+  try {
+    let lines = [];
+    try { lines = fs.readFileSync(envPath, 'utf8').split('\n'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const matchers = Object.values(names).map(oauthEnvAssignment);
+    lines = lines.filter((line) => !matchers.some((matcher) => matcher.test(line)));
+    if (credentials !== null) {
+      while (lines[lines.length - 1] === '') lines.pop();
+      lines.push(`${names.clientId}=${credentials.clientId}`, `${names.clientSecret}=${credentials.clientSecret}`);
+    }
+    const directory = path.dirname(envPath);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(directory, 0o700);
+    temporary = `${envPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+    fs.writeFileSync(temporary, lines.join('\n').replace(/\n*$/, '\n'), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, envPath);
+  } catch (_) {
+    fail('oauth_client_storage_failed', 'Could not update the OAuth client in the profile environment.', 500);
+  } finally {
+    if (temporary) { try { fs.unlinkSync(temporary); } catch (_) {} }
+  }
+}
+
 const defaultStore = createMcpAppsStore();
 
 module.exports = {
   McpAppError, cleanMcpApp, createMcpAppsStore, defaultMcpAppsFile, defaultStore,
   hermesMcpServerLines, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, readProfileKey,
   builtInMcpApps, builtInMcpApp, MAX_LOGO_BYTES,
+  requiresOAuthClient, oauthClientEnvNames, hasProfileOAuthClient, setProfileOAuthClient, validateOAuthClientCredentials,
 };

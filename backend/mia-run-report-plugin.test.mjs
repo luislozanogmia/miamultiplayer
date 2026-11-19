@@ -10,7 +10,8 @@ const require = createRequire(import.meta.url);
 const PLUGIN = path.join(path.dirname(new URL(import.meta.url).pathname), 'hermes-plugins', 'mia-run-report');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mia-run-report-'));
 test.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-process.env.HERMES_HOME ||= path.join(temp, 'hermes');
+// Always a throwaway home: these tests must never write into a live profile.
+process.env.HERMES_HOME = path.join(temp, 'hermes');
 process.env.MIAOS_AUTOMATION_ARTIFACT_DIR ||= path.join(temp, 'artifacts');
 process.env.MIAOS_BOT_PACKAGE_DIR ||= path.join(temp, 'bots');
 
@@ -31,6 +32,7 @@ module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 registered = {}
 class Ctx:
     def register_tool(self, **kwargs): registered.update(kwargs)
+    def register_hook(self, name, callback): registered.setdefault("hooks", {})[name] = callback
 module.register(Ctx())
 if request.get("describe"):
     print(json.dumps({"name": registered["name"], "toolset": registered["toolset"], "schema": registered["schema"]}))
@@ -211,4 +213,53 @@ test('what the tool writes is what Mia reads: working then done shows in the che
   const list = cronSync.automationChecklist(['A', 'B', 'C', 'D'], reports, { executionId: 'run-7', status: 'running', startedAt: String(NOW - 60) });
   assert.deepEqual(list.steps.map((step) => step.state), ['done', 'working', 'pending', 'pending']);
   assert.deepEqual(list.current, { step: 2, text: 'B', note: 'Picking five' });
+});
+
+
+// Stop from Mia: the real plugin, a fake agent standing in for the run's
+// Hermes agent, and the stop file Mia's backend writes.
+const STOP_HARNESS = `
+import importlib.util, json, os, sys, time, types
+request = json.loads(sys.stdin.read())
+os.environ["HERMES_HOME"] = request["home"]
+spec = importlib.util.spec_from_file_location("mia_run_report", request["plugin"] + "/__init__.py")
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+module._STOP_POLL_SECONDS = 0.05
+hooks = {}
+class Ctx:
+    def register_tool(self, **kwargs): pass
+    def register_hook(self, name, callback): hooks[name] = callback
+module.register(Ctx())
+class Agent:
+    session_id = "s"
+    def __init__(self): self.stopped = None
+    def interrupt(self, message=None): self.stopped = message
+def model_call(agent, task_id):
+    return hooks["pre_api_request"](task_id=task_id)
+target, other = Agent(), Agent()
+model_call(target, "cron:job1:run-stop")
+model_call(other, "cron:job1:run-other")
+before = hooks["pre_tool_call"](tool_name="terminal", args={}, task_id="cron:job1:run-stop")
+folder = os.path.join(request["home"], "cron", "mia-stop"); os.makedirs(folder, exist_ok=True)
+open(os.path.join(folder, "run-stop"), "w").close()
+deadline = time.time() + 3
+while target.stopped is None and time.time() < deadline: time.sleep(0.02)
+after = hooks["pre_tool_call"](tool_name="terminal", args={}, task_id="cron:job1:run-stop")
+chat = hooks["pre_tool_call"](tool_name="terminal", args={}, task_id="session-123")
+print(json.dumps({"before": before, "stopped": target.stopped, "other": other.stopped, "after": after, "chat": chat}))
+`;
+
+test('a stop request from Mia interrupts that run only and blocks its next tool call', () => {
+  const home = fs.mkdtempSync(path.join(temp, 'stop-home-'));
+  fs.writeFileSync(path.join(temp, 'stop-harness.py'), STOP_HARNESS);
+  const run = spawnSync('python3', ['-I', path.join(temp, 'stop-harness.py')], {
+    input: JSON.stringify({ plugin: PLUGIN, home }), encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout.trim().split('\n').pop());
+  assert.equal(result.before, null);
+  assert.match(String(result.stopped), /stopped this automation run/);
+  assert.equal(result.other, null);
+  assert.equal(result.after.action, 'block');
+  assert.equal(result.chat, null);
 });

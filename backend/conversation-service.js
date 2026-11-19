@@ -568,8 +568,9 @@ function createConversationService({ repository, authorization, realtime = null,
     if (reason === 'take-over') return `⏸ Browser is yours.${page ? ` I was on ${page}.` : ''} Press Continue when you want me back.`;
     // Nothing runs again by itself after a close (interrupted-work.js), so
     // the chat says so instead of leaving the message without an answer.
-    if (reason === 'app-closed') return `⏹ Stopped when Mia closed — ${noun} was mid-response. Send it again to restart it.`;
-    return `⏹ Stopped by you — ${noun} was mid-response.`;
+    // No emoji: the chat draws the stop button's square (site-notices.js).
+    if (reason === 'app-closed') return `Stopped when Mia closed — ${noun} was mid-response. Send it again to restart it.`;
+    return `Stopped by you — ${noun} was mid-response.`;
   }
 
   // Best-effort "where it left off" hint. server.js's verbose Hermes progress

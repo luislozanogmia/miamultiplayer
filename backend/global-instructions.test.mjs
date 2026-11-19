@@ -43,6 +43,17 @@ test('bot instructions layer onto each bot brief for chat and scheduled work', (
   }
 });
 
+test('a scheduled bot run is told to reach the Mia browser through ghost-cli', () => {
+  const scheduled = inference.buildScheduledBotPrompt(
+    { name: 'Admin' },
+    { name: 'Inbox check', enabled: true, frequency: 'daily', steps: ['Reuse the existing tab in my browser group.'] },
+    { userDisplayName: 'Luis' }
+  );
+  assert.match(scheduled, /ghost-cli call ghost_tab_list/);
+  assert.match(scheduled, /the browser is not a separate tool/);
+  assert.doesNotMatch(scheduled, /\n\n\n/, 'no empty sections');
+});
+
 test('settings expose and persist both instruction fields with bounded input', async () => {
   const [server, cronSync, html, app, styles] = await Promise.all([
     readFile(new URL('./server.js', import.meta.url), 'utf8'),

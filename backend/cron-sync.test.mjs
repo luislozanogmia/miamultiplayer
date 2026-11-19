@@ -29,6 +29,9 @@ const fs = require('fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(commandLog)}, JSON.stringify(args) + '\\n');
 if (args.includes('create')) console.log('Created job: replacement-id');
+// A real run lasts as long as the job does; Run now must not wait for it.
+if (args.includes('run') && args.includes('job-slow-run')) setTimeout(() => {}, 8000);
+if (args.includes('run') && args.includes('job-broken-run')) process.exit(3);
 `
 );
 fs.chmodSync(fakeHermes, 0o755);
@@ -144,9 +147,9 @@ function setExecutions(rows) {
     INSERT INTO executions
       (id, job_id, source, process_id, pid, status, claimed_at, started_at, finished_at, error)
     VALUES
-      (@id, @job_id, 'builtin', 'test-process', 1, @status, @claimed_at, @started_at, @finished_at, @error)
+      (@id, @job_id, 'builtin', 'test-process', @pid, @status, @claimed_at, @started_at, @finished_at, @error)
   `);
-  for (const row of rows) insert.run({ finished_at: null, error: null, ...row });
+  for (const row of rows) insert.run({ finished_at: null, error: null, pid: 1, ...row });
   executions.close();
 }
 
@@ -168,7 +171,9 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 test('every cron subprocess receives the strict Hermes environment allowlist', () => {
   const source = fs.readFileSync(new URL('./cron-sync.js', import.meta.url), 'utf8');
-  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 4);
+  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 5);
+  // Run now starts its run detached, with the same allowlisted environment.
+  assert.match(source, /spawn\(launch\.command, \[\.\.\.launch\.prefixArgs, 'cron', '--accept-hooks', 'run', jobId\],\s*\{ detached: true, stdio: 'ignore', env: hermesProcessEnv\(\) \}\)/);
 });
 
 test('briefing schedules preserve selected UTC offset and weekday across midnight', () => {
@@ -1273,7 +1278,7 @@ test('the first scheduled job sets the bot\'s guards where jobs run, once', asyn
   assert.equal(guardCalls.length <= 1, true);
   const guard = path.join(hermesHome, 'miaos-shell-guard.sh');
   assert.ok(fs.existsSync(guard), 'the chat shell guard is written beside the jobs');
-  assert.match(cronSync.CRON_GUARD_SCRIPT, /cron_mode"\]="deny"/);
+  assert.match(cronSync.CRON_GUARD_SCRIPT, /cron_mode"\]="approve"/, 'only ask-before-do asks, as in chat');
   assert.match(cronSync.CRON_GUARD_SCRIPT, /protected_instruction_files"\]=True/);
   assert.match(cronSync.CRON_GUARD_SCRIPT, /"mode"\]="manual" if .*=="off"/, 'approvals off would skip every gate, so it is turned back on');
 });
@@ -1289,4 +1294,70 @@ test('a plugin already enabled where jobs run is not enabled again at startup', 
     fs.rmSync(config, { force: true });
   }
   assert.equal(cronSync.cronPluginEnabled('mia-ask-before-do'), false, 'no config yet');
+});
+
+
+test('Stop asks the running run to end, finds it after a pause, and never shows an abandoned paused run', () => {
+  setJobs([
+    { id: 'job-stop', name: 'Mia bot-stop · Stop me', enabled: false, state: 'paused' },
+    { id: 'job-gone', name: 'Mia bot-gone · Gone', enabled: false, state: 'paused' },
+  ]);
+  // A pid that is no longer running: spawn a process and let it exit.
+  const deadPid = require('node:child_process').spawnSync(process.execPath, ['-e', '0']).pid;
+  setExecutions([
+    { id: 'execution-stop', job_id: 'job-stop', status: 'running', pid: process.pid, claimed_at: '2026-09-07T10:00:00-06:00', started_at: '2026-09-07T10:00:01-06:00' },
+    { id: 'execution-gone', job_id: 'job-gone', status: 'running', pid: deadPid, claimed_at: '2026-09-07T10:01:00-06:00', started_at: '2026-09-07T10:01:01-06:00' },
+  ]);
+  const appDb = require('./db').openDb(':memory:');
+  const save = (id, jobId) => require('./db').saveOne(appDb, 'bots', id, {
+    id, name: id, kind: 'bot', hermesCronJobId: jobId,
+    automation: { enabled: false, frequency: 'interval', intervalMinutes: 5, prompt: 'Check it.' },
+  });
+  save('bot-stop', 'job-stop');
+  save('bot-gone', 'job-gone');
+
+  // Default view (the scheduler's own callers) is unchanged: paused runs are left out.
+  assert.deepEqual(cronSync.listActiveBotCronRuns(appDb), []);
+  const visible = cronSync.listActiveBotCronRuns(appDb, { includePaused: true });
+  assert.deepEqual(visible.map((run) => run.sessionId), ['execution-stop']);
+
+  const stopFolder = path.join(path.dirname(executionsDbFile), 'mia-stop');
+  const bot = require('./db').loadOne(appDb, 'bots', 'bot-stop');
+  const result = cronSync.stopBotAutomationRun(appDb, bot, visible[0].automationId);
+  assert.deepEqual(result, { status: 'stopping', executionId: 'execution-stop' });
+  assert.ok(fs.statSync(path.join(stopFolder, 'execution-stop')).isFile());
+  // Asking twice is fine and writes nothing new.
+  assert.equal(cronSync.stopBotAutomationRun(appDb, bot, visible[0].automationId).status, 'stopping');
+
+  const gone = require('./db').loadOne(appDb, 'bots', 'bot-gone');
+  const goneAutomation = cronSync.listActiveBotCronRuns(appDb, { includePaused: true }).length;
+  assert.equal(goneAutomation, 1);
+  assert.equal(cronSync.stopBotAutomationRun(appDb, gone, 'automation-1').status, 'not_running');
+  assert.equal(fs.existsSync(path.join(stopFolder, 'execution-gone')), false);
+  assert.equal(cronSync.stopBotAutomationRun(appDb, bot, 'no-such-automation').status, 'missing');
+  appDb.close();
+});
+
+test('Run now starts a long run and answers at once instead of waiting for it to finish', async () => {
+  const bot = { id: 'bot-run', name: 'Disk Bot', automations: [
+    { id: 'slow', name: 'Daily disk check', enabled: true, frequency: 'daily', time: '09:00', prompt: 'Check the disk' },
+    { id: 'broken', name: 'Broken', enabled: true, frequency: 'daily', time: '09:00', prompt: 'x' },
+  ] };
+  const before = fs.readFileSync(jobsFile, 'utf8');
+  fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [
+    { id: 'job-slow-run', name: 'Mia bot-run/slow · Disk Bot · Daily disk check', enabled: true, state: 'scheduled' },
+    { id: 'job-broken-run', name: 'Mia bot-run/broken · Disk Bot · Broken', enabled: true, state: 'scheduled' },
+  ] }));
+  try {
+    const started = Date.now();
+    const result = await cronSync.runBotAutomationNow(bot, 'slow');
+    assert.deepEqual(result, { status: 'started', jobId: 'job-slow-run' });
+    assert.ok(Date.now() - started < 6000, 'answered before the 8 second run ended');
+    const ran = fs.readFileSync(commandLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.ok(ran.some((args) => args.join(' ') === 'cron --accept-hooks run job-slow-run'));
+    // A run that fails straight away is still reported as not started.
+    await assert.rejects(cronSync.runBotAutomationNow(bot, 'broken'), /exited/);
+  } finally {
+    fs.writeFileSync(jobsFile, before);
+  }
 });

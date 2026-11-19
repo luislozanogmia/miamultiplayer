@@ -23,7 +23,7 @@ function harness(channels) {
     hubPath: () => '/v1/teams/team',
     hubChannel: id => env.hubChat.channels.find(channel => channel.id === id) || null,
     hubConversationClosed: channel => !!channel.closed,
-    teamBotChat: () => null,
+    teamBotChat: () => null, teamMiaChat: () => null,
     chatSidebarRoomIds: () => ['solo-room'],
     chatRoomState: id => (env.chatWs.byRoom[id] ||= { messages: [], historyInitialized: false, sidebarPreviewLoaded: false, sidebarPreviewLoading: false }),
     hubCall: (method, path) => {

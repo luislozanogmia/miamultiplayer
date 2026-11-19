@@ -171,7 +171,7 @@ test('native bot dispatch loads every conversation page and delegates context ma
   const replyStart = source.indexOf('async function runNativeConversationAgentReply(');
   const replyEnd = source.indexOf('\nasync function executeNativeConversationDispatch(', replyStart);
   const reply = source.slice(replyStart, replyEnd);
-  assert.match(reply, /const historyEvents = allNativeConversationEvents\(/);
+  assert.match(reply, /const historyEvents = nativeModelHistoryEvents\(allNativeConversationEvents\(/);
   assert.doesNotMatch(reply, /const history = nativeConversationRepository\.listEvents\(/);
   assert.match(reply, /seedMessages: nativeHermesGatewaySeedMessages\(systemPrompt, historyEvents, trigger\.id\)/);
   // Group and direct chat bot replies run through the turn shared with team channels.

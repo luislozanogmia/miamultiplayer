@@ -129,7 +129,7 @@ test('a run shows names, states, and the actions this person may take', () => {
     { n: 3, text: 'Send', owner_id: 'gone', state: 'paused', paused_reason: 'owner_missing', fixer_id: 'u2' },
   ];
   const lee = ui.runHtml({ run: run(), steps, people, me: 'u2', isAdmin: false, channelMembers: [{ clerk_user_id: 'u1' }], bots: [{ id: ID(3), name: 'Sender' }] });
-  assert.match(lee, /Pat · Sales · Drafter/);
+  assert.match(lee, /<b>Drafter<\/b><span class="twf-who-owner"><span class="human-avatar-initials[^"]*">PA<\/span>Pat · Sales<\/span>/);
   assert.match(lee, /2 files, visible to the people on this run/);
   assert.match(lee, /data-wf-retry="2"/);
   assert.match(lee, /data-wf-fix="3"/);
@@ -406,4 +406,43 @@ test('the queue carries the person\'s answer and what they read', async () => {
   queue.stop();
   const sent = posts.filter(p => p[0] === '/workflow/resume').map(p => p[1]);
   assert.deepEqual(sent.map(p => [p.action, p.digest]), [['send', 'b'.repeat(64)], ['done', 'b'.repeat(64)]]);
+});
+
+test('a workflow reads like the Multiplayer demo: trigger, each bot with its owner, progress', () => {
+  const definition = { trigger: { kind: 'flag', label: 'New deal', starters: ['u1'] }, steps: [
+    { text: 'Score the lead', ownerMemberId: 'u1', botName: 'Lead Scout' },
+    { text: 'Price it', ownerMemberId: 'u2', botName: 'Pricing Bot', approverMemberId: 'u2' },
+  ] };
+  const workflow = { id: ID(9), name: 'New deal: inbound request', enabled: true, published: true, definition };
+  const page = ui.workflowHtml({ workflow, people, me: 'u1', isAdmin: false });
+  assert.match(page, /class="twf-trigger" data-state="pending"/);
+  assert.match(page, /Trigger<\/span>Starts when someone flags: New deal/);
+  assert.match(page, /Steps · 2 steps · 2 departments/);
+  assert.match(page, /<b>Lead Scout<\/b>.*Pat · Sales/);
+  assert.match(page, /<b>Pricing Bot<\/b>.*Lee · Finance/);
+  assert.match(page, /Approved by Lee · Finance/);
+
+  const steps = [
+    { n: 1, text: 'Score the lead', owner_id: 'u1', bot_name: 'Lead Scout', state: 'done', note: 'Fit 86/100' },
+    { n: 2, text: 'Price it', owner_id: 'u2', bot_name: 'Pricing Bot', state: 'working' },
+  ];
+  const live = ui.runHtml({ run: run({ state: 'running', workflow_id: ID(9) }), steps, people, workflow, me: 'u1' });
+  assert.match(live, /Pricing Bot is working on Lee’s Mia/);
+  assert.match(live, /class="twf-trigger" data-state="done"/);
+  assert.match(live, /1 of 2 steps done/);
+  // Another workflow's trigger never shows on this run.
+  const other = ui.runHtml({ run: run({ state: 'running', workflow_id: ID(8) }), steps, people, workflow, me: 'u1' });
+  assert.doesNotMatch(other, /twf-trigger/);
+});
+
+test('the who column escapes names and uses the bot\'s Mote when the app provides one', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+  const saved = globalThis.MiaBots;
+  globalThis.MiaBots = { art: name => ({ src: 'assets/mote/mote-' + name + '.svg', filter: 'hue-rotate(10deg)"><x' }) };
+  try {
+    const html = ui.runHtml({ run: run(), steps: [{ n: 1, text: 'x', owner_id: 'u1', bot_name: evil, state: 'working' }], people, me: 'u1' });
+    assert.doesNotMatch(html, /<img src=x/);
+    assert.doesNotMatch(html, /"><x/);
+    assert.match(html, /class="twf-mote" src="assets\/mote\/mote-&lt;img/);
+  } finally { globalThis.MiaBots = saved; }
 });

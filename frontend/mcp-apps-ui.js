@@ -7,7 +7,9 @@
   // itself has a Sign in button: its page opens in your default browser.
 
   var opts = null, watching = null;
-  var STATUS = {needs_key: 'Needs its key', needs_sign_in: 'Needs sign-in', signing_in: 'Signing in…', signed_in: 'Signed in'};
+  var fieldTimers = new WeakMap();
+  var CALLBACK = 'http://127.0.0.1:27890/callback';
+  var STATUS = {needs_oauth_client: 'Needs OAuth client', needs_key: 'Needs its key', needs_sign_in: 'Needs sign-in', signing_in: 'Signing in…', signed_in: 'Signed in'};
   var SIGN_IN = {needs_sign_in: 'Sign in', signing_in: 'Open it again', signed_in: 'Sign in again'};
 
   function esc(value){ return opts.esc(value == null ? '' : String(value)); }
@@ -16,34 +18,66 @@
     return STATUS[app.status] || 'Ready';
   }
 
+  function oauthHtml(app){
+    if(app.auth !== 'oauth') return '';
+    var required = app.status === 'needs_oauth_client';
+    return '<details class="mcp-app-oauth" data-mcp-oauth-panel="' + esc(app.id) + '"' + (required ? ' open' : '') + '>'
+      + '<summary role="button">' + (app.oauthClientConfigured ? 'Replace OAuth client' : 'Set up OAuth client') + '</summary>'
+      + '<div class="mcp-app-hint">Register an MCP OAuth app in the vendor’s developer console. Asana requires an MCP app registered in its developer console, with the workspace you want Mia to access explicitly allowed. Use this exact callback: <code>' + esc(CALLBACK) + '</code>. Credentials go directly to Mia’s protected local endpoint, never through chat.</div>'
+      + '<form data-mcp-oauth="' + esc(app.id) + '" autocomplete="off">'
+      + '<label>Client ID<input name="clientId" type="text" autocomplete="off" spellcheck="false" aria-required="true" /></label>'
+      + '<label>Client secret<input name="clientSecret" type="password" autocomplete="new-password" spellcheck="false" aria-required="true" /></label>'
+      + '<div class="mcp-app-oauth-actions"><button type="submit" class="mcp-app-action is-primary">Save OAuth client</button>'
+      + (app.oauthClientConfigured ? '<button type="button" class="mcp-app-action" data-mcp-oauth-reset="' + esc(app.id) + '">Reset OAuth client</button>' : '')
+      + '</div><div class="mcp-app-oauth-status" role="status" aria-live="polite"></div></form></details>';
+  }
+
   function rowHtml(app){
+    var docsUrl = app.docsUrl || app.docs_url;
+    if(docsUrl && !/^https?:\/\//i.test(docsUrl)) docsUrl = '';
     var logo = app.logo ? '<img src="' + esc(app.logo) + '" alt="" />' : '<span class="mcp-app-initial">' + esc(app.name.charAt(0).toUpperCase()) + '</span>';
     var signIn = '<button type="button" class="mcp-app-action' + (app.status === 'needs_sign_in' ? ' is-primary' : '') + '" data-mcp-sign-in="' + esc(app.id) + '">' + esc(SIGN_IN[app.status] || 'Sign in') + '</button>';
     return '<div class="mcp-app" data-mcp-app="' + esc(app.id) + '">'
       + '<div class="mcp-app-head"><span class="mcp-app-logo" aria-hidden="true">' + logo + '</span>'
       + '<div class="mcp-app-title"><span class="mcp-app-name">' + esc(app.name) + '</span><span class="mcp-app-status is-' + esc(app.status) + '">' + esc(statusLabel(app)) + '</span></div></div>'
       + (app.description ? '<div class="mcp-app-desc">' + esc(app.description) + '</div>' : '')
-      + '<div class="mcp-app-where">' + esc(app.where) + (app.docsUrl ? ' · <a href="' + esc(app.docsUrl) + '" target="_blank" rel="noopener noreferrer">Vendor page</a>' : '') + '</div>'
+      + '<div class="mcp-app-where">' + esc(app.where) + (docsUrl ? ' · <a href="' + esc(docsUrl) + '" target="_blank" rel="noopener noreferrer">Vendor page</a>' : '') + '</div>'
       + (app.auth === 'key' ? '<form class="mcp-app-key" data-mcp-key="' + esc(app.id) + '"><input type="password" autocomplete="off" spellcheck="false" aria-label="' + esc(app.name + ' key') + '" placeholder="' + (app.status === 'needs_key' ? 'Paste its key' : 'Paste a new key to replace it') + '" /><button type="submit" class="mcp-app-action' + (app.status === 'needs_key' ? ' is-primary' : '') + '">Save key</button></form>' : '')
       + (app.status === 'signing_in' ? '<div class="mcp-app-hint">Finish signing in in your browser.</div>' : '')
       + '<div class="mcp-app-error" role="alert">' + (app.signInFailed ? 'The sign-in didn’t finish. Try again.' : '') + '</div>'
-      + '<div class="mcp-app-foot">' + (app.auth === 'oauth' ? signIn : '')
+      + oauthHtml(app)
+      + '<div class="mcp-app-foot">' + (app.auth === 'oauth' && app.status !== 'needs_oauth_client' ? signIn : '')
       + (app.offered ? '' : '<button type="button" class="mcp-app-remove" data-mcp-remove="' + esc(app.id) + '" aria-label="' + esc('Remove ' + app.name) + '">Remove</button>') + '</div></div>';
   }
 
   function render(apps){
     var list = document.getElementById('mcpAppsList');
     if(!list) return;
-    list.innerHTML = apps && apps.length ? apps.map(rowHtml).join('')
+    var html = apps && apps.length ? apps.map(rowHtml).join('')
       : '<p class="mcp-apps-empty">No apps yet. Ask Mia to add one.</p>';
+    if(list._mcpHtml === html) return;
+    // Keep the live form nodes, not copies of credentials in JS state. Polls
+    // may update another row while a person is typing this app's client.
+    var panels = Array.from(list.querySelectorAll('[data-mcp-oauth-panel]'));
+    var focused = document.activeElement;
+    list.innerHTML = html;
+    list._mcpHtml = html;
+    list.querySelectorAll('[data-mcp-oauth-panel]').forEach(function(fresh){
+      var old = panels.find(function(panel){ return panel.getAttribute('data-mcp-oauth-panel') === fresh.getAttribute('data-mcp-oauth-panel'); });
+      if(old && old.open && (old.querySelector('[data-mcp-oauth-reset]') !== null) === (fresh.querySelector('[data-mcp-oauth-reset]') !== null)){
+        fresh.replaceWith(old);
+        if(focused && old.contains(focused)) focused.focus({preventScroll:true});
+      }
+    });
+    panels.forEach(function(panel){ if(!panel.isConnected) clearClientFields(panel.querySelector('form')); });
   }
 
   function load(){
     return opts.api('/api/mcp-apps').then(function(res){
       var apps = res.status === 200 && res.data ? res.data.apps : [];
-      render(apps);
+      if(res.status === 200) render(apps);
       return apps;
-    }, function(){ render([]); return []; });
+    }, function(){ return []; });
   }
 
   // While a sign-in is under way in the browser, look again every few
@@ -56,7 +90,7 @@
         load().then(function(apps){
           if(--left > 0 && apps.some(function(app){ return app.status === 'signing_in'; })) again();
         });
-      }, 2500);
+      }, 3000);
     })();
   }
 
@@ -87,15 +121,84 @@
   }
 
   function errorFor(id, message){
-    var row = document.querySelector('[data-mcp-app="' + id + '"] .mcp-app-error');
-    if(row) row.textContent = message;
+    var row = Array.from(document.querySelectorAll('[data-mcp-app]')).find(function(node){ return node.getAttribute('data-mcp-app') === id; });
+    var error = row && row.querySelector('.mcp-app-error');
+    if(error) error.textContent = message;
+  }
+
+  function clearClientFields(form){
+    if(!form) return;
+    clearTimeout(fieldTimers.get(form));
+    fieldTimers.delete(form);
+    form.querySelectorAll('input').forEach(function(field){ field.value = ''; });
+  }
+
+  function saveClient(form, reset){
+    if(form._mcpSaving) return Promise.resolve();
+    var id = form.getAttribute('data-mcp-oauth');
+    var status = form.querySelector('[role="status"]');
+    var body = reset ? {reset:true} : {
+      clientId:form.querySelector('[name="clientId"]').value,
+      clientSecret:form.querySelector('[name="clientSecret"]').value,
+      redirectPort:27890
+    };
+    if(!reset && (!body.clientId || !body.clientSecret.trim())){
+      clearClientFields(form);
+      status.textContent = 'Enter both the client ID and secret.';
+      return Promise.resolve();
+    }
+    form._mcpSaving = true;
+    form.querySelectorAll('button').forEach(function(button){ button.disabled = true; });
+    status.textContent = reset ? 'Resetting…' : 'Saving…';
+    // Clear immediately, including when the request throws or fails. Never
+    // retain client values in render state, storage, errors or chat.
+    clearClientFields(form);
+    return Promise.resolve().then(function(){
+      var request = opts.api('/api/mcp-apps/' + encodeURIComponent(id) + '/oauth-client', {method:'POST', body:body});
+      body = null;
+      return request;
+    }).then(function(res){
+      if(res.status !== 200) throw new Error('save_failed');
+      if(res.data && res.data.runtimeReady === false) throw new Error('runtime_not_ready');
+      return load().then(function(){ errorFor(id, ''); return true; });
+    }).then(function(){
+      status.textContent = reset ? 'OAuth client reset.' : 'OAuth client saved. You can sign in now.';
+      var row = Array.from(document.querySelectorAll('[data-mcp-app]')).find(function(node){ return node.getAttribute('data-mcp-app') === id; });
+      var liveStatus = row && row.querySelector('[role="status"]');
+      if(liveStatus) liveStatus.textContent = status.textContent;
+    }).catch(function(error){
+      status.textContent = error && error.message === 'runtime_not_ready'
+        ? 'OAuth settings saved, but Mia’s runtime could not restart. Restart Mia before signing in.'
+        : reset ? 'Couldn’t reset the OAuth client. Try again.' : 'Couldn’t save the OAuth client. Re-enter both fields and try again.';
+    }).finally(function(){
+      body = null;
+      clearClientFields(form);
+      form._mcpSaving = false;
+      form.querySelectorAll('button').forEach(function(button){ button.disabled = false; });
+    });
   }
 
   function init(options){
     opts = options;
+    clearTimeout(watching);
     var section = document.getElementById('mcpApps');
     if(!section) return;
+    section.addEventListener('input', function(event){
+      var form = event.target.closest('[data-mcp-oauth]');
+      if(!form) return;
+      clearTimeout(fieldTimers.get(form));
+      fieldTimers.set(form, setTimeout(function(){
+        clearClientFields(form);
+        form.querySelector('[role="status"]').textContent = 'Fields cleared after two minutes of inactivity.';
+      }, 120000));
+    });
+    section.addEventListener('toggle', function(event){
+      var panel = event.target;
+      if(panel.matches('[data-mcp-oauth-panel]') && !panel.open) clearClientFields(panel.querySelector('form'));
+    }, true);
     section.addEventListener('submit', function(event){
+      var oauth = event.target.closest('[data-mcp-oauth]');
+      if(oauth){ event.preventDefault(); saveClient(oauth, false); return; }
       var form = event.target.closest('[data-mcp-key]');
       if(!form) return;
       event.preventDefault();
@@ -114,6 +217,8 @@
     });
     section.addEventListener('click', function(event){
       if(event.target.closest('#mcpAppsAsk')){ opts.askMia('Add the MCP for '); return; }
+      var reset = event.target.closest('[data-mcp-oauth-reset]');
+      if(reset){ saveClient(reset.closest('form'), true); return; }
       var start = event.target.closest('[data-mcp-sign-in]');
       if(start){
         // Outside the desktop app a tab opened after the wait would be

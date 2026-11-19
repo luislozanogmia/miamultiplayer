@@ -3126,12 +3126,14 @@ async function ensureNativeBotConversation(bot) {
     }
   }
   cronSync.migrateBotAutomations(bot);
-  const needsAutomationDestination = bot.automations.some((automation) =>
-    automation.deliveryConversationId !== conversation.id
-      || automation.deliveryCompanyId !== conversation.companyId
-  );
+  // An automation keeps posting to the chat it was made in while that chat is
+  // live; a company's automation posts to the bot's chat in that company.
+  const keepsDestination = (automation) => automationTeamWorkspace(automation) || automationOriginChat(bot, automation);
+  const needsAutomationDestination = bot.automations.some((automation) => !keepsDestination(automation)
+    && (automation.deliveryConversationId !== conversation.id
+      || automation.deliveryCompanyId !== conversation.companyId));
   if (needsAutomationDestination) {
-    bot.automations = bot.automations.map((automation) => ({
+    bot.automations = bot.automations.map((automation) => (keepsDestination(automation) ? automation : {
       ...automation,
       deliveryConversationId: conversation.id,
       deliveryCompanyId: conversation.companyId,
@@ -3184,6 +3186,10 @@ async function reconcileNativeBotConversations() {
   for (const bot of db.loadAll(conn, 'bots')) {
     try {
       repairLegacyBotConversations(bot);
+      if (repairAutomationTeamWorkspaces(bot)) {
+        db.saveOne(conn, 'bots', bot.id, bot);
+        console.log(`native bot reconciliation: marked ${bot.id} automations made in a company`);
+      }
       const candidates = canonicalBotConversationCandidates(nativeBotConversations(bot));
       if (candidates.length > 1) {
         let canonical = candidates[0];
@@ -6002,6 +6008,8 @@ app.post('/api/bots/archived/:id/restore', requireAuth, async (req, res) => {
 // key field in Connected apps, into Mia's own Hermes profiles, never through
 // chat. Each change rewrites Mia's profiles and restarts her gateway.
 const mcpApps = require('./mcp-apps');
+const { createMcpOAuthClientManager, requireMcpOwner } = require('./mcp-app-oauth-client');
+const requireMcpAppOwner = requireMcpOwner(DEFAULT_OWNER, { allowNoAuth: MIAOS_NO_AUTH });
 const mcpAppKeyFiles = () => [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]
   .map((profile) => path.join(String(process.env.HERMES_HOME || ''), 'profiles', profile, '.env'));
 // An oauth app's sign-in (backend/mcp-app-sign-in.js) is made once, for Mia's
@@ -6032,8 +6040,24 @@ const mcpAppSignIns = mcpAppSignIn.createMcpAppSignIn({
     miaAppAnswers.signedIn(entry.owner, entry.appId);
   },
 });
+const mcpOAuthClients = createMcpOAuthClientManager({
+  store: mcpApps.defaultStore,
+  envFiles: mcpAppKeyFiles(),
+  cancelSignIn: id => mcpAppSignIns.cancel(id),
+  forgetSignIn: id => {
+    for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]) {
+      mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, profile, mcpApps.serverName(id));
+    }
+  },
+  mutate: operation => credentialOperations.mutate(operation),
+  withStoppedGateway: operation => withStoppedHermesGateway(operation),
+  provision: provisionHermesRuntimeProfiles,
+  shareSignIns: shareMcpAppSignIns,
+  listedApps: listedMcpApps,
+});
 const shownMcpApp = (app, hasKey) => mcpApps.publicMcpApp(app, hasKey,
-  app.auth === 'oauth' ? { signedIn: mcpAppSignedIn(app), state: mcpAppSignIns.stateOf(app.id) } : undefined);
+  app.auth === 'oauth' ? { signedIn: mcpAppSignedIn(app), state: mcpAppSignIns.stateOf(app.id),
+    oauthClientConfigured: mcpOAuthClients.configured(app) } : undefined);
 function mcpAppRoute(action) {
   return async (req, res) => {
     try { res.status(200).json(await action(req)); } catch (error) {
@@ -6051,6 +6075,9 @@ function listedMcpApps() {
     .concat(offered.map((app) => ({ ...mcpApps.publicMcpApp(app, false), offered: true })));
 }
 app.get('/api/mcp-apps', requireAuth, mcpAppRoute(async () => ({ apps: listedMcpApps() })));
+app.post('/api/mcp-apps/:id/oauth-client', requireInteractiveAuth, requireMcpAppOwner, mcpAppRoute(async (req) => {
+  return mcpOAuthClients.save(String(req.params.id || ''), req.body || {});
+}));
 app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
   const added = mcpApps.defaultStore.add(req.body || {});
   await reloadMcpApps();
@@ -6058,13 +6085,16 @@ app.post('/api/mcp-apps', requireInteractiveAuth, mcpAppRoute(async (req) => {
 }));
 // Starts the vendor's sign-in for an oauth app and answers with the address
 // to open in the default browser. GET /api/mcp-apps then shows how it went.
-app.post('/api/mcp-apps/:id/sign-in', requireInteractiveAuth, mcpAppRoute(async (req) => {
-  const found = mcpApps.defaultStore.get(String(req.params.id || ''));
-  if (!found || found.auth !== 'oauth') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t sign in this way.', 404);
-  shareMcpAppSignIns();
-  const signIn = await mcpAppSignIns.start(String(req.userEmail || '').toLowerCase(), found, mcpApps.serverName(found.id));
-  if (signIn.state === 'error') throw new mcpApps.McpAppError('mcp_sign_in_failed', `${found.name} didn\u2019t start its sign-in. Try again.`, 502);
-  return { app: shownMcpApp(found, true), ...signIn };
+app.post('/api/mcp-apps/:id/sign-in', requireInteractiveAuth, requireMcpAppOwner, mcpAppRoute(async (req) => {
+  return credentialOperations.mutate(async () => {
+    const found = mcpApps.defaultStore.get(String(req.params.id || ''));
+    if (!found || found.auth !== 'oauth') throw new mcpApps.McpAppError('mcp_app_not_found', 'That app doesn\u2019t sign in this way.', 404);
+    mcpOAuthClients.assertConfigured(found);
+    shareMcpAppSignIns();
+    const signIn = await mcpAppSignIns.start(String(req.userEmail || '').toLowerCase(), found, mcpApps.serverName(found.id));
+    if (signIn.state === 'error') throw new mcpApps.McpAppError('mcp_sign_in_failed', `${found.name} didn\u2019t start its sign-in. Try again.`, 502);
+    return { app: shownMcpApp(found, true), ...signIn };
+  });
 }));
 app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req) => {
   const id = String(req.params.id || '');
@@ -6084,14 +6114,19 @@ app.post('/api/mcp-apps/:id/key', requireInteractiveAuth, mcpAppRoute(async (req
   }
   return { app: mcpApps.publicMcpApp(found, true) };
 }));
-app.delete('/api/mcp-apps/:id', requireInteractiveAuth, mcpAppRoute(async (req) => {
+app.delete('/api/mcp-apps/:id', requireInteractiveAuth, requireMcpAppOwner, mcpAppRoute(async (req) => {
   const found = mcpApps.defaultStore.get(String(req.params.id || ''));
   if (!found) throw new mcpApps.McpAppError('mcp_app_not_found', 'That app is no longer in Connected apps.', 404);
   mcpApps.defaultStore.remove(found.id);
   mcpAppSignIns.cancel(found.id);
   await credentialOperations.mutate(() => withStoppedHermesGateway(async () => {
     for (const file of mcpAppKeyFiles()) mcpApps.setProfileKey(file, mcpApps.keyEnvName(found.id), null);
-    if (found.auth === 'oauth') mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, MIAOS_AGENT_HERMES_PROFILE, mcpApps.serverName(found.id));
+    for (const file of mcpAppKeyFiles()) mcpApps.setProfileOAuthClient(file, found.id, null);
+    if (found.auth === 'oauth') {
+      for (const profile of [MIAOS_AGENT_HERMES_PROFILE, MIAOS_AGENT_GOOGLE_HERMES_PROFILE]) {
+        mcpAppSignIn.forgetSignIn(process.env.HERMES_HOME, profile, mcpApps.serverName(found.id));
+      }
+    }
     provisionHermesRuntimeProfiles();
   }));
   return { removed: found.id };
@@ -6226,21 +6261,56 @@ app.post('/api/agent/wake', requireAuth, (req, res) => {
   res.status(204).end();
 });
 
+// Run an enabled bot automation once from the Automations page. This shares
+// the same guarded scheduler path as the bot-chat "run now" action.
+app.post('/api/bots/:id/automations/:automationId/run-now', requireInteractiveAuth, async (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botReachable(bot, req)) return res.status(404).json({ status: 'missing' });
+  if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can run this automation.' });
+  }
+  try {
+    const result = await cronSync.runBotAutomationNow(bot, req.params.automationId);
+    return res.status(result.status === 'started' ? 200 : 409).json(result);
+  } catch (error) {
+    console.error('automation run-now endpoint failed', error.message);
+    return res.status(503).json({ error: 'automation_run_unavailable', message: 'Could not start this automation.' });
+  }
+});
+
+// Stop the run of a bot automation that is going now. Only that run ends;
+// the automation stays on and its next scheduled runs happen as usual.
+app.post('/api/bots/:id/automations/:automationId/stop', requireInteractiveAuth, (req, res) => {
+  const bot = db.loadOne(conn, 'bots', req.params.id);
+  if (!bot || !botReachable(bot, req)) return res.status(404).json({ status: 'missing' });
+  if (!sameOwner(bot, req.userEmail) && !isAdmin(req.userEmail)) {
+    return res.status(403).json({ error: 'forbidden', message: 'Only the bot owner or a workspace admin can stop this automation.' });
+  }
+  try {
+    const result = cronSync.stopBotAutomationRun(conn, bot, req.params.automationId);
+    return res.status(result.status === 'stopping' ? 200 : 409).json(result);
+  } catch (error) {
+    console.error('automation stop endpoint failed', error.message);
+    return res.status(503).json({ error: 'automation_stop_unavailable', message: 'Could not stop this run.' });
+  }
+});
+
 // Live automation status comes from active Hermes cron sessions, not from
 // normal native chat dispatches. Keep the payload workspace-scoped and expose
 // only the fields the right-hand Automations panel needs.
 app.get('/api/automations/active', requireAuth, (req, res) => {
   let runs;
   try {
-    runs = cronSync.listActiveBotCronRuns(conn);
+    // A paused automation's run that is still going shows, so it can be stopped.
+    runs = cronSync.listActiveBotCronRuns(conn, { includePaused: true });
   } catch (error) {
     console.error('active automation scan failed', error.message);
     return res.status(503).json({ error: 'automation_status_unavailable' });
   }
   const visible = runs
-    .filter((run) => run && run.bot && botVisibleInWorkspace(run.bot, req))
+    .filter((run) => run && run.bot && automationVisibleHere(run.bot, run.automation, req))
     .map((run) => {
-      const conversation = nativeBotConversation(run.bot);
+      const conversation = automationChatNow(run.bot, run.automation);
       return {
         id: run.sessionId,
         botId: run.bot.id,
@@ -6256,7 +6326,8 @@ app.get('/api/automations/active', requireAuth, (req, res) => {
   let checklists = [];
   try {
     checklists = cronSync.listAutomationChecklists(conn)
-      .filter((item) => item && item.bot && botVisibleInWorkspace(item.bot, req))
+      .filter((item) => item && item.bot && automationVisibleHere(item.bot,
+        (item.bot.automations || []).find((automation) => automation && automation.id === item.automationId), req))
       .map(({ bot, ...item }) => ({ botId: bot.id, ...item }));
   } catch (error) {
     console.error('automation checklist scan failed', error.message);
@@ -6374,6 +6445,7 @@ registerResource({
     if (record.avatarColor !== undefined) record.avatarColor = normalizeAgentAvatarColor(record.avatarColor);
     if (record.model !== existing.model) stampBotModelProvider(record, req.userEmail);
     cronSync.migrateBotAutomations(record);
+    stampAutomationWorkspaces(record, existing, req);
   },
   prepareUpdate: (record, existing, req) => {
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'instructions')) return null;
@@ -6559,6 +6631,91 @@ app.get('/api/agents/gateway', requireAuth, (req, res) => {
   return res.status(200).json({ agent });
 });
 
+// Saves a checked automation proposal on its bot and syncs the scheduler job.
+// The card's Accept and a bot's own direct action (ask-before-do off) both
+// come here, so both go through the same validation and sync.
+async function saveBotAutomationFromProposal(bot, proposal, { conversationId, companyId, byBot = false } = {}) {
+  const existing = proposal.automationId
+    ? (bot.automations || []).find((automation) => automation.id === proposal.automationId)
+    : null;
+  const record = botAutomationActions.automationRecordFromProposal(proposal.automation, existing, {
+    conversationId: conversationId,
+    companyId,
+  });
+  // Made in a company's chat, it belongs to that company.
+  if (!existing) {
+    const origin = nativeConversationRepository.getConversation({ companyId, id: conversationId });
+    const team = teamWorkspaceForNewAutomation(bot, origin && origin.metadata && origin.metadata.teamWorkspace);
+    if (team) record.teamWorkspace = team;
+  }
+  const now = new Date().toISOString();
+  const updatedBot = {
+    ...bot,
+    automations: existing
+      ? bot.automations.map((automation) => (automation.id === existing.id ? record : automation))
+      : [...(bot.automations || []), record],
+    updatedAt: now,
+    timeline: [
+      ...(Array.isArray(bot.timeline) ? bot.timeline : []),
+      { ts: now, event: `automation ${existing ? 'updated' : 'created'} from chat${byBot ? ' by the bot' : ''}: ${record.name}` },
+    ],
+  };
+  cronSync.migrateBotAutomations(updatedBot);
+  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
+  if (updatedBot.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(updatedBot));
+      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
+      const current = db.loadOne(conn, 'bots', updatedBot.id);
+      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync automation from chat for', updatedBot.id, err.message);
+    }
+  }
+  const savedBot = db.loadOne(conn, 'bots', updatedBot.id) || updatedBot;
+  // The card says whether a job exists: drafts are never scheduled, and a
+  // failed sync is retried at boot.
+  const schedule = updatedBot.status === 'draft' ? 'draft'
+    : (savedBot.hermesCronJobIds && savedBot.hermesCronJobIds[record.id]) ? 'scheduled' : 'pending';
+  return { record, savedBot, schedule };
+}
+
+// Turns one of a bot's automations on or off and syncs its scheduler job.
+async function setBotAutomationEnabled(bot, automationId, enabled) {
+  const automation = (bot.automations || []).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  if ((automation.enabled === true) === enabled) return { status: enabled ? 'already_on' : 'already_off', bot };
+  const now = new Date().toISOString();
+  const updatedBot = {
+    ...bot,
+    automations: bot.automations.map((item) => (item.id === automationId ? { ...item, enabled } : item)),
+    updatedAt: now,
+    timeline: [...(Array.isArray(bot.timeline) ? bot.timeline : []), { ts: now, event: `automation ${enabled ? 'resumed' : 'paused'} by the bot: ${automation.name}` }],
+  };
+  cronSync.migrateBotAutomations(updatedBot);
+  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
+  if (updatedBot.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(updatedBot));
+      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
+      const current = db.loadOne(conn, 'bots', updatedBot.id);
+      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync automation toggle for', updatedBot.id, err.message);
+    }
+  }
+  return { status: enabled ? 'resumed' : 'paused', bot: db.loadOne(conn, 'bots', updatedBot.id) || updatedBot };
+}
+
+function automationResumeFingerprint(automation) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    id: automation.id,
+    enabled: automation.enabled === true,
+    teamWorkspace: automation.teamWorkspace || '',
+    fields: botAutomationActions.automationView(automation),
+  })).digest('hex');
+}
+
 // The user's answer to a bot's automation card (see nativeBotAutomationAction).
 // accept saves the card's final values through the same validation and
 // scheduler sync as any automation edit; dismiss only records the answer.
@@ -6596,6 +6753,31 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
     bumpVersion();
     return res.status(200).json({ event: updated });
   }
+  // Resuming recurring work needs the owner's explicit answer when Ask Before
+  // Do is on. Recheck the saved automation now; it may have changed or gone
+  // away since the bot proposed it.
+  if (proposal.action === 'resume') {
+    const currentAutomation = (bot.automations || []).find((item) => item.id === proposal.automationId);
+    if (!currentAutomation || !proposal.fingerprint
+      || automationResumeFingerprint(currentAutomation) !== proposal.fingerprint) {
+      const updated = answer({ status: 'stale' });
+      bumpVersion();
+      return res.status(409).json({ error: 'automation_changed',
+        message: 'This automation changed. Ask the bot to propose resuming it again.',
+        proposal: updated.metadata.automationProposal });
+    }
+    const checked = botAutomationActions.normalizeAutomationAction({
+      schemaVersion: botAutomationActions.SCHEMA_VERSION,
+      action: 'resume',
+      automationId: proposal.automationId,
+    }, bot);
+    if (checked.error) return res.status(400).json({ error: 'invalid_automation', message: checked.error });
+    const result = await setBotAutomationEnabled(bot, checked.proposal.automationId, true);
+    if (result.status === 'missing') return res.status(409).json({ error: 'automation_missing', message: 'This automation is no longer available.' });
+    const updated = answer({ status: 'accepted', result: result.status });
+    bumpVersion();
+    return res.status(200).json({ event: updated, bot: result.bot });
+  }
   // The card's edits are checked against schema v1 and the bot's current
   // automations, exactly as if the bot had sent them.
   const fields = (req.body || {}).automation !== undefined ? req.body.automation : proposal.automation;
@@ -6606,42 +6788,7 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
     automation: fields,
   }, bot);
   if (checked.error) return res.status(400).json({ error: 'invalid_automation', message: checked.error });
-  const existing = proposal.automationId
-    ? (bot.automations || []).find((automation) => automation.id === proposal.automationId)
-    : null;
-  const record = botAutomationActions.automationRecordFromProposal(checked.proposal.automation, existing, {
-    conversationId: event.conversationId,
-    companyId,
-  });
-  const now = new Date().toISOString();
-  const updatedBot = {
-    ...bot,
-    automations: existing
-      ? bot.automations.map((automation) => (automation.id === existing.id ? record : automation))
-      : [...(bot.automations || []), record],
-    updatedAt: now,
-    timeline: [
-      ...(Array.isArray(bot.timeline) ? bot.timeline : []),
-      { ts: now, event: `automation ${existing ? 'updated' : 'created'} from chat: ${record.name}` },
-    ],
-  };
-  cronSync.migrateBotAutomations(updatedBot);
-  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
-  if (updatedBot.status !== 'draft') {
-    try {
-      const started = JSON.parse(JSON.stringify(updatedBot));
-      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
-      const current = db.loadOne(conn, 'bots', updatedBot.id);
-      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
-    } catch (err) {
-      console.error('cron-sync: failed to sync automation from chat for', updatedBot.id, err.message);
-    }
-  }
-  const savedBot = db.loadOne(conn, 'bots', updatedBot.id) || updatedBot;
-  // The card says whether a job exists: drafts are never scheduled, and a
-  // failed sync is retried at boot.
-  const schedule = updatedBot.status === 'draft' ? 'draft'
-    : (savedBot.hermesCronJobIds && savedBot.hermesCronJobIds[record.id]) ? 'scheduled' : 'pending';
+  const { record, savedBot, schedule } = await saveBotAutomationFromProposal(bot, checked.proposal, { conversationId: event.conversationId, companyId });
   const updated = answer({ status: 'accepted', automationId: record.id, automation: checked.proposal.automation, schedule });
   bumpVersion();
   return res.status(200).json({ event: updated, bot: savedBot });
@@ -7253,6 +7400,14 @@ function allNativeConversationEvents({ companyId, conversationId, includeDeleted
   return events;
 }
 
+// A website can write its own notification text. Keep the notice in the chat,
+// but never let it speak as Mia or a bot in a later model prompt.
+function nativeModelHistoryEvents(events) {
+  return events.filter((event) => !(event && event.type === 'system'
+    && (event.senderType === 'agent' || event.senderType === 'bot')
+    && event.metadata && event.metadata.siteNotification));
+}
+
 // The actor for a personal agent's turn: its own name and a short persona, no
 // bot roster, not a manager.
 function privateAgentActor(resolved, ownerEmail) {
@@ -7749,6 +7904,112 @@ function expireBrowserRun(target, source) {
 // owner, from a team channel or workflow. Kept only while the run lasts.
 const sharedBotRunSessions = new Map();
 
+// Notifications Mia's browser caught from a site the person chose to send to
+// Mia or one of their bots. The choice belongs to one workspace: Solo or a
+// company. A notification is posted in that chat as a notice from the site,
+// never as the person's message, so nothing starts a turn on it: what a site
+// says is its own words, not an instruction.
+const SITE_NOTIFICATION_LIMITS = { origin: 200, title: 200, body: 1000, tag: 200, icon: 32 * 1024 };
+// The site's own icon, as the browser keeps it for the tab: only an inline
+// image, never an address the chat would load.
+const SITE_NOTIFICATION_ICON = /^data:image\/(?:png|x-icon|vnd\.microsoft\.icon|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
+function siteNotificationIcon(value) {
+  const icon = typeof value === 'string' ? value.trim() : '';
+  return icon.length <= SITE_NOTIFICATION_LIMITS.icon && SITE_NOTIFICATION_ICON.test(icon) ? icon : '';
+}
+function siteNotificationWorkspace(value) {
+  const key = String(value || '').trim().toLowerCase();
+  if (key === 'solo') return 'solo';
+  return AUTOMATION_TEAM_WORKSPACE.test(key) ? key : null;
+}
+// The bots a notification can go to: the person's own, which work in Solo
+// and in a company's My Bots chat alike.
+function siteNotificationBots(email) {
+  const owner = String(email || '').trim().toLowerCase();
+  if (!owner || !isActiveWorkspaceUser(owner)) return [];
+  return db.loadAll(conn, 'bots')
+    .filter((bot) => bot && bot.id && workspaceIdForRecord(bot) === 'solo' && sameOwner(bot, owner))
+    .map((bot) => ({ id: String(bot.id), name: String(bot.name || bot.id) }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+// Mia's main chat in the workspace: Solo's own, or the company's Mia chat.
+function siteNotificationMiaChat(owner, workspace) {
+  const team = workspace === 'solo' ? '' : workspace;
+  const chats = nativeConversationRepository
+    .listConversations({ companyId: nativeCompanyId('solo', owner), limit: 1000 })
+    .filter((conversation) => {
+      const metadata = (conversation && conversation.metadata) || {};
+      return conversation.type === 'agent' && !conversation.archivedAt && !conversation.deletedAt
+        && metadata.agentId === GATEWAY_AGENT_ID && (metadata.teamWorkspace || '') === team
+        && metadata.source !== 'ai-mode';
+    })
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || left.id.localeCompare(right.id));
+  const main = team ? 'team-mia-chat' : 'native-ui';
+  return chats.find((conversation) => conversation.metadata.source === main) || chats[0] || null;
+}
+// The bot's chat in the workspace: its main chat in Solo, its chat with the
+// person in a company (made the first time, as for an automation).
+async function siteNotificationBotChat(bot, workspace) {
+  if (workspace === 'solo') return ensureNativeBotConversation(bot);
+  const existing = automationChatNow(bot, { teamWorkspace: workspace });
+  if (existing) return existing;
+  return nativeHandoffBotConversation(bot, { metadata: { teamWorkspace: workspace } }, ownerOf(bot));
+}
+function siteNotificationText({ origin, title, body }) {
+  let host = origin;
+  try { host = new URL(origin).hostname; } catch (_) { /* kept as given */ }
+  // Plain words: the chat draws Mia's icon for it (frontend site-notices.js).
+  return [`Notification from ${host}`, title, body].filter(Boolean).join('\n');
+}
+app.get('/api/browser/site-notifications/bots', requireAuth, (req, res) => {
+  if (!siteNotificationWorkspace(req.query && req.query.workspace)) return res.status(400).json({ error: 'invalid_workspace' });
+  res.status(200).json({ bots: siteNotificationBots(req.userEmail) });
+});
+app.post('/api/browser/site-notifications/deliver', requireAuth, async (req, res) => {
+  const input = (req.body && typeof req.body === 'object') ? req.body : {};
+  const workspace = siteNotificationWorkspace(input.workspace);
+  const clip = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
+  const origin = clip(input.origin, SITE_NOTIFICATION_LIMITS.origin);
+  const title = clip(input.title, SITE_NOTIFICATION_LIMITS.title);
+  const body = clip(input.body, SITE_NOTIFICATION_LIMITS.body);
+  if (!workspace || !/^https:\/\/[^\s/]+$/.test(origin) || (!title && !body)) return res.status(400).json({ error: 'invalid_notification' });
+  const owner = String(req.userEmail || '').trim().toLowerCase();
+  let conversation = null;
+  let principal = null;
+  try {
+    if (input.target === 'mia') {
+      conversation = siteNotificationMiaChat(owner, workspace);
+      if (!conversation) return res.status(404).json({ error: 'chat_unavailable', message: "Mia's chat in this workspace is not there yet." });
+      principal = { companyId: conversation.companyId, principalId: GATEWAY_AGENT_ID, principalType: 'agent' };
+    } else if (input.target === 'bot') {
+      const botId = String(input.botId || '');
+      const bot = db.loadAll(conn, 'bots').find((record) => record && String(record.id) === botId);
+      // A bot that was archived, deleted or is no longer the person's: the
+      // browser stops sending, as if they had answered Not Now.
+      if (!bot || !siteNotificationBots(owner).some((candidate) => candidate.id === botId)) {
+        return res.status(410).json({ error: 'bot_unavailable' });
+      }
+      conversation = await siteNotificationBotChat(bot, workspace);
+      if (!conversation) return res.status(410).json({ error: 'bot_unavailable' });
+      principal = { companyId: conversation.companyId, principalId: bot.id, principalType: 'bot' };
+    } else {
+      return res.status(400).json({ error: 'invalid_target' });
+    }
+    const created = await nativeConversationService.createEvent({
+      companyId: conversation.companyId,
+      conversationId: conversation.id,
+      principal,
+      type: 'system',
+      content: { text: siteNotificationText({ origin, title, body }) },
+      metadata: { siteNotification: { origin, tag: clip(input.tag, SITE_NOTIFICATION_LIMITS.tag), workspace, ...(siteNotificationIcon(input.icon) ? { icon: siteNotificationIcon(input.icon) } : {}) } },
+    });
+    res.status(201).json({ delivered: true, conversationId: conversation.id, eventId: created && created.event && created.event.id });
+  } catch (error) {
+    console.error('site notification delivery failed', error && error.message ? error.message : error);
+    res.status(500).json({ error: 'delivery_failed' });
+  }
+});
+
 // The workspace whose browser a chat's run may use. Each workspace keeps its
 // own tabs; a run only ever acts in its own, so Solo work never lands in a
 // company's browser (which can be shared live) and the reverse. A company's
@@ -7757,6 +8018,114 @@ function browserWorkspaceForConversation(conversation, companyId, email) {
   const team = conversation && conversation.metadata && conversation.metadata.teamWorkspace;
   if (typeof team === 'string' && /^hub_[a-f0-9]{32}$/.test(team)) return team;
   return companyId === nativeCompanyId('solo', String(email || '').trim().toLowerCase()) ? 'solo' : DEFAULT_WORKSPACE_ID;
+}
+
+// An automation belongs to the workspace it was made in. One bot can work in
+// Solo and in several companies, so a company's automation is marked with
+// that company (its hub id); its runs use that company's browser tabs, post
+// to the bot's chat there and show in that company's Automations panel. No
+// mark means the bot's own workspace. Mia sets the mark, never the request.
+const AUTOMATION_TEAM_WORKSPACE = /^hub_[a-f0-9]{32}$/;
+function automationTeamWorkspace(automation) {
+  const team = automation && automation.teamWorkspace;
+  return typeof team === 'string' && AUTOMATION_TEAM_WORKSPACE.test(team) ? team : '';
+}
+function requestTeamWorkspace(req) {
+  const header = req && req.headers && req.headers['x-miaos-workspace'];
+  const query = req && req.query && (req.query.team || req.query.workspace);
+  const named = String((req && req.query && req.query.team) || header || query || '').trim().toLowerCase();
+  return AUTOMATION_TEAM_WORKSPACE.test(named) ? named : '';
+}
+// Only a bot of the person's own list can work in a company's My Bots chat.
+function teamWorkspaceForNewAutomation(bot, team) {
+  return AUTOMATION_TEAM_WORKSPACE.test(String(team || '')) && workspaceIdForRecord(bot) === 'solo' ? team : '';
+}
+// The mark is server-owned: an edit keeps the automation's mark, and a new
+// automation saved from a company's screen takes that company.
+function stampAutomationWorkspaces(record, existing, req) {
+  const before = new Map(((existing && existing.automations) || []).map((automation) => [automation && automation.id, automation]));
+  const team = teamWorkspaceForNewAutomation(record, requestTeamWorkspace(req));
+  record.automations = (Array.isArray(record.automations) ? record.automations : []).map((automation) => {
+    const next = { ...automation };
+    delete next.teamWorkspace;
+    const previous = before.get(next.id);
+    const kept = previous ? automationTeamWorkspace(previous) : team;
+    if (kept) next.teamWorkspace = kept;
+    // Where it posts is Mia's too: an edit keeps the chat it was made in.
+    if (previous) {
+      for (const key of ['deliveryConversationId', 'deliveryCompanyId', 'originChatRestored']) {
+        if (previous[key] !== undefined) next[key] = previous[key];
+        else delete next[key];
+      }
+    }
+    return next;
+  });
+}
+// Whether a run or checklist of this automation shows on the screen asking:
+// only in the workspace it belongs to. A company's screen lists its My Bots
+// with ?workspace=solo&team=hub_<id>.
+function automationVisibleHere(bot, automation, req) {
+  const team = automationTeamWorkspace(automation);
+  if (!team) return !requestTeamWorkspace(req) && botVisibleInWorkspace(bot, req);
+  return team === requestTeamWorkspace(req) && sameOwner(bot, req && req.userEmail) && isActiveWorkspaceUser(ownerOf(bot));
+}
+// The chat an automation was made in, while it is still one of this bot's
+// live chats in the automation's workspace: its runs keep posting there, so
+// the conversation that set it up keeps the context.
+function automationOriginChat(bot, automation) {
+  const id = automation && automation.deliveryConversationId;
+  const companyId = automation && automation.deliveryCompanyId;
+  if (!bot || !id || !companyId) return null;
+  let conversation = null;
+  try { conversation = nativeConversationRepository.getConversation({ companyId: String(companyId), id: String(id) }); } catch (_) { return null; }
+  const metadata = (conversation && conversation.metadata) || {};
+  if (!conversation || conversation.archivedAt || conversation.type !== 'bot' || metadata.botId !== bot.id || metadata.botArchived === true) return null;
+  return (metadata.teamWorkspace || '') === automationTeamWorkspace(automation) ? conversation : null;
+}
+// The bot's chat an automation posts to: the chat it was made in, else its
+// chat in the automation's company, else its main chat. automationChatNow
+// only looks; automationChat makes the company chat when it is missing.
+function automationChatNow(bot, automation) {
+  const origin = automationOriginChat(bot, automation);
+  if (origin) return origin;
+  const team = automationTeamWorkspace(automation);
+  if (!team) return nativeBotConversation(bot);
+  return nativeBotConversations(bot).find((conversation) => conversation.metadata
+    && conversation.metadata.teamWorkspace === team && conversation.metadata.conversationMode !== 'fresh') || null;
+}
+async function automationChat(bot, automation) {
+  const origin = automationOriginChat(bot, automation);
+  if (origin) return origin;
+  const team = automationTeamWorkspace(automation);
+  if (!team) return ensureNativeBotConversation(bot);
+  return nativeHandoffBotConversation(bot, { metadata: { teamWorkspace: team } }, ownerOf(bot));
+}
+// Automations made in a company chat before Mia kept the mark: the chat the
+// accepted card sits in says which company. Run at boot.
+function repairAutomationTeamWorkspaces(bot) {
+  if (!bot || workspaceIdForRecord(bot) !== 'solo' || !Array.isArray(bot.automations)) return false;
+  let changed = false;
+  for (const automation of bot.automations) {
+    if (!automation || !automation.id || automation.originChatRestored) continue;
+    const row = conn.prepare(
+      `SELECT company_id AS companyId, conversation_id AS conversationId FROM events
+        WHERE json_extract(metadata, '$.automationProposal.automationId') = ?
+          AND json_extract(metadata, '$.automationProposal.status') = 'accepted'
+        ORDER BY created_at ASC LIMIT 1`
+    ).get(String(automation.id));
+    const conversation = row && nativeConversationRepository.getConversation({ companyId: row.companyId, id: row.conversationId, includeDeleted: true });
+    const metadata = (conversation && conversation.metadata) || {};
+    if (!conversation || metadata.botId !== bot.id) continue;
+    const team = teamWorkspaceForNewAutomation(bot, metadata.teamWorkspace);
+    if (team && !automationTeamWorkspace(automation)) automation.teamWorkspace = team;
+    // Mia used to move every automation to the bot's main chat; send it back
+    // to the chat it was made in, once.
+    automation.deliveryConversationId = conversation.id;
+    automation.deliveryCompanyId = conversation.companyId;
+    automation.originChatRestored = true;
+    changed = true;
+  }
+  return changed;
 }
 
 // A bot's tab group is keyed by its id on this computer. A bot's own chat
@@ -7794,7 +8163,8 @@ function browserActorForScheduledRun(sessionId, email) {
   }
   if (!run || !sameOwner(run.bot, email) || !isActiveWorkspaceUser(ownerOf(run.bot))) return null;
   const companyId = nativeCompanyId(workspaceIdForRecord(run.bot), ownerOf(run.bot));
-  const workspace = browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
+  const workspace = automationTeamWorkspace(run.automation)
+    || browserWorkspaceForConversation(nativeBotConversation(run.bot), companyId, email);
   return browserBotActor({ botId: browserBotId(run.bot), name: run.bot.name, workspace, folders: run.folders });
 }
 
@@ -8231,15 +8601,71 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
     metadata: { automationActionError: String(reason).slice(0, 200) },
   });
   if (extracted.error) return failed(extracted.error);
+  // The model may have worked while the owner edited or archived this bot.
+  // Never save the snapshot captured when the turn started over newer state.
+  const currentAgent = db.loadOne(conn, 'bots', agent.id);
+  if (!currentAgent || ownerOf(currentAgent) !== ownerOf(agent)
+    || !isActiveWorkspaceUser(ownerOf(currentAgent))) return failed('bot_unavailable');
+  agent = currentAgent;
   const normalized = botAutomationActions.normalizeAutomationAction(extracted.action, agent);
   if (normalized.error) return failed(normalized.error);
   const proposal = normalized.proposal;
-  if (proposal.action !== 'run_now') {
-    return {
-      text: extracted.text,
-      fallbackText: proposal.action === 'create' ? 'Here’s the automation I’d set up.' : 'Here’s the change I’d make.',
-      metadata: { automationProposal: { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id, status: 'pending' } },
-    };
+  const allowed = sameOwner(agent, trigger.senderId) || isAdmin(trigger.senderId);
+  if (proposal.action === 'create' || proposal.action === 'update') {
+    const card = { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id };
+    // Ask-before-do on (or someone other than the owner asking): the card
+    // waits for the owner. Off: the bot's own action is saved now.
+    if (!allowed || currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false) {
+      return {
+        text: extracted.text,
+        fallbackText: proposal.action === 'create' ? 'Here’s the automation I’d set up.' : 'Here’s the change I’d make.',
+        metadata: { automationProposal: { ...card, status: 'pending' } },
+      };
+    }
+    try {
+      const companyId = nativeCompanyId(workspaceIdForRecord(agent), ownerOf(agent));
+      const { record, schedule } = await saveBotAutomationFromProposal(agent, proposal, { conversationId: trigger.conversationId, companyId, byBot: true });
+      bumpVersion();
+      const done = proposal.action === 'create' ? `A new automation was created: ${record.name}` : `Automation updated: ${record.name}`;
+      return {
+        text: extracted.text,
+        fallbackText: done,
+        metadata: { automationProposal: { ...card, status: 'accepted', appliedByBot: true, automationId: record.id, schedule, answeredAt: new Date().toISOString() } },
+      };
+    } catch (error) {
+      console.error('automation save from bot failed for', agent.id, error.message);
+      return { text: extracted.text, fallbackText: `I couldn’t save ${proposal.action === 'create' ? 'the new automation' : 'that change'}. Try again in a moment.`, metadata: { automationActionError: 'save_failed' } };
+    }
+  }
+  if (proposal.action === 'stop' || proposal.action === 'pause' || proposal.action === 'resume') {
+    const control = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, action: proposal.action };
+    if (!allowed) return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can ${proposal.action} ${proposal.name}.`, metadata: { automationControl: { ...control, status: 'denied' } } };
+    if (proposal.action === 'resume' && currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false) {
+      const automation = (agent.automations || []).find((item) => item.id === proposal.automationId);
+      return {
+        text: extracted.text,
+        fallbackText: `Resume ${proposal.name}? I’ll wait for your approval.`,
+        metadata: { automationProposal: { ...proposal, botId: agent.id, status: 'pending',
+          fingerprint: automationResumeFingerprint(automation) } },
+      };
+    }
+    try {
+      if (proposal.action === 'stop') {
+        const result = cronSync.stopBotAutomationRun(conn, agent, proposal.automationId);
+        const fallback = result.status === 'stopping' ? `Stopping the current run of ${proposal.name}.` : `${proposal.name} isn’t running right now.`;
+        return { text: extracted.text, fallbackText: fallback, metadata: { automationControl: { ...control, status: result.status } } };
+      }
+      const result = await setBotAutomationEnabled(agent, proposal.automationId, proposal.action === 'resume');
+      bumpVersion();
+      const fallback = result.status === 'paused' ? `Paused ${proposal.name}.`
+        : result.status === 'resumed' ? `Resumed ${proposal.name}.`
+          : result.status === 'already_off' ? `${proposal.name} was already off.`
+            : result.status === 'already_on' ? `${proposal.name} was already on.` : `I couldn’t find ${proposal.name}.`;
+      return { text: extracted.text, fallbackText: fallback, metadata: { automationControl: { ...control, status: result.status } } };
+    } catch (error) {
+      console.error(`automation ${proposal.action} failed for`, agent.id, error.message);
+      return { text: extracted.text, fallbackText: `I couldn’t ${proposal.action} ${proposal.name}. Try again in a moment.`, metadata: { automationControl: { ...control, status: 'failed' } } };
+    }
   }
   // The card in chat shows the steps of the run it started: the first one from here on.
   const run = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, requestedAt: Date.now() };
@@ -8427,6 +8853,17 @@ const MID_RUN_MESSAGE_RULE = 'The user sent this while you are working. Answer i
 
 const MID_RUN_APP_NOTE_RULE = 'The Mia app sent this note while you are working; the person did not type it. Use it and carry on with your work. It needs no separate reply.';
 
+// Hermes takes only words mid-run, so a message's files go in by path, staged
+// as on a normal turn, and an image is opened with the image tool.
+const MID_RUN_IMAGE_RULE = 'Before you answer, open each image above with vision_analyze, passing its path. An image sent while you work is not in view until you open it.';
+
+async function nativeMidRunFilesNote(dispatch, trigger) {
+  if (!nativeEventAttachments(trigger).length) return '';
+  const { note } = await nativeTurnFiles(dispatch, trigger);
+  if (!note) return '';
+  return /\(image\/[^)]*\):/i.test(note) ? `${note}\n${MID_RUN_IMAGE_RULE}` : note;
+}
+
 const MID_RUN_NUDGE = 'Answer the user\'s last message now in a short message, before anything else. Your command keeps running in the background.';
 
 // A model can fold its answer into the tool it was about to run, which keeps the
@@ -8506,7 +8943,10 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
     id: dispatch.eventId,
     includeDeleted: false,
   });
-  const message = trigger && trigger.senderType === 'user' ? nativeEventText(trigger) : '';
+  // A message with only a picture reads as its file's name.
+  const message = trigger && trigger.senderType === 'user'
+    ? (nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename)))
+    : '';
   if (!message || !activeGateway || !activeGateway.sessionId) return false;
   // A slash command is a command, not extra text for the running turn; it
   // runs as its own dispatch once that turn ends.
@@ -8525,9 +8965,10 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   const appNote = trigger.type === 'system';
   let result;
   try {
+    const files = appNote ? '' : await nativeMidRunFilesNote(dispatch, trigger);
     result = await steerHermesGatewaySession(activeGateway.sessionId, appNote
       ? inventory.note + '\n\n' + message + '\n\n' + MID_RUN_APP_NOTE_RULE
-      : inventory.note + '\n\nUser: ' + message + '\n\n' + MID_RUN_MESSAGE_RULE);
+      : inventory.note + '\n\nUser: ' + message + (files ? '\n\n' + files : '') + '\n\n' + MID_RUN_MESSAGE_RULE);
   } catch (_) {
     return false;
   }
@@ -8753,12 +9194,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   });
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  const historyEvents = allNativeConversationEvents({
+  const historyEvents = nativeModelHistoryEvents(allNativeConversationEvents({
     companyId: dispatch.companyId,
     conversationId: dispatch.conversationId,
     includeDeleted: false,
     excludedSenderTypes: conversation.type === 'agent' ? ['bot'] : [],
-  });
+  }));
   const transcript = historyEvents
     .filter((event) => event.id !== trigger.id && !isNativeProgressEvent(event))
     .map(nativePromptLine)
@@ -9166,7 +9607,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     const turnMessage = [
       platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
       googleActionInstruction,
-      slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
+      slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName(), askBeforeDo: currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false }),
       slashCommand ? '' : botInstructionActions.instructionActionInstruction(),
       sameSession ? newSkillsNotice(botPromptAgent, knownSkills) : '',
       nativePromptLine(trigger) || message,
@@ -9620,7 +10061,9 @@ function recoverNativeConversationDispatches() {
 // opening words stand in first, and stay if the model can't answer.
 async function refreshNativeConversationTitle(dispatch) {
   const lookup = { companyId: dispatch.companyId, id: dispatch.conversationId };
-  const events = allNativeConversationEvents({ companyId: dispatch.companyId, conversationId: dispatch.conversationId });
+  const events = nativeModelHistoryEvents(allNativeConversationEvents({
+    companyId: dispatch.companyId, conversationId: dispatch.conversationId,
+  }));
   // Slash commands steer the agent; they aren't what the chat is about.
   const trigger = events.find((event) => event.id === dispatch.eventId);
   if (!trigger || trigger.senderType !== 'user' || nativeSlashCommand(trigger)) return;
@@ -10139,7 +10582,8 @@ async function deliverBotCronResults() {
       // Cron output belongs to the bot that owns the automation. Never trust
       // a legacy origin-chat pointer: it may identify the user's private Mia
       // conversation and would break that conversation's 1:1 boundary.
-      const conversation = await ensureNativeBotConversation(result.bot);
+      // In the bot's chat of the workspace the automation belongs to.
+      const conversation = await automationChat(result.bot, result.automation);
       throwIfNativeCronBotOwnerInactive(result.bot);
       if (!conversation) throw new Error('bot conversation unavailable');
       const text = sanitizeChatReply(result.content).trim();
@@ -10230,7 +10674,7 @@ let browserWorkWorkerBroker = null;
 let askBeforeDoGate = null;
 async function initializeAskBeforeDoGate() {
   const { createAskBeforeDoGate } = require('./ask-before-do');
-  askBeforeDoGate = await createAskBeforeDoGate();
+  askBeforeDoGate = await createAskBeforeDoGate({ scheduledRun: scheduledRunAskBeforeDo });
   // In process.env so a gateway restarted after a clean slate inherits it too.
   // The token can only ask; a yes comes only from the user's own reply.
   process.env.GATEWAY_RELAY_MIA_ASK_BEFORE_DO_TOKEN = askBeforeDoGate.token;
@@ -10287,6 +10731,27 @@ async function sharedRunAskBeforeDo({ owner, asker, channel, sharedBot }) {
     }),
     // A finished or stopped run takes its open request with it.
     end: () => askBeforeDoGate.cancelScope(scope),
+  };
+}
+// A bot's scheduled run follows its owner's ask-before-do choice. Off: nothing
+// is gated. On: the run asks on a card in the bot's own chat, as a chat turn
+// would. One scope per execution, so a yes never carries into the next run.
+// -> what the gate needs (ask-before-do.js createGateState), or null.
+async function scheduledRunAskBeforeDo(sessionId) {
+  let run;
+  try { run = cronSync.activeBotCronRunForSession(conn, sessionId); } catch (_) { return null; }
+  if (!run || !run.bot) return null;
+  const owner = String(ownerOf(run.bot) || '').trim().toLowerCase();
+  const scope = `cron:${run.jobId}:${run.sessionId}`;
+  const enabled = currentInstructionSettings(owner).askBeforeDo !== false;
+  if (!enabled) return { scope, enabled };
+  const conversation = owner ? await automationChat(run.bot, run.automation).catch(() => null) : null;
+  return {
+    scope,
+    enabled,
+    requester: owner,
+    conversationId: conversation ? conversation.id : scope,
+    present: conversation ? botChatApprovalPresenter(run.bot, conversation) : null,
   };
 }
 // A browser bot asks in its own chat, on the same card and setting as any other turn.

@@ -74,7 +74,7 @@
         rows.push({
           botId: String(bot.id), botName: String(bot.name || 'Bot'), color: bot.avatarColor || null,
           automationId: String(automation.id), name: String(automation.name || 'Automation'),
-          status: status, run: run, steps: steps(automation), checklist: checklist,
+          status: status, enabled: automation.enabled === true, run: run, steps: steps(automation), checklist: checklist,
           schedule: schedule(automation),
           detail: status === 'running' ? runningDetail(checklist) : status === 'needs' ? needsReason(automation, checklist) : schedule(automation)
         });
@@ -133,5 +133,7 @@
     }).join('') + '</ol>';
   }
 
-  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary, stepStateLabel: stepStateLabel, stepsHtml: stepsHtml};
+  function canRunNow(automation, status){ return !!(automation && automation.enabled === true && status !== 'running'); }
+
+  return {STATUS_TITLES: STATUS_TITLES, steps: steps, entries: entries, groups: groups, summary: summary, canRunNow: canRunNow, stepStateLabel: stepStateLabel, stepsHtml: stepsHtml};
 });

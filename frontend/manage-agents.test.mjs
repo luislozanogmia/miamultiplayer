@@ -125,11 +125,11 @@ test('embedded browser hides its idle footer and preserves meaningful PR46 statu
   assert.match(nativeBrowser, /function syncNativeTheme\(\) \{[\s\S]*render\(state\);[\s\S]*dark: developerModeEnabled\(\)/);
 });
 
-test('chat web links open in the embedded Mia browser', async () => {
+test('chat web links open in a new tab of the embedded Mia browser', async () => {
   const source = await readFile(appUrl, 'utf8');
   assert.match(source, /<a href="' \+ esc\(url\) \+ '" data-chat-web-link>/);
   assert.doesNotMatch(source, /<a href="' \+ esc\(url\) \+ '" target="_blank"/);
-  assert.match(source, /function openInsideMia\(event\)[\s\S]*event\.preventDefault\(\)[\s\S]*var href = link\.href;[\s\S]*openWebBrowserTool\(\)[\s\S]*localBrowserNavigate\(href\)/);
+  assert.match(source, /function openInsideMia\(event\)[\s\S]*event\.preventDefault\(\)[\s\S]*var href = link\.href;[\s\S]*openWebBrowserTool\(\)[\s\S]*localBrowserOpenInNewTab\(href\)/);
   assert.match(source, /el\('#chatThread'\)[\s\S]*addEventListener\('click', openInsideMia\)/);
   assert.match(source, /el\('#ctpBody'\)[\s\S]*addEventListener\('click', openInsideMia\)/);
 });
@@ -154,7 +154,8 @@ test('automation panel renders durable bot schedules separately from running wor
   assert.match(source, /function automationScheduleText\(automation\)[\s\S]*automation\.frequency === 'interval'[\s\S]*Every /);
   assert.match(source, /function automationBotsForPanel\(isMia, agent\)[\s\S]*entries\.push\(\{bot:bot, automation:automation\}\)/);
   assert.match(source, /automationRuns:\s*\[\],\s*\/\/ active Hermes cron sessions only/);
-  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active\?workspace=' \+ encodeURIComponent\(localChatWorkspaceKey\(\)\)\)/);
+  assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*api\('\/api\/automations\/active\?workspace=' \+ encodeURIComponent\(localChatWorkspaceKey\(\)\) \+ team\)/);
+  assert.match(source, /var team = hubWorkspace\(\) \? '&team=' \+ encodeURIComponent\(activeWorkspaceKey\) : '';/, 'a company screen asks for that company\'s automations');
   assert.match(source, /function loadActiveAutomationRuns\(\)[\s\S]*if\(changed\)\{[\s\S]*renderChatSidebar\(\)/);
   assert.match(source, /function activeAutomationRunsForPanel\(isMia, agent\)[\s\S]*chatWs\.automationRuns/);
   const paneStart = source.indexOf('function renderChatInfoPane(){');
@@ -346,9 +347,9 @@ test('normal assistant info moves Automations up while browser collaboration int
 test('active automation API is sourced from Hermes cron sessions and workspace scoped', async () => {
   const server = await readFile(serverUrl, 'utf8');
   assert.match(server, /app\.get\('\/api\/automations\/active', requireAuth/);
-  assert.match(server, /cronSync\.listActiveBotCronRuns\(conn\)/);
-  assert.match(server, /botVisibleInWorkspace\(run\.bot, req\)/);
-  assert.match(server, /const conversation = nativeBotConversation\(run\.bot\)/);
+  assert.match(server, /cronSync\.listActiveBotCronRuns\(conn, \{ includePaused: true \}\)/);
+  assert.match(server, /automationVisibleHere\(run\.bot, run\.automation, req\)/, 'a run shows only in the workspace its automation belongs to');
+  assert.match(server, /const conversation = automationChatNow\(run\.bot, run\.automation\)/, 'a run points at the chat its automation posts to');
   assert.match(server, /conversationId: conversation \? conversation\.id : null/);
   assert.match(server, /reconcileNativeBotConversations\(\)[\s\S]*\.then\(\(\) => cronSync\.reconcileBotCrons\(conn, \{[\s\S]*globalInstructionsForBot/);
 });
@@ -938,6 +939,7 @@ test('Drive chips and attachment cards open in the embedded Mia browser on deskt
   assert.match(source, /class="chat-drive-file" href="' \+ esc\(file\.url\) \+ '" target="_blank" rel="noopener noreferrer" data-chat-open-in-mia>/);
   assert.match(source, /a\[data-chat-web-link\], a\[data-chat-open-in-mia\]/);
   assert.match(source, /hasAttribute\('data-chat-open-in-mia'\) && !window\.miaNativeBrowser\) return;/);
+  assert.match(source, /var href = link\.href;\s*openWebBrowserTool\(\);\s*localBrowserOpenInNewTab\(href\);/);
   // Attachment cards: thumbnail, name and Preview share one attribute; Download stays.
   const cardStart = source.indexOf('function chatArtifactCardHtml(');
   const cardEnd = source.indexOf('function openAttachmentInMiaBrowser(', cardStart);
@@ -945,12 +947,16 @@ test('Drive chips and attachment cards open in the embedded Mia browser on deskt
   assert.match(card, /chat-msg-media"' \+ openAttrs/);
   assert.match(card, /chat-artifact-name"' \+ openAttrs/);
   assert.match(card, /class="chat-artifact-download" href="' \+ mediaUrl/);
-  // The shell authorizes the URL first, then the normal browser path navigates.
+  // The shell authorizes the URL first, then it opens in a tab of its own,
+  // never in the tab in front, which may be a bot's working tab.
   const openStart = source.indexOf('function openAttachmentInMiaBrowser(');
   const openEnd = source.indexOf('function wireChatArtifactPreviews(', openStart);
   const open = source.slice(openStart, openEnd);
   assert.match(open, /miaDesktop\.browser\.prepareAttachment\(url\)/);
-  assert.match(open, /openWebBrowserTool\(\);\s*localBrowserNavigate\(result\.url\)/);
+  assert.match(open, /openWebBrowserTool\(\);\s*localBrowserOpenInNewTab\(result\.url\)/);
+  assert.doesNotMatch(open, /localBrowserNavigate\(/);
+  const helper = source.slice(source.indexOf('function localBrowserOpenInNewTab('), source.indexOf('function closeLocalBrowser('));
+  assert.match(helper, /window\.miaNativeBrowser\.openTab\(target\)/);
   assert.doesNotMatch(open, /window\.open|location\.href|file:/);
   const wire = source.slice(openEnd, source.indexOf('// opts.inThread:', openEnd));
   assert.match(wire, /prepareAttachment === 'function' && window\.miaNativeBrowser\)\{\s*openAttachmentInMiaBrowser\(url\)/);

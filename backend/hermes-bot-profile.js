@@ -150,6 +150,19 @@ function googleWorkspaceMcpConfig() {
   ];
 }
 
+// The same Google server as an object, for scheduled runs, which read it from
+// the Hermes home's config.yaml (cron-sync.js). null when Google's broker is
+// not running. It carries no credential: the gateway sends that over the MCP
+// pipe to this exact adapter path only.
+function googleWorkspaceMcpServer() {
+  if (!googleWorkspaceMcpConfig().length) return null;
+  return {
+    command: String(process.env.HERMES_PYTHON).trim(),
+    args: [path.join(__dirname, 'mia-google-workspace-mcp.py')],
+    tools: { include: [...GOOGLE_WORKSPACE_MCP_TOOLS] },
+  };
+}
+
 // Capability only: callers must never expose the generated config or broker
 // credentials when describing available connected-app tools to a model.
 function googleWorkspaceToolsConfigured() {
@@ -629,6 +642,7 @@ module.exports = {
   GOOGLE_WORKSPACE_MCP_SERVER,
   GOOGLE_WORKSPACE_MCP_TOOLS,
   googleWorkspaceToolsConfigured,
+  googleWorkspaceMcpServer,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   SHELL_GUARD,
