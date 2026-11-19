@@ -133,6 +133,24 @@
       ' <button type="button" class="automation-proposal-open" data-automation-bot="' + esc(proposal.botId || '') + '" data-automation-open="' + esc(proposal.automationId || '') + '">Open in Automations</button></div>';
   }
 
+  function resumeHtml(eventId, proposal, options){
+    var esc = options.esc;
+    var name = esc(proposal.name || 'this automation');
+    if(proposal.status === 'accepted') return '<div class="automation-proposal-answered">Resumed ' + name + '.</div>';
+    if(proposal.status === 'dismissed') return '<div class="automation-proposal-answered">Not resumed: ' + name + '.</div>';
+    if(proposal.status === 'stale') return '<div class="automation-proposal-answered">This automation changed before approval. Ask the bot to propose resuming it again.</div>';
+    if(!options.canEdit) return '<div class="automation-proposal-answered">Waiting for the bot owner to review: resume ' + name + '.</div>';
+    return '<div class="agent-setup-card automation-proposal-card" data-automation-proposal="' + esc(eventId) + '">' +
+      '<div class="automation-proposal-head"><span class="automation-proposal-icon" aria-hidden="true">' + CLOCK_ICON + '</span>' +
+        '<div><div class="automation-proposal-title">Resume ' + name + '</div>' +
+        '<div class="agent-setup-card-intro">This turns its recurring schedule back on.</div></div></div>' +
+      (options.error ? '<div class="agent-setup-error" role="alert">' + esc(options.error) + '</div>' : '') +
+      '<div class="automation-proposal-foot"><div class="automation-proposal-confirm"><div class="agent-setup-confirm-copy">Resume this automation?</div>' +
+        '<div class="agent-setup-safety">Nothing runs again until you confirm.</div></div>' +
+        '<div class="agent-setup-actions"><button type="button" class="agent-setup-later" data-automation-decision="dismiss"' + (options.busy ? ' disabled' : '') + '>Not yet</button>' +
+        '<button type="button" class="agent-setup-activate" data-automation-decision="accept"' + (options.busy ? ' disabled' : '') + '>' + (options.busy ? 'Resuming…' : 'Yes, resume') + '</button></div></div></div>';
+  }
+
   function wasHint(changed, key, esc){
     return Object.prototype.hasOwnProperty.call(changed, key)
       ? '<span class="automation-proposal-was">Was: ' + esc(changed[key] || 'empty') + '</span>' : '';
@@ -199,6 +217,7 @@
     }
     if(run) return runHtml(run, esc);
     var proposal = metadata.automationProposal;
+    if(proposal && proposal.action === 'resume') return resumeHtml(message.nativeEvent.id, proposal, options);
     if(!proposal || !proposal.automation) return '';
     if(proposal.status !== 'pending') return answeredHtml(proposal, esc);
     if(!options.canEdit){

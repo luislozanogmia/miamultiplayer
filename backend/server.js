@@ -6744,6 +6744,15 @@ async function setBotAutomationEnabled(bot, automationId, enabled) {
   return { status: enabled ? 'resumed' : 'paused', bot: db.loadOne(conn, 'bots', updatedBot.id) || updatedBot };
 }
 
+function automationResumeFingerprint(automation) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    id: automation.id,
+    enabled: automation.enabled === true,
+    teamWorkspace: automation.teamWorkspace || '',
+    fields: botAutomationActions.automationView(automation),
+  })).digest('hex');
+}
+
 // The user's answer to a bot's automation card (see nativeBotAutomationAction).
 // accept saves the card's final values through the same validation and
 // scheduler sync as any automation edit; dismiss only records the answer.
@@ -6780,6 +6789,31 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
     const updated = answer({ status: 'dismissed' });
     bumpVersion();
     return res.status(200).json({ event: updated });
+  }
+  // Resuming recurring work needs the owner's explicit answer when Ask Before
+  // Do is on. Recheck the saved automation now; it may have changed or gone
+  // away since the bot proposed it.
+  if (proposal.action === 'resume') {
+    const currentAutomation = (bot.automations || []).find((item) => item.id === proposal.automationId);
+    if (!currentAutomation || !proposal.fingerprint
+      || automationResumeFingerprint(currentAutomation) !== proposal.fingerprint) {
+      const updated = answer({ status: 'stale' });
+      bumpVersion();
+      return res.status(409).json({ error: 'automation_changed',
+        message: 'This automation changed. Ask the bot to propose resuming it again.',
+        proposal: updated.metadata.automationProposal });
+    }
+    const checked = botAutomationActions.normalizeAutomationAction({
+      schemaVersion: botAutomationActions.SCHEMA_VERSION,
+      action: 'resume',
+      automationId: proposal.automationId,
+    }, bot);
+    if (checked.error) return res.status(400).json({ error: 'invalid_automation', message: checked.error });
+    const result = await setBotAutomationEnabled(bot, checked.proposal.automationId, true);
+    if (result.status === 'missing') return res.status(409).json({ error: 'automation_missing', message: 'This automation is no longer available.' });
+    const updated = answer({ status: 'accepted', result: result.status });
+    bumpVersion();
+    return res.status(200).json({ event: updated, bot: result.bot });
   }
   // The card's edits are checked against schema v1 and the bot's current
   // automations, exactly as if the bot had sent them.
@@ -7401,6 +7435,14 @@ function allNativeConversationEvents({ companyId, conversationId, includeDeleted
     afterSequence = page.nextAfterSequence;
   }
   return events;
+}
+
+// A website can write its own notification text. Keep the notice in the chat,
+// but never let it speak as Mia or a bot in a later model prompt.
+function nativeModelHistoryEvents(events) {
+  return events.filter((event) => !(event && event.type === 'system'
+    && (event.senderType === 'agent' || event.senderType === 'bot')
+    && event.metadata && event.metadata.siteNotification));
 }
 
 // The actor for a personal agent's turn: its own name and a short persona, no
@@ -8633,6 +8675,12 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
     metadata: { automationActionError: String(reason).slice(0, 200) },
   });
   if (extracted.error) return failed(extracted.error);
+  // The model may have worked while the owner edited or archived this bot.
+  // Never save the snapshot captured when the turn started over newer state.
+  const currentAgent = db.loadOne(conn, 'bots', agent.id);
+  if (!currentAgent || ownerOf(currentAgent) !== ownerOf(agent)
+    || !isActiveWorkspaceUser(ownerOf(currentAgent))) return failed('bot_unavailable');
+  agent = currentAgent;
   const normalized = botAutomationActions.normalizeAutomationAction(extracted.action, agent);
   if (normalized.error) return failed(normalized.error);
   const proposal = normalized.proposal;
@@ -8666,6 +8714,15 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
   if (proposal.action === 'stop' || proposal.action === 'pause' || proposal.action === 'resume') {
     const control = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, action: proposal.action };
     if (!allowed) return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can ${proposal.action} ${proposal.name}.`, metadata: { automationControl: { ...control, status: 'denied' } } };
+    if (proposal.action === 'resume' && currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false) {
+      const automation = (agent.automations || []).find((item) => item.id === proposal.automationId);
+      return {
+        text: extracted.text,
+        fallbackText: `Resume ${proposal.name}? I’ll wait for your approval.`,
+        metadata: { automationProposal: { ...proposal, botId: agent.id, status: 'pending',
+          fingerprint: automationResumeFingerprint(automation) } },
+      };
+    }
     try {
       if (proposal.action === 'stop') {
         const result = cronSync.stopBotAutomationRun(conn, agent, proposal.automationId);
@@ -9211,12 +9268,12 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
   });
   throwIfNativeDispatchStopped(signal);
   throwIfNativeDispatchUserInactive(dispatch, trigger);
-  const historyEvents = allNativeConversationEvents({
+  const historyEvents = nativeModelHistoryEvents(allNativeConversationEvents({
     companyId: dispatch.companyId,
     conversationId: dispatch.conversationId,
     includeDeleted: false,
     excludedSenderTypes: conversation.type === 'agent' ? ['bot'] : [],
-  });
+  }));
   const transcript = historyEvents
     .filter((event) => event.id !== trigger.id && !isNativeProgressEvent(event))
     .map(nativePromptLine)
@@ -10086,7 +10143,9 @@ function recoverNativeConversationDispatches() {
 // opening words stand in first, and stay if the model can't answer.
 async function refreshNativeConversationTitle(dispatch) {
   const lookup = { companyId: dispatch.companyId, id: dispatch.conversationId };
-  const events = allNativeConversationEvents({ companyId: dispatch.companyId, conversationId: dispatch.conversationId });
+  const events = nativeModelHistoryEvents(allNativeConversationEvents({
+    companyId: dispatch.companyId, conversationId: dispatch.conversationId,
+  }));
   // Slash commands steer the agent; they aren't what the chat is about.
   const trigger = events.find((event) => event.id === dispatch.eventId);
   if (!trigger || trigger.senderType !== 'user' || nativeSlashCommand(trigger)) return;
@@ -10768,7 +10827,7 @@ async function scheduledRunAskBeforeDo(sessionId) {
   const scope = `cron:${run.jobId}:${run.sessionId}`;
   const enabled = currentInstructionSettings(owner).askBeforeDo !== false;
   if (!enabled) return { scope, enabled };
-  const conversation = owner ? await ensureNativeBotConversation(run.bot).catch(() => null) : null;
+  const conversation = owner ? await automationChat(run.bot, run.automation).catch(() => null) : null;
   return {
     scope,
     enabled,

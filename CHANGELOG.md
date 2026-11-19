@@ -9,7 +9,23 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
-## [0.3.11] — Unreleased
+## [0.3.12] — 2026-11-19
+
+### Added
+- Automations can run immediately, pause, or stop, with a list for each workspace and a team workflows screen.
+- Bots can create and change their own automations directly when their owner's Ask Before Do setting is off; with it on, those changes still wait for review.
+- Asana can connect through the person's registered OAuth client.
+- Websites open in Mia can send notifications to the chosen bot, including the site's icon; images sent during a run also reach the bot.
+
+### Changed
+- Scheduled runs follow the owner's Ask Before Do setting and request approval in the bot's chat when a proposed action needs it.
+- With Ask Before Do on, resuming a recurring automation from a bot's chat waits for the owner's review.
+
+### Fixed
+- Website notifications stay visible in chat without becoming bot-authored instructions in later model turns.
+- Delayed bot automation actions use the current bot record, so a later edit or archive is not overwritten.
+
+## [0.3.11] — 2026-11-16
 
 ### Added
 - Scheduled bot automations can use the owner's Mia browser while that exact run is active. Run steps appear in the bot's chat.
