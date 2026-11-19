@@ -11843,6 +11843,139 @@
     });
   }
 
+  // ---------- Bot copies ----------
+  // A bot's copies report through /api/bot-copies; the side panel shows each
+  // one with the bot's mote and its number (1, 2, 3), and opens by itself
+  // while a copy is working.
+  var botCopies = {key:'', list:[], known:{}, expanded:{}, timer:null, ticker:null};
+  function activeBotForCopies(){
+    if(chatWs.activeKind !== 'agent' || !chatWs.activeRoomId) return null;
+    var agent = (chatWs.allAgents || []).filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0];
+    var name = chatWs.activeLabel || (agent && agent.name) || '';
+    if(!name || isMiaOrchestrator(name, agent && agent.id)) return null;
+    return {id: agent && agent.id || '', name: name, color: normalizeAgentAvatarColor(agent && agent.avatarColor) || agentAvatarColorFor(name, agent && agent.id)};
+  }
+  function botCopiesKey(bot){ return bot ? bot.id + '|' + bot.name : ''; }
+  function activeBotHasWorkingCopies(){
+    var bot = activeBotForCopies();
+    if(!bot || botCopies.key !== botCopiesKey(bot)) return false;
+    return botCopies.list.some(function(copy){ return copy.state === 'working'; });
+  }
+  function copyElapsedText(copy){
+    var end = copy.state === 'working' ? Date.now() : (copy.finishedAt || copy.updatedAt || Date.now());
+    var secs = Math.max(0, Math.round((end - (copy.startedAt || end)) / 1000));
+    if(secs < 60) return secs + 's';
+    var mins = Math.floor(secs / 60);
+    if(mins < 60) return mins + 'm ' + (secs % 60) + 's';
+    return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+  }
+  function copyStepText(copy){
+    if(copy.state === 'done') return 'Done';
+    if(copy.state === 'failed') return 'Stopped with an error';
+    if(copy.state === 'stopped') return 'Stopped';
+    if(!copy.step) return 'Starting';
+    return 'step ' + copy.step + (copy.totalSteps ? ' of ' + copy.totalSteps : '');
+  }
+  function detailsCopiesHtml(){
+    var bot = activeBotForCopies();
+    if(!bot || botCopies.key !== botCopiesKey(bot) || !botCopies.list.length) return '';
+    var working = botCopies.list.filter(function(copy){ return copy.state === 'working'; }).length;
+    var filter = moteColorFilterFor(bot.name, bot.color);
+    var rows = botCopies.list.map(function(copy){
+      var live = copy.state === 'working';
+      var pct = copy.state === 'done' ? 100 : (copy.totalSteps ? Math.min(100, Math.round(copy.step / copy.totalSteps * 100)) : 0);
+      var pill = live ? (copy.quiet ? 'Quiet' : 'Working') : copy.state === 'done' ? 'Done' : copy.state === 'failed' ? 'Error' : 'Stopped';
+      var open = !!botCopies.expanded[copy.id];
+      var steps = (copy.steps || []).map(function(step, i){
+        var cls = (copy.state === 'done' || i + 1 < copy.step) ? 'ok' : (i + 1 === copy.step && live ? 'now' : '');
+        return '<li' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(step) + '</li>';
+      }).join('');
+      return '<div class="cip-copy is-' + esc(copy.state) + (open ? ' open' : '') + '" data-copy-id="' + esc(copy.id) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '" aria-label="Copy ' + esc(String(copy.number)) + ': ' + esc(copy.title) + '">' +
+        '<span class="cip-copy-av">' + (live ? '<span class="cip-copy-halo" aria-hidden="true"></span>' : '') +
+          '<img src="' + esc(moteSrcFor(bot.name, !live)) + '" alt="" draggable="false" style="filter:' + esc(filter) + '">' +
+          '<span class="cip-copy-num">' + esc(String(copy.number)) + '</span></span>' +
+        '<span class="cip-copy-body">' +
+          '<span class="cip-copy-title"><b>' + esc(copy.title) + '</b><span class="cip-copy-pill">' + pill + '</span></span>' +
+          '<span class="cip-copy-status">' + (live && !copy.quiet ? '<span class="chat-thinking-shimmer">' + esc(copy.status || copyStepText(copy)) + '</span>' : esc(copy.status || copyStepText(copy))) + '</span>' +
+          '<span class="cip-copy-bar"><i style="width:' + pct + '%"></i></span>' +
+          '<span class="cip-copy-meta"><span>' + esc(copyStepText(copy)) + '</span><span data-copy-elapsed="' + esc(copy.id) + '">' + esc(copyElapsedText(copy)) + '</span></span>' +
+          (open ? '<span class="cip-copy-drawer">' + (steps ? '<ol>' + steps + '</ol>' : '<span class="cip-copy-note">No step list yet.</span>') +
+            (live && !copy.stopRequested ? '<button type="button" class="cip-copy-stop" data-copy-stop="' + esc(copy.id) + '">Stop</button>' : '') +
+            (live && copy.stopRequested ? '<span class="cip-copy-note">Asked to stop.</span>' : '') + '</span>' : '') +
+        '</span></div>';
+    }).join('');
+    return '<section class="cip-section cip-copies" id="cipCopies"><div class="cip-routines-head"><span class="cip-routines-title">Bot copies</span>' +
+      (working ? '<span class="cip-copies-live"><span class="cip-copies-dot" aria-hidden="true"></span>' + working + ' working</span>' : '') +
+      '</div><div class="cip-copy-list">' + rows + '</div></section>';
+  }
+  function bindDetailsCopies(pane){
+    els('[data-copy-id]', pane).forEach(function(row){
+      var toggle = function(){
+        var id = row.getAttribute('data-copy-id');
+        botCopies.expanded[id] = !botCopies.expanded[id];
+        renderChatInfoPane();
+      };
+      row.addEventListener('click', function(event){ if(!event.target.closest('[data-copy-stop]')) toggle(); });
+      row.addEventListener('keydown', function(event){ if(event.target === row && (event.key === 'Enter' || event.key === ' ')){ event.preventDefault(); toggle(); } });
+    });
+    els('[data-copy-stop]', pane).forEach(function(button){
+      button.addEventListener('click', function(event){
+        event.stopPropagation();
+        button.disabled = true;
+        api('/api/bot-copies/' + encodeURIComponent(button.getAttribute('data-copy-stop')) + '/stop', {method:'POST'}).then(loadBotCopies, loadBotCopies);
+      });
+    });
+  }
+  function loadBotCopies(){
+    var bot = activeBotForCopies();
+    if(!bot){
+      botCopies.list = [];
+      botCopies.key = '';
+      return Promise.resolve([]);
+    }
+    var key = botCopiesKey(bot);
+    return api('/api/bot-copies?bot=' + encodeURIComponent(bot.id) + '&name=' + encodeURIComponent(bot.name)).then(function(res){
+      if(key !== botCopiesKey(activeBotForCopies())) return [];
+      var next = res.status === 200 && res.data && Array.isArray(res.data.copies) ? res.data.copies : [];
+      var changed = botCopies.key !== key || JSON.stringify(botCopies.list) !== JSON.stringify(next);
+      // A copy that starts working opens the panel, even if it was closed.
+      var started = next.some(function(copy){ return copy.state === 'working' && !botCopies.known[copy.id]; });
+      next.forEach(function(copy){ botCopies.known[copy.id] = true; });
+      botCopies.key = key;
+      botCopies.list = next;
+      var paneFree = chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'automation-detail';
+      if(started && !chatInfo.open && paneFree && STYLED_SKIN && !isMobileChat() && isInfoPaneAvailable() && !document.body.classList.contains('browser-collab-mode')){
+        chatInfo.open = true;
+        chatInfo.mode = 'automations';
+        chatInfo.roomId = chatWs.activeRoomId;
+        renderChatInfoPane();
+        syncSidebarToolButtons();
+      } else if(changed && chatInfo.open && chatInfo.mode === 'automations' && !liveRefreshBlocked()){
+        renderChatInfoPane();
+      }
+      return next;
+    }).catch(function(){ return []; });
+  }
+  function scheduleBotCopies(){
+    if(botCopies.timer) clearTimeout(botCopies.timer);
+    var fast = botCopies.list.some(function(copy){ return copy.state === 'working'; });
+    botCopies.timer = setTimeout(function(){
+      (document.hidden ? Promise.resolve() : loadBotCopies()).then(scheduleBotCopies, scheduleBotCopies);
+    }, fast ? 3000 : 8000);
+  }
+  // Started by the first room that opens, not when the script loads.
+  function startBotCopiesWatch(){
+    if(botCopies.ticker) return;
+    botCopies.ticker = setInterval(function(){
+      botCopies.list.forEach(function(copy){
+        if(copy.state !== 'working') return;
+        var node = document.querySelector('[data-copy-elapsed="' + copy.id + '"]');
+        if(node) node.textContent = copyElapsedText(copy);
+      });
+    }, 1000);
+    scheduleBotCopies();
+  }
+
   function activeAutomationRunsForPanel(isMia, agent){
     var runs = chatWs.automationRuns || [];
     if(isMia) return runs;
@@ -16593,11 +16726,12 @@
     chatInfo.filesKey = JSON.stringify([chatWs.activeRoomId, fileRows.map(function(row){ return row.id; })]);
     pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">' + esc(name) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
       '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
-      '<div class="cip-details">' + detailsFilesHtml(fileRows) +
+      '<div class="cip-details">' + detailsCopiesHtml() + detailsFilesHtml(fileRows) +
       '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Automations</span>' +
       '<button type="button" class="cip-routines-add" id="chatInfoAddRoutineTop" aria-label="Add automation">+</button></div>' +
       (running || routines ? '<div class="cip-routine-list">' + running + routines + '</div>' : '<div class="cip-section-empty">No automations yet.</div>') + '</section>' +
       detailsBotSettingsHtml(agent) + '</div>';
+    bindDetailsCopies(pane);
     bindDetailsFiles(pane, fileRows);
     bindDetailsBotSettings(pane, agent);
     var close = el('#chatInfoClose', pane);
@@ -16909,7 +17043,7 @@
     var collabMode = document.body.classList.contains('browser-collab-mode');
     var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
     if(collabMode && !collabOverlayMode) chatInfo.open = false;
-    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
+    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && (chatInfoOpenPreference() || (typeof activeBotHasWorkingCopies === 'function' && activeBotHasWorkingCopies()));
     if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && !isInfoPaneAvailable()) chatInfo.open = false;
     syncSidebarToolButtons();
     // Official channels use a square initials mark. The owner's personal avatar
@@ -17644,6 +17778,7 @@
     // open thread, or none, right away rather than after its first render.
     syncChatThreadPanel();
     chatWs.activeLabel = label;
+    if(typeof startBotCopiesWatch === 'function'){ startBotCopiesWatch(); setTimeout(loadBotCopies, 0); }
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
     rememberAgentChat(roomId);

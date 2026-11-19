@@ -6635,6 +6635,9 @@ function privateGatewayAgent(req) {
   };
 }
 
+// Bot copies: the status files copies write, read for the side panel.
+app.use('/api/bot-copies', requireAuth, require('./bot-copies').createBotCopiesRouter({ dataDirectory: path.dirname(path.resolve(DB_PATH)), express }));
+
 app.get('/api/agents', requireAuth, (req, res) => {
   const agent = privateGatewayAgent(req);
   res.status(200).json({ agents: agent ? [agent] : [] });
