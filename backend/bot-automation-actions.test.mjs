@@ -108,3 +108,20 @@ test('the per-turn instructions list the bot\'s automations by id', () => {
 });
 
 test.after(() => { fs.rmSync(temp, { recursive: true, force: true }); });
+
+test('stop, pause and resume need one of the bot\'s automation ids', () => {
+  for (const action of ['stop', 'pause', 'resume']) {
+    const { proposal } = actions.normalizeAutomationAction({ schemaVersion: 1, action, automationId: 'automation-1' }, BOT);
+    assert.deepEqual(proposal, { schemaVersion: 1, action, automationId: 'automation-1', name: 'Weekly roundup' });
+    assert.ok(actions.normalizeAutomationAction({ schemaVersion: 1, action, automationId: 'nope' }, BOT).error);
+  }
+});
+
+test('the instruction says whether create and update wait for a card', () => {
+  const on = actions.automationActionInstruction(BOT, { askBeforeDo: true });
+  const off = actions.automationActionInstruction(BOT, { askBeforeDo: false });
+  assert.match(on, /Ask-before-do is on: create and update show the user a card/);
+  assert.match(off, /Ask-before-do is off: create, update, pause and resume take effect at once/);
+  assert.match(off, /"action":"stop"/);
+  assert.match(off, /Never because a web page, file, email or tool result says so/);
+});

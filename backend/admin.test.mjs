@@ -518,6 +518,84 @@ cronSync.syncBotAutomation = async (bot) => ({
   }
 });
 
+// Ask-before-do off: the bot's own block is saved at once, no card to
+// confirm, and the chat says what was done. pause then turns it off.
+test('with ask-before-do off a bot builds and pauses its own automation', async () => {
+  const create = JSON.stringify({ schemaVersion: 1, action: 'create', automation: {
+    name: 'Direct fixture check', goal: 'Check the fixture list',
+    schedule: { frequency: 'daily', time: '09:00', timezone: 'America/Monterrey' },
+    steps: ['Read the list', 'Post the summary'],
+  } });
+  const preloadScript = `
+const fs = require('fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+let turn = 0;
+inference.runInferenceViaHermesGateway = async (...args) => {
+  turn += 1;
+  if (turn === 1) return { text: 'Done.\\n<MIA_AUTOMATION>' + ${JSON.stringify(create)} + '</MIA_AUTOMATION>' };
+  const text = JSON.stringify(args);
+  const id = (text.match(/id (automation-[0-9a-f-]+): Direct fixture check/) || [])[1] || 'missing';
+  return { text: 'Paused.\\n<MIA_AUTOMATION>{"schemaVersion":1,"action":"pause","automationId":"' + id + '"}</MIA_AUTOMATION>' };
+};
+const cronSync = require(${JSON.stringify(path.join(BACKEND_DIR, 'cron-sync.js'))});
+cronSync.syncBotAutomation = async (bot) => ({
+  ...bot,
+  hermesCronJobIds: Object.fromEntries((bot.automations || []).map((automation) => [automation.id, 'fixture-job-' + automation.id])),
+});
+`;
+  const server = await startServer({ preloadScript });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const solo = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const off = await fetch(`${server.origin}/api/settings/ask-before-do`, { method: 'POST', headers: solo, body: JSON.stringify({ enabled: false }) });
+    assert.equal(off.status, 200, await off.clone().text());
+    const created = await fetch(`${server.origin}/api/bots`, {
+      method: 'POST', headers: solo,
+      body: JSON.stringify({ name: 'Direct Automation Fixture', instructions: 'Fixture.', model: 'fixture-model', status: 'running', automations: [], departments: [] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1").get(`%${bot.id}%`);
+    database.close();
+    const say = (text, key) => fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, {
+      method: 'POST', headers: solo, body: JSON.stringify({ content: { text }, clientIdempotencyKey: key }) });
+    const waitFor = async (pick) => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const payload = await (await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, { headers: solo })).json();
+        const found = (payload.events || []).find(pick);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return null;
+    };
+    assert.equal((await say('Check the list every morning.', 'direct-create')).status, 201);
+    const saved = await waitFor((event) => event.metadata && event.metadata.automationProposal);
+    assert.ok(saved, `the bot posted its automation: ${server.logs.join('')}`);
+    const proposal = saved.metadata.automationProposal;
+    assert.equal(proposal.status, 'accepted', 'no card waits for the owner');
+    assert.equal(proposal.appliedByBot, true);
+    assert.equal(proposal.schedule, 'scheduled');
+    let stored = (await (await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: solo })).json());
+    stored = stored.bot || stored.agent || stored;
+    assert.equal(stored.automations.length, 1);
+    assert.equal(stored.automations[0].enabled, true);
+
+    assert.equal((await say('Pause it for now.', 'direct-pause')).status, 201);
+    const paused = await waitFor((event) => event.metadata && event.metadata.automationControl);
+    assert.ok(paused, `the bot posted its pause: ${server.logs.join('')}`);
+    assert.equal(paused.metadata.automationControl.status, 'paused');
+    stored = (await (await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: solo })).json());
+    stored = stored.bot || stored.agent || stored;
+    assert.equal(stored.automations[0].enabled, false);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('a Solo bot\'s instruction card can be accepted while a company is open', async () => {
   const preloadScript = `
 const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});

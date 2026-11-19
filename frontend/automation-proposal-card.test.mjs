@@ -131,3 +131,11 @@ test('an older run card with no bot on it uses the bot of the chat', () => {
   const old = { nativeEvent: { id: 'event-2', createdAt: '2026-11-16T10:42:00Z', metadata: { automationRun: { status: 'started', name: 'Roundup', automationId: 'auto-1' } } } };
   assert.match(card.html(old, { esc, botId: 'bot-7', now: Date.parse('2026-11-16T10:42:05Z') }), new RegExp('data-run-bot="bot-7".*data-run-since="' + Date.parse('2026-11-16T10:42:00Z') + '"'));
 });
+
+test('a bot\'s own save says a new automation was created', () => {
+  const created = card.html(message({ automationProposal: { status: 'accepted', appliedByBot: true, action: 'create', schedule: 'scheduled', botId: 'bot-1', automationId: 'a-1', automation } }), { esc });
+  assert.match(created, /A new automation was created: Morning &#60;digest&#62;/);
+  assert.match(created, /Open in Automations/);
+  const changed = card.html(message({ automationProposal: { status: 'accepted', appliedByBot: true, action: 'update', schedule: 'scheduled', botId: 'bot-1', automationId: 'a-1', automation } }), { esc });
+  assert.match(changed, /Automation updated: Morning/);
+});

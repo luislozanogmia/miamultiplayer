@@ -6631,6 +6631,82 @@ app.get('/api/agents/gateway', requireAuth, (req, res) => {
   return res.status(200).json({ agent });
 });
 
+// Saves a checked automation proposal on its bot and syncs the scheduler job.
+// The card's Accept and a bot's own direct action (ask-before-do off) both
+// come here, so both go through the same validation and sync.
+async function saveBotAutomationFromProposal(bot, proposal, { conversationId, companyId, byBot = false } = {}) {
+  const existing = proposal.automationId
+    ? (bot.automations || []).find((automation) => automation.id === proposal.automationId)
+    : null;
+  const record = botAutomationActions.automationRecordFromProposal(proposal.automation, existing, {
+    conversationId: conversationId,
+    companyId,
+  });
+  // Made in a company's chat, it belongs to that company.
+  if (!existing) {
+    const origin = nativeConversationRepository.getConversation({ companyId, id: conversationId });
+    const team = teamWorkspaceForNewAutomation(bot, origin && origin.metadata && origin.metadata.teamWorkspace);
+    if (team) record.teamWorkspace = team;
+  }
+  const now = new Date().toISOString();
+  const updatedBot = {
+    ...bot,
+    automations: existing
+      ? bot.automations.map((automation) => (automation.id === existing.id ? record : automation))
+      : [...(bot.automations || []), record],
+    updatedAt: now,
+    timeline: [
+      ...(Array.isArray(bot.timeline) ? bot.timeline : []),
+      { ts: now, event: `automation ${existing ? 'updated' : 'created'} from chat${byBot ? ' by the bot' : ''}: ${record.name}` },
+    ],
+  };
+  cronSync.migrateBotAutomations(updatedBot);
+  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
+  if (updatedBot.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(updatedBot));
+      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
+      const current = db.loadOne(conn, 'bots', updatedBot.id);
+      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync automation from chat for', updatedBot.id, err.message);
+    }
+  }
+  const savedBot = db.loadOne(conn, 'bots', updatedBot.id) || updatedBot;
+  // The card says whether a job exists: drafts are never scheduled, and a
+  // failed sync is retried at boot.
+  const schedule = updatedBot.status === 'draft' ? 'draft'
+    : (savedBot.hermesCronJobIds && savedBot.hermesCronJobIds[record.id]) ? 'scheduled' : 'pending';
+  return { record, savedBot, schedule };
+}
+
+// Turns one of a bot's automations on or off and syncs its scheduler job.
+async function setBotAutomationEnabled(bot, automationId, enabled) {
+  const automation = (bot.automations || []).find((item) => item.id === automationId);
+  if (!automation) return { status: 'missing' };
+  if ((automation.enabled === true) === enabled) return { status: enabled ? 'already_on' : 'already_off', bot };
+  const now = new Date().toISOString();
+  const updatedBot = {
+    ...bot,
+    automations: bot.automations.map((item) => (item.id === automationId ? { ...item, enabled } : item)),
+    updatedAt: now,
+    timeline: [...(Array.isArray(bot.timeline) ? bot.timeline : []), { ts: now, event: `automation ${enabled ? 'resumed' : 'paused'} by the bot: ${automation.name}` }],
+  };
+  cronSync.migrateBotAutomations(updatedBot);
+  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
+  if (updatedBot.status !== 'draft') {
+    try {
+      const started = JSON.parse(JSON.stringify(updatedBot));
+      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
+      const current = db.loadOne(conn, 'bots', updatedBot.id);
+      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
+    } catch (err) {
+      console.error('cron-sync: failed to sync automation toggle for', updatedBot.id, err.message);
+    }
+  }
+  return { status: enabled ? 'resumed' : 'paused', bot: db.loadOne(conn, 'bots', updatedBot.id) || updatedBot };
+}
+
 // The user's answer to a bot's automation card (see nativeBotAutomationAction).
 // accept saves the card's final values through the same validation and
 // scheduler sync as any automation edit; dismiss only records the answer.
@@ -6678,48 +6754,7 @@ app.post('/api/bots/:id/automation-proposals/:eventId', requireInteractiveAuth, 
     automation: fields,
   }, bot);
   if (checked.error) return res.status(400).json({ error: 'invalid_automation', message: checked.error });
-  const existing = proposal.automationId
-    ? (bot.automations || []).find((automation) => automation.id === proposal.automationId)
-    : null;
-  const record = botAutomationActions.automationRecordFromProposal(checked.proposal.automation, existing, {
-    conversationId: event.conversationId,
-    companyId,
-  });
-  // Made in a company's chat, it belongs to that company.
-  if (!existing) {
-    const origin = nativeConversationRepository.getConversation({ companyId, id: event.conversationId });
-    const team = teamWorkspaceForNewAutomation(bot, origin && origin.metadata && origin.metadata.teamWorkspace);
-    if (team) record.teamWorkspace = team;
-  }
-  const now = new Date().toISOString();
-  const updatedBot = {
-    ...bot,
-    automations: existing
-      ? bot.automations.map((automation) => (automation.id === existing.id ? record : automation))
-      : [...(bot.automations || []), record],
-    updatedAt: now,
-    timeline: [
-      ...(Array.isArray(bot.timeline) ? bot.timeline : []),
-      { ts: now, event: `automation ${existing ? 'updated' : 'created'} from chat: ${record.name}` },
-    ],
-  };
-  cronSync.migrateBotAutomations(updatedBot);
-  db.saveOne(conn, 'bots', updatedBot.id, updatedBot);
-  if (updatedBot.status !== 'draft') {
-    try {
-      const started = JSON.parse(JSON.stringify(updatedBot));
-      const synced = (await syncBotAutomationWithInstructions(updatedBot)) || updatedBot;
-      const current = db.loadOne(conn, 'bots', updatedBot.id);
-      if (current) db.saveOne(conn, 'bots', updatedBot.id, cronSync.mergeBotCronSyncState(current, synced, started));
-    } catch (err) {
-      console.error('cron-sync: failed to sync automation from chat for', updatedBot.id, err.message);
-    }
-  }
-  const savedBot = db.loadOne(conn, 'bots', updatedBot.id) || updatedBot;
-  // The card says whether a job exists: drafts are never scheduled, and a
-  // failed sync is retried at boot.
-  const schedule = updatedBot.status === 'draft' ? 'draft'
-    : (savedBot.hermesCronJobIds && savedBot.hermesCronJobIds[record.id]) ? 'scheduled' : 'pending';
+  const { record, savedBot, schedule } = await saveBotAutomationFromProposal(bot, checked.proposal, { conversationId: event.conversationId, companyId });
   const updated = answer({ status: 'accepted', automationId: record.id, automation: checked.proposal.automation, schedule });
   bumpVersion();
   return res.status(200).json({ event: updated, bot: savedBot });
@@ -8527,12 +8562,53 @@ async function nativeBotAutomationAction(agent, replyText, trigger) {
   const normalized = botAutomationActions.normalizeAutomationAction(extracted.action, agent);
   if (normalized.error) return failed(normalized.error);
   const proposal = normalized.proposal;
-  if (proposal.action !== 'run_now') {
-    return {
-      text: extracted.text,
-      fallbackText: proposal.action === 'create' ? 'Here’s the automation I’d set up.' : 'Here’s the change I’d make.',
-      metadata: { automationProposal: { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id, status: 'pending' } },
-    };
+  const allowed = sameOwner(agent, trigger.senderId) || isAdmin(trigger.senderId);
+  if (proposal.action === 'create' || proposal.action === 'update') {
+    const card = { ...proposal, id: `proposal-${crypto.randomUUID()}`, botId: agent.id };
+    // Ask-before-do on (or someone other than the owner asking): the card
+    // waits for the owner. Off: the bot's own action is saved now.
+    if (!allowed || currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false) {
+      return {
+        text: extracted.text,
+        fallbackText: proposal.action === 'create' ? 'Here’s the automation I’d set up.' : 'Here’s the change I’d make.',
+        metadata: { automationProposal: { ...card, status: 'pending' } },
+      };
+    }
+    try {
+      const companyId = nativeCompanyId(workspaceIdForRecord(agent), ownerOf(agent));
+      const { record, schedule } = await saveBotAutomationFromProposal(agent, proposal, { conversationId: trigger.conversationId, companyId, byBot: true });
+      bumpVersion();
+      const done = proposal.action === 'create' ? `A new automation was created: ${record.name}` : `Automation updated: ${record.name}`;
+      return {
+        text: extracted.text,
+        fallbackText: done,
+        metadata: { automationProposal: { ...card, status: 'accepted', appliedByBot: true, automationId: record.id, schedule, answeredAt: new Date().toISOString() } },
+      };
+    } catch (error) {
+      console.error('automation save from bot failed for', agent.id, error.message);
+      return { text: extracted.text, fallbackText: `I couldn’t save ${proposal.action === 'create' ? 'the new automation' : 'that change'}. Try again in a moment.`, metadata: { automationActionError: 'save_failed' } };
+    }
+  }
+  if (proposal.action === 'stop' || proposal.action === 'pause' || proposal.action === 'resume') {
+    const control = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, action: proposal.action };
+    if (!allowed) return { text: extracted.text, fallbackText: `Only my owner or a workspace admin can ${proposal.action} ${proposal.name}.`, metadata: { automationControl: { ...control, status: 'denied' } } };
+    try {
+      if (proposal.action === 'stop') {
+        const result = cronSync.stopBotAutomationRun(conn, agent, proposal.automationId);
+        const fallback = result.status === 'stopping' ? `Stopping the current run of ${proposal.name}.` : `${proposal.name} isn’t running right now.`;
+        return { text: extracted.text, fallbackText: fallback, metadata: { automationControl: { ...control, status: result.status } } };
+      }
+      const result = await setBotAutomationEnabled(agent, proposal.automationId, proposal.action === 'resume');
+      bumpVersion();
+      const fallback = result.status === 'paused' ? `Paused ${proposal.name}.`
+        : result.status === 'resumed' ? `Resumed ${proposal.name}.`
+          : result.status === 'already_off' ? `${proposal.name} was already off.`
+            : result.status === 'already_on' ? `${proposal.name} was already on.` : `I couldn’t find ${proposal.name}.`;
+      return { text: extracted.text, fallbackText: fallback, metadata: { automationControl: { ...control, status: result.status } } };
+    } catch (error) {
+      console.error(`automation ${proposal.action} failed for`, agent.id, error.message);
+      return { text: extracted.text, fallbackText: `I couldn’t ${proposal.action} ${proposal.name}. Try again in a moment.`, metadata: { automationControl: { ...control, status: 'failed' } } };
+    }
   }
   // The card in chat shows the steps of the run it started: the first one from here on.
   const run = { automationId: proposal.automationId, name: proposal.name, botId: agent.id, requestedAt: Date.now() };
@@ -9474,7 +9550,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
     const turnMessage = [
       platformContext ? `Current Mia platform state for this turn (authoritative):\n${String(platformContext).trim()}` : '',
       googleActionInstruction,
-      slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName() }),
+      slashCommand ? '' : botAutomationActions.automationActionInstruction(agent, { timezone: localTimezoneName(), askBeforeDo: currentInstructionSettings(ownerOf(agent)).askBeforeDo !== false }),
       slashCommand ? '' : botInstructionActions.instructionActionInstruction(),
       sameSession ? newSkillsNotice(botPromptAgent, knownSkills) : '',
       nativePromptLine(trigger) || message,

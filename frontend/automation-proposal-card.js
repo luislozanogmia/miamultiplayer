@@ -122,7 +122,9 @@
     }
     // proposal.schedule: 'scheduled', 'draft' (the bot isn't set up, so
     // nothing runs) or 'pending' (the job sync failed and retries at boot).
-    var verb = proposal.schedule === 'draft' || proposal.schedule === 'pending' ? 'Saved'
+    // A bot's own save (ask-before-do off) says what it did, not what you did.
+    var verb = proposal.appliedByBot ? (proposal.action === 'update' ? 'Automation updated' : 'A new automation was created')
+      : proposal.schedule === 'draft' || proposal.schedule === 'pending' ? 'Saved'
       : proposal.action === 'update' ? 'Saved' : 'Turned on';
     var note = proposal.schedule === 'draft' ? ' It will run once this bot is set up; it’s still a draft.'
       : proposal.schedule === 'pending' ? ' It isn’t scheduled yet. Mia will try again when it restarts.'
