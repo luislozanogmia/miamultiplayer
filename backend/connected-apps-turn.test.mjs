@@ -130,7 +130,7 @@ test('busy Mia refreshes each follow-up and queues changed connections instead o
   const messages = [], completed = [];
   const ctx = {
     crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', nativeSlashCommand: () => false,
-    nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
+    nativeEventText: event => event.text, nativeMidRunFilesNote: async () => '', cancelNativeDispatchForInactiveUser: () => false,
     googleWorkspaceAgentContextForOwner: async owner => { checks++; assert.equal(owner, base.ownerEmail); return { status: {} }; },
     connectedAppsForTurn: () => ({ revision, note: 'Current connections ' + revision }),
     steerHermesGatewaySession: async (id, message) => { messages.push({ id, message }); return { status: 'queued' }; },
@@ -261,7 +261,7 @@ test('a person\'s mid-run message stays claimed instead of being closed at once'
   const completed = [], working = [];
   const ctx = {
     crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', MID_RUN_APP_NOTE_RULE: 'No reply needed.',
-    nativeSlashCommand: () => false, nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
+    nativeSlashCommand: () => false, nativeEventText: event => event.text, nativeMidRunFilesNote: async () => '', cancelNativeDispatchForInactiveUser: () => false,
     googleWorkspaceAgentContextForOwner: async () => ({ status: {} }),
     connectedAppsForTurn: () => ({ revision: 'r', note: 'Current connections' }),
     steerHermesGatewaySession: async () => ({ status: 'queued' }),
@@ -373,7 +373,7 @@ test("an app's note joins a busy Mia's turn as the app's words, with no reply as
   const note = 'Note from the Mia app, not typed by the person: they accepted your card.';
   const ctx = {
     crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', MID_RUN_APP_NOTE_RULE: 'No reply needed.',
-    nativeSlashCommand: () => false, nativeEventText: event => event.text, cancelNativeDispatchForInactiveUser: () => false,
+    nativeSlashCommand: () => false, nativeEventText: event => event.text, nativeMidRunFilesNote: async () => '', cancelNativeDispatchForInactiveUser: () => false,
     googleWorkspaceAgentContextForOwner: async () => ({ status: {} }),
     connectedAppsForTurn: () => ({ revision: 'r', note: 'Current connections' }),
     steerHermesGatewaySession: async (id, message) => { messages.push(message); return { status: 'queued' }; },
@@ -404,4 +404,46 @@ test("an app's system line reads in Mia's transcript without the person's name",
   vm.createContext(ctx); vm.runInContext(fn, ctx);
   assert.equal(ctx.nativePromptLine({ senderType: 'user', type: 'system', text: 'Note from the Mia app: done.' }), 'Note from the Mia app: done.');
   assert.equal(ctx.nativePromptLine({ senderType: 'user', type: 'message', text: 'hello' }), 'Owner: hello');
+});
+
+test('a picture sent mid-run reaches the running turn by path, with word to open it', async () => {
+  const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
+  const slice = (name) => { const at = source.indexOf(name); return source.slice(at, source.indexOf('\n}\n', at) + 3); };
+  const rule = source.match(/const MID_RUN_IMAGE_RULE = '[^']+';/)[0];
+  const steered = [], staged = [];
+  const shot = { id: 'att_1', filename: 'Screenshot 1.png', mimeType: 'image/png' };
+  let event = { senderType: 'user', senderId: base.ownerEmail, type: 'message', text: '', attachments: [shot] };
+  const ctx = {
+    crypto, GATEWAY_AGENT_ID: 'gateway', MID_RUN_MESSAGE_RULE: 'Answer it now.', MID_RUN_APP_NOTE_RULE: 'No reply needed.',
+    nativeSlashCommand: () => false, nativeEventText: (e) => e.text, cancelNativeDispatchForInactiveUser: () => false,
+    nativeEventAttachments: (e) => e.attachments || [],
+    turnFiles: { attachedLabel: (names) => names.length ? `(attached: ${names.join(', ')})` : '' },
+    nativeTurnFiles: async (_dispatch, trigger) => {
+      staged.push(trigger.attachments.length);
+      return { note: 'This message came with these files:\n- Screenshot_1.png (image/png): /data/for-bots/att_1/Screenshot_1.png', imagePaths: ['/data/for-bots/att_1/Screenshot_1.png'] };
+    },
+    googleWorkspaceAgentContextForOwner: async () => ({ status: {} }),
+    connectedAppsForTurn: () => ({ revision: 'r', note: 'Current connections' }),
+    steerHermesGatewaySession: async (_id, text) => { steered.push(text); return { status: 'queued' }; },
+    postNativeFollowUpWorking: () => {},
+    nativeConversationRepository: {
+      getEvent: () => event,
+      getConversation: () => ({ id: 'chat', companyId: 'company', type: 'agent' }),
+      claimDispatch: () => ({ idempotent: false, dispatch: {} }),
+      completeDispatch: () => {},
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(`${rule}\n${slice('async function nativeMidRunFilesNote(')}\n${slice('async function trySteerNativeConversationDispatch(')}`, ctx);
+  const dispatch = { id: 'shot', targetType: 'bot', companyId: 'company', conversationId: 'chat', eventId: 'e' };
+
+  assert.equal(await ctx.trySteerNativeConversationDispatch(dispatch, { sessionId: 'live', capabilityRevision: 'r' }), true, 'a picture alone is steered, not held to the end');
+  assert.match(steered[0], /User: \(attached: Screenshot 1\.png\)/);
+  assert.match(steered[0], /\/data\/for-bots\/att_1\/Screenshot_1\.png/);
+  assert.match(steered[0], /open each image above with vision_analyze/);
+
+  event = { senderType: 'user', senderId: base.ownerEmail, type: 'message', text: 'no files here' };
+  assert.equal(await ctx.trySteerNativeConversationDispatch({ ...dispatch, id: 'words' }, { sessionId: 'live', capabilityRevision: 'r' }), true);
+  assert.doesNotMatch(steered[1], /vision_analyze|for-bots/, 'words alone stay words');
+  assert.deepEqual(staged, [1], 'files are staged only when a message has them');
 });

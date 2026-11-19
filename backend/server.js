@@ -8720,6 +8720,17 @@ const MID_RUN_MESSAGE_RULE = 'The user sent this while you are working. Answer i
 
 const MID_RUN_APP_NOTE_RULE = 'The Mia app sent this note while you are working; the person did not type it. Use it and carry on with your work. It needs no separate reply.';
 
+// Hermes takes only words mid-run, so a message's files go in by path, staged
+// as on a normal turn, and an image is opened with the image tool.
+const MID_RUN_IMAGE_RULE = 'Before you answer, open each image above with vision_analyze, passing its path. An image sent while you work is not in view until you open it.';
+
+async function nativeMidRunFilesNote(dispatch, trigger) {
+  if (!nativeEventAttachments(trigger).length) return '';
+  const { note } = await nativeTurnFiles(dispatch, trigger);
+  if (!note) return '';
+  return /\(image\/[^)]*\):/i.test(note) ? `${note}\n${MID_RUN_IMAGE_RULE}` : note;
+}
+
 const MID_RUN_NUDGE = 'Answer the user\'s last message now in a short message, before anything else. Your command keeps running in the background.';
 
 // A model can fold its answer into the tool it was about to run, which keeps the
@@ -8799,7 +8810,10 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
     id: dispatch.eventId,
     includeDeleted: false,
   });
-  const message = trigger && trigger.senderType === 'user' ? nativeEventText(trigger) : '';
+  // A message with only a picture reads as its file's name.
+  const message = trigger && trigger.senderType === 'user'
+    ? (nativeEventText(trigger) || turnFiles.attachedLabel(nativeEventAttachments(trigger).map((attachment) => attachment.filename)))
+    : '';
   if (!message || !activeGateway || !activeGateway.sessionId) return false;
   // A slash command is a command, not extra text for the running turn; it
   // runs as its own dispatch once that turn ends.
@@ -8818,9 +8832,10 @@ async function trySteerNativeConversationDispatch(dispatch, activeGateway) {
   const appNote = trigger.type === 'system';
   let result;
   try {
+    const files = appNote ? '' : await nativeMidRunFilesNote(dispatch, trigger);
     result = await steerHermesGatewaySession(activeGateway.sessionId, appNote
       ? inventory.note + '\n\n' + message + '\n\n' + MID_RUN_APP_NOTE_RULE
-      : inventory.note + '\n\nUser: ' + message + '\n\n' + MID_RUN_MESSAGE_RULE);
+      : inventory.note + '\n\nUser: ' + message + (files ? '\n\n' + files : '') + '\n\n' + MID_RUN_MESSAGE_RULE);
   } catch (_) {
     return false;
   }
