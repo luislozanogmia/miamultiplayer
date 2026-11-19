@@ -13835,8 +13835,9 @@
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
-      // A site's notification: its own icon with Mia's dot, never an emoji.
-      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m);
+      // A site's notification is a message from the site: its own icon with
+      // Mia's dot, never an emoji, and it can be replied to in a thread.
+      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m, {inThread: !!opts.inThread, direct: isDirectChatRoom(), timeText: chatRelTime(m.ts), footerHtml: opts.footerHtml});
       // A row from when bringing a bot was a request an admin answered.
       if(m.hubBotRequest && hubWorkspace()){
         return '<div class="chat-msg-system"><p>' + esc(displayNameForEmail(m.hubBotRequest.requester_email)) + (m.hubBotRequest.status === 'accepted' ? ' added ' : ' asked to add ') + esc(m.hubBotRequest.name) + '.</p></div>';
@@ -14807,12 +14808,15 @@
     var prevHumanKey = null;
     var html = mainMessages.map(function(m){
       if(m.steps) return chatStepsHtml(m);
-      if(m.siteNotices){ prevHumanKey = null; return window.MiaSiteNotices.groupHtml(m); }
+      if(m.siteNotices){
+        prevHumanKey = null;
+        return window.MiaSiteNotices.groupHtml(m, {direct: isDirectChatRoom(), footerFor: function(item){ return chatThreadFooterHtml(state, item.id); }});
+      }
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevHumanKey;
       prevHumanKey = key;
-      var footerHtml = m.system ? '' : chatThreadFooterHtml(state, m.id);
+      var footerHtml = m.system && !(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) ? '' : chatThreadFooterHtml(state, m.id);
       footerHtml = miaOnboardingChoicesHtml(m, state) + footerHtml;
       return chatMsgHtml(m, grouped, {footerHtml: footerHtml});
     }).join('');
