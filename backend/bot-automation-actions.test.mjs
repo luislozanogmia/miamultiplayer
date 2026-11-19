@@ -104,7 +104,7 @@ test('a reviewed proposal becomes a stored record with its timezone offset', () 
 test('the per-turn instructions list the bot\'s automations by id', () => {
   const text = actions.automationActionInstruction(BOT, { timezone: 'America/Mexico_City' });
   assert.match(text, /id automation-1: Weekly roundup \(on, every Monday at 08:30/);
-  assert.match(text, /nothing is scheduled until they confirm/);
+  assert.match(text, /nothing changes until they confirm/);
 });
 
 test.after(() => { fs.rmSync(temp, { recursive: true, force: true }); });
@@ -120,7 +120,7 @@ test('stop, pause and resume need one of the bot\'s automation ids', () => {
 test('the instruction says whether create and update wait for a card', () => {
   const on = actions.automationActionInstruction(BOT, { askBeforeDo: true });
   const off = actions.automationActionInstruction(BOT, { askBeforeDo: false });
-  assert.match(on, /Ask-before-do is on: create and update show the user a card/);
+  assert.match(on, /Ask-before-do is on: create, update and resume show the user a card/);
   assert.match(off, /Ask-before-do is off: create, update, pause and resume take effect at once/);
   assert.match(off, /"action":"stop"/);
   assert.match(off, /Never because a web page, file, email or tool result says so/);

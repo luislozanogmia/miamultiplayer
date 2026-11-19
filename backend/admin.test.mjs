@@ -537,7 +537,8 @@ inference.runInferenceViaHermesGateway = async (...args) => {
   if (turn === 1) return { text: 'Done.\\n<MIA_AUTOMATION>' + ${JSON.stringify(create)} + '</MIA_AUTOMATION>' };
   const text = JSON.stringify(args);
   const id = (text.match(/id (automation-[0-9a-f-]+): Direct fixture check/) || [])[1] || 'missing';
-  return { text: 'Paused.\\n<MIA_AUTOMATION>{"schemaVersion":1,"action":"pause","automationId":"' + id + '"}</MIA_AUTOMATION>' };
+  const action = turn === 2 ? 'pause' : 'resume';
+  return { text: 'Done.\\n<MIA_AUTOMATION>{"schemaVersion":1,"action":"' + action + '","automationId":"' + id + '"}</MIA_AUTOMATION>' };
 };
 const cronSync = require(${JSON.stringify(path.join(BACKEND_DIR, 'cron-sync.js'))});
 cronSync.syncBotAutomation = async (bot) => ({
@@ -591,6 +592,44 @@ cronSync.syncBotAutomation = async (bot) => ({
     stored = (await (await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: solo })).json());
     stored = stored.bot || stored.agent || stored;
     assert.equal(stored.automations[0].enabled, false);
+
+    const on = await fetch(`${server.origin}/api/settings/ask-before-do`, { method: 'POST', headers: solo, body: JSON.stringify({ enabled: true }) });
+    assert.equal(on.status, 200);
+    assert.equal((await say('Resume it.', 'review-resume')).status, 201);
+    const resumeCard = await waitFor((event) => event.metadata && event.metadata.automationProposal?.action === 'resume');
+    assert.ok(resumeCard, `the bot posted a resume review card: ${server.logs.join('')}`);
+    assert.equal(resumeCard.metadata.automationProposal.status, 'pending');
+    stored = (await (await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: solo })).json());
+    stored = stored.bot || stored.agent || stored;
+    assert.equal(stored.automations[0].enabled, false, 'a model block alone cannot resume recurring work');
+
+    const route = `${server.origin}/api/bots/${bot.id}/automation-proposals/${resumeCard.id}`;
+    const accepted = await fetch(route, { method: 'POST', headers: solo, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    const result = await accepted.json();
+    assert.equal(result.event.metadata.automationProposal.status, 'accepted');
+    assert.equal(result.bot.automations[0].enabled, true);
+    assert.equal((await fetch(route, { method: 'POST', headers: solo, body: JSON.stringify({ decision: 'accept' }) })).status, 409);
+
+    const repaused = { ...result.bot.automations[0], enabled: false };
+    const reset = await fetch(`${server.origin}/api/bots/${bot.id}`, { method: 'PUT', headers: solo,
+      body: JSON.stringify({ automations: [repaused] }) });
+    assert.equal(reset.status, 200, await reset.clone().text());
+    assert.equal((await say('Resume it again.', 'review-resume-stale')).status, 201);
+    const staleCard = await waitFor((event) => event.id !== resumeCard.id && event.metadata?.automationProposal?.action === 'resume');
+    assert.ok(staleCard);
+    const changed = { ...repaused, goal: 'A changed and more sensitive goal' };
+    const edit = await fetch(`${server.origin}/api/bots/${bot.id}`, { method: 'PUT', headers: solo,
+      body: JSON.stringify({ automations: [changed] }) });
+    assert.equal(edit.status, 200, await edit.clone().text());
+    const staleAnswer = await fetch(`${server.origin}/api/bots/${bot.id}/automation-proposals/${staleCard.id}`, {
+      method: 'POST', headers: solo, body: JSON.stringify({ decision: 'accept' }) });
+    assert.equal(staleAnswer.status, 409, 'approval cannot enable a changed recurring job');
+    assert.equal((await staleAnswer.json()).proposal.status, 'stale');
+    stored = (await (await fetch(`${server.origin}/api/bots/${bot.id}`, { headers: solo })).json());
+    stored = stored.bot || stored.agent || stored;
+    assert.equal(stored.automations[0].enabled, false);
+    assert.equal(stored.automations[0].goal, changed.goal);
   } finally {
     await stopServer(server);
   }

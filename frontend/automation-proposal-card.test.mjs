@@ -139,3 +139,16 @@ test('a bot\'s own save says a new automation was created', () => {
   const changed = card.html(message({ automationProposal: { status: 'accepted', appliedByBot: true, action: 'update', schedule: 'scheduled', botId: 'bot-1', automationId: 'a-1', automation } }), { esc });
   assert.match(changed, /Automation updated: Morning/);
 });
+
+test('resuming a paused automation waits for the owner when Ask Before Do is on', () => {
+  const pending = message({ automationProposal: { action: 'resume', status: 'pending', botId: 'bot-1', automationId: 'a-1', name: 'Morning digest' } });
+  const owner = card.html(pending, { esc, canEdit: true });
+  assert.match(owner, /data-automation-proposal=/);
+  assert.match(owner, /Resume Morning digest/);
+  assert.match(owner, /data-automation-decision="accept"/);
+  assert.match(owner, /data-automation-decision="dismiss"/);
+  assert.doesNotMatch(owner, /data-field=/, 'resume has no editable schedule fields');
+  assert.match(card.html(pending, { esc, canEdit: false }), /Waiting for the bot owner/);
+  assert.match(card.html(message({ automationProposal: { ...pending.nativeEvent.metadata.automationProposal, status: 'accepted' } }), { esc }), /Resumed Morning digest/);
+  assert.match(card.html(message({ automationProposal: { ...pending.nativeEvent.metadata.automationProposal, status: 'stale' } }), { esc }), /changed before approval/);
+});

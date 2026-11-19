@@ -13199,14 +13199,15 @@
     var proposal = message && message.nativeEvent.metadata && message.nativeEvent.metadata.automationProposal;
     if(!proposal) return;
     var cardState = automationCardStates[eventId] = automationCardStates[eventId] || {};
-    var fields = window.MiaAutomationProposalCard.readFields(card);
-    cardState.draft = fields;
+    var resume = proposal.action === 'resume';
+    var fields = resume ? null : window.MiaAutomationProposalCard.readFields(card);
+    if(!resume) cardState.draft = fields;
     cardState.busy = true;
     cardState.error = '';
     renderChatThread();
     api('/api/bots/' + encodeURIComponent(proposal.botId) + '/automation-proposals/' + encodeURIComponent(eventId), {
       method: 'POST',
-      body: decision === 'accept' ? {decision: 'accept', automation: fields} : {decision: 'dismiss'}
+      body: decision === 'accept' ? (resume ? {decision: 'accept'} : {decision: 'accept', automation: fields}) : {decision: 'dismiss'}
     }).then(function(res){
       cardState.busy = false;
       if(res.status !== 200 || !res.data.event){

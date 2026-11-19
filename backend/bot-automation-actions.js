@@ -290,7 +290,7 @@ function automationActionInstruction(bot, { timezone = '', askBeforeDo = true } 
     '- stop: {"schemaVersion":1,"action":"stop","automationId":"<id>"} ends the run going now; the automation stays on.',
     '- pause / resume: {"schemaVersion":1,"action":"pause","automationId":"<id>"} turns it off; "resume" turns it back on.',
     askBeforeDo
-      ? 'Ask-before-do is on: create and update show the user a card to review; nothing is scheduled until they confirm, so do not claim it is scheduled.'
+      ? 'Ask-before-do is on: create, update and resume show the user a card to review; nothing changes until they confirm, so do not claim it is done.'
       : 'Ask-before-do is off: create, update, pause and resume take effect at once and the chat shows what changed, so say it is done.',
     timezone ? `The user's timezone is ${timezone}.` : '',
     `Your automations:\n${list}`,
