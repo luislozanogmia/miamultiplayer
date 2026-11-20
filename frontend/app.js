@@ -4068,6 +4068,13 @@
     '</div>';
   }
 
+  // The hex color a bot shows right now, saved or worked out from its name.
+  function frozenAgentAvatarColor(a){
+    var saved = normalizeAgentAvatarColor(a && a.avatarColor) || agentAvatarColorFor(a && a.name, a && (a.isBuiltin ? a.agentId : a.id));
+    if(saved) return saved;
+    var hue = MOTE_COLOR_PALETTE[moteColorSlotFor(a && a.name)];
+    return newSetupBotColor(function(){ return (Math.round(hue) + 0.5) / 360; });
+  }
   function renderStyledAgentEditColorControls(){
     var options = el('#styledAgentEditColorOptions');
     if(!options) return;
@@ -4101,9 +4108,13 @@
     });
     var colors = el('#styledAgentEditColorOptions', pane);
     if(name) name.addEventListener('input', function(e){
+      var a = findBenchAgent(editState.agentId);
+      // An automatic color comes from the name, so renaming would repaint the
+      // bot on every keystroke. Keep the color it has now: a rename is still
+      // the same bot.
+      if(a && !normalizeAgentAvatarColor(editState.avatarColor)) editState.avatarColor = frozenAgentAvatarColor(a);
       editState.name = e.target.value;
       var avatar = el('#styledAgentEditAvatar', pane);
-      var a = findBenchAgent(editState.agentId);
       if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
     });
     if(instructions) instructions.addEventListener('input', function(e){ editState.instructions = e.target.value; });
