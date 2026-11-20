@@ -5889,7 +5889,7 @@
     chatWs.activeRoomId=null;chatWs.activeKind=null;chatWs.activeLabel='';
     chatWs.nativeConversations=[];
     chatWs.native=false; chatWs.allAgents=[]; chatWs.humans=[];
-    hubChat.companyBots=[];
+    hubChat.companyBots=[]; hubChat.marketBots=[]; hubChat.companyBotResults=null;
     var teamBots=loadTeamBotChats();
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
       hubChat.error='';hubChat.errorIsConnection=false;hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
@@ -6152,9 +6152,12 @@
   // The same bot can be added to several channels; the Hub lists it per
   // channel, so it shows once here, by name, with the channels it is in.
   function companyBotsFromChannels(results){
-    var byKey={},list=[];
+    var byKey={},list=[],current={};
+    marketBotRecords().forEach(function(bot){ current[bot.id]=bot; });
     results.forEach(function(result){
       (result.bots||[]).forEach(function(bot){
+        var now=bot && bot.id && current[String(bot.id)];
+        if(now)bot=Object.assign({},bot,{name:now.name,avatar_color:now.avatarColor||bot.avatar_color});
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
         if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),botIds:[],channels:[],places:[]}; list.push(entry); }
@@ -6173,6 +6176,7 @@
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
+      hubChat.companyBotResults=results;
       hubChat.companyBots=companyBotsFromChannels(results);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
@@ -13116,8 +13120,16 @@
   // Who a bot's message is from. A message saves the bot's name as it was when sent, so
   // its sender ID finds the bot as it is now. A bot that no longer exists keeps its saved
   // name. Mia's replies are left as they are: her name depends on the conversation.
+  // A company bot's current name and color come from the company's bot list;
+  // the per-channel list can still carry the name it was first added under.
+  function marketBotRecords(){
+    var bots = typeof hubChat !== 'undefined' && Array.isArray(hubChat.marketBots) ? hubChat.marketBots : [];
+    return bots.filter(function(bot){ return bot && bot.id && bot.name; }).map(function(bot){
+      return {id: String(bot.id), name: bot.name, avatarColor: normalizeAgentAvatarColor(bot.avatar_color)};
+    });
+  }
   function messageBotRecords(){
-    var lists = [chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
+    var lists = [marketBotRecords(), chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
     return lists.reduce(function(all, list){ return Array.isArray(list) ? all.concat(list) : all; }, []);
   }
   function messageBotIdentity(m){
@@ -16416,6 +16428,7 @@
     var me = hubChat.membership && hubChat.membership.clerk_user_id;
     return hubCall('GET', '/v1/teams/' + teamId + '/market/bots').then(function(result){
       var bots = (result.bots || []).filter(function(bot){ return bot && !bot.archived_at; });
+      if(activeWorkspaceKey === 'hub:' + teamId) showMarketBotNames(bots);
       return shareMarketFolders(teamId, bots).then(function(){ return linkSharedBots(teamId, bots); }).then(function(){
         var copies = (chatWs.botRecords || []).filter(function(bot){ return bot && bot.marketSource && bot.marketSource.teamId === teamId; });
         return copies.reduce(function(done, copy){
@@ -16427,6 +16440,14 @@
         }, Promise.resolve());
       });
     }).catch(function(){ /* The next change or company open retries. */ }).then(showBotMemoryIntro);
+  }
+  // Renamed or recolored company bots show their current name and color in
+  // the sidebar and on every message they wrote, old ones included.
+  function showMarketBotNames(bots){
+    hubChat.marketBots = bots;
+    if(hubChat.companyBotResults) hubChat.companyBots = companyBotsFromChannels(hubChat.companyBotResults);
+    renderChatSidebar();
+    if(typeof renderChatThread === 'function') renderChatThread();
   }
   // Every company bot has a shared folder, where its memory lives, unless an
   // admin turned it off. A bot that never had one gets it from the first owner

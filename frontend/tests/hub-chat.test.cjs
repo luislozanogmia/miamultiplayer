@@ -782,7 +782,7 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
 });
 test('a company bot shows once, by name, with every channel it is in',()=>{
   const start=source.indexOf('  function companyBotsFromChannels(');
-  const merge=new Function('normalizeAgentAvatarColor',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
+  const merge=new Function('normalizeAgentAvatarColor','marketBotRecords',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null,()=>[]);
   const ux={id:'a',name:'ux-test'}, gtm={id:'b',name:'GTM'};
   const list=merge([
     {channel:ux,bots:[{id:'1',name:'Web Research Agent',published:true},{id:'2',name:'Draft',published:false}]},
@@ -790,6 +790,13 @@ test('a company bot shows once, by name, with every channel it is in',()=>{
   ]);
   assert.deepEqual(list.map(bot=>bot.name),['AI News Tracker','Web Research Agent']);
   assert.deepEqual(list[1].channels,[ux,gtm]);
+});
+test('a renamed company bot shows its new name and color in the sidebar',()=>{
+  // The per-channel list keeps the name a bot was first added under.
+  const start=source.indexOf('  function companyBotsFromChannels(');
+  const merge=new Function('normalizeAgentAvatarColor','marketBotRecords',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null,()=>[{id:'7',name:'GTM',avatarColor:'#bac8de'}]);
+  const list=merge([{channel:{id:'a',name:'gtm'},bots:[{id:'7',name:'GTM 2',published:true}]}]);
+  assert.deepEqual(list.map(bot=>[bot.name,bot.avatarColor]),[['GTM','#bac8de']]);
 });
 test('bot pins live with every other pinned chat, per workspace, and old bot pins move over once',()=>{
   const store={'miaPinnedTeamBots':JSON.stringify({hub_a:['company:web'],hub_b:['mine:9']})};
