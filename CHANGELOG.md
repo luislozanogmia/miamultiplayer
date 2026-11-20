@@ -9,6 +9,9 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Fixed
+- A bot can take a screenshot of its page while that page is docked and the browser is closed; the capture no longer times out.
+
 ## [0.3.12] — 2026-11-19
 
 ### Added
