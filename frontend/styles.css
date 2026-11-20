@@ -1186,18 +1186,20 @@
   /* The sidebar's sign that a new version is downloading; it fills as the download goes. */
   .update-cue{position:relative;flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;overflow:hidden;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:default;}
   .update-cue[hidden]{display:none;}
-  /* AI mode: the way in sits above the footer; in the narrow rail only its icon shows. */
-  .ai-mode-entry{flex:0 0 auto;display:flex;align-items:center;gap:6px;margin:4px 12px;padding:7px 10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:10px;background:transparent;color:var(--sand-text-secondary);font-family:var(--styled-sans);font-size:12.5px;line-height:1.2;text-align:left;cursor:pointer;}
-  .ai-mode-entry:hover{background:var(--sand-fill-ghost-hover);}
-  .ai-mode-entry-what{display:inline-grid;place-items:center;flex:none;width:16px;height:16px;border:1px solid var(--sand-border-subtle);border-radius:50%;font-size:10px;line-height:1;cursor:help;}
-  .ai-mode-entry-what:hover{border-color:var(--sand-border-focus);color:var(--sand-text-primary);}
-  .ai-mode-entry-tag{margin-left:auto;padding:1px 6px;border-radius:999px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-tertiary,var(--sand-text-secondary));font-size:10.5px;letter-spacing:.02em;}
-  @media (max-width:1100px){.ai-mode-entry{margin:4px auto;padding:7px;gap:4px;}.ai-mode-entry-text,.ai-mode-entry-tag{display:none;}}
+  /* Previews in the rail: Flow mode and Flow Tandem sit at its foot, above
+     the account. An amber dot marks a preview; the label on hover says what
+     it does. */
+  .ai-mode-entry .workspace-rail-mark{position:relative;overflow:visible;}
+  .ai-mode-entry .workspace-rail-mark::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--mia-gold);}
+  /* Narrow enough to stay over the sidebar, clear of the composer. */
+  .workspace-rail-name.rail-preview-tip{white-space:normal;text-align:left;width:max-content;max-width:196px;}
+  .rail-preview-tip small{display:block;margin-top:2px;font-weight:400;opacity:.75;}
+  .ai-mode-entry-tag{margin-left:6px;padding:1px 6px;border-radius:999px;background:color-mix(in srgb,currentColor 18%,transparent);font-size:10.5px;font-weight:500;}
   .ai-mode-entry[hidden]{display:none;}
   /* Flow mode is there only once it is turned on in Settings, and then glows
      gold like a new invite until it is first opened. */
   body:not(.flow-mode-on) #aiModeEntry{display:none;}
-  .ai-mode-entry.fresh{border-color:var(--mia-gold);box-shadow:0 0 0 1px var(--mia-gold),0 0 10px 1px color-mix(in srgb,var(--mia-gold) 55%,transparent);animation:workspace-invite-glow 1.8s ease-in-out infinite;}
+  .ai-mode-entry.fresh .workspace-rail-mark{border-color:var(--mia-gold);box-shadow:0 0 0 1px var(--mia-gold),0 0 10px 1px color-mix(in srgb,var(--mia-gold) 55%,transparent);animation:workspace-invite-glow 1.8s ease-in-out infinite;}
   /* Flow Tandem: the call with Mia, as a card where the way in was. */
   .flow-tandem{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;margin:4px 12px;padding:10px;min-width:0;border:1px solid var(--sand-border-subtle);border-radius:12px;background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);font-family:var(--styled-sans);}
   .flow-tandem[hidden]{display:none;}
@@ -1669,13 +1671,14 @@
   .chat-plugins-row .cpr-icon{width:28px;height:28px;border:1px solid var(--sand-border-default);border-radius:50%;background:var(--sand-bg-base);display:flex;align-items:center;justify-content:center;flex:0 0 auto;color:var(--sand-text-primary);}
   .chat-plugins-row .cpr-icon svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.7;}
   .chat-plugins-row .cpr-icon img{display:block;width:17px;height:17px;object-fit:contain;}
-  .chat-sidebar-footer{flex:0 0 auto;border-top:1px solid var(--sand-border-subtle);padding:8px;position:relative;}
+  .chat-sidebar-footer{flex:0 0 auto;display:flex;align-items:center;gap:7px;border-top:1px solid var(--sand-border-subtle);padding:8px;position:relative;font-family:var(--styled-sans);font-size:12px;color:var(--sand-text-secondary);}
   .chat-acct-row{appearance:none;width:100%;border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:8px;border-radius:9px;font-family:var(--styled-sans);transition:background .12s ease;}
   .chat-acct-row:hover{background:var(--sand-fill-ghost-hover);}
   .chat-acct-avatar{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:#EDEAE4;color:#57534E;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;}
   .chat-acct-name{font-size:12.5px;color:var(--sand-text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .csf-dot{width:6px;height:6px;border-radius:50%;background:var(--sand-success);flex:0 0 auto;}
+  .csf-dot{width:8px;height:8px;border-radius:50%;background:var(--sand-success);flex:0 0 auto;}
   .csf-dot.offline{background:var(--sand-danger);}
+  .csf-dot.connecting{background:var(--sand-border-default);}
   #chatSyncFooter.chat-sync-fail{color:var(--sand-text-danger);}
   .chat-sidebar-sync{display:none;align-items:center;gap:8px;font-family:var(--styled-sans);font-size:11px;color:var(--sand-text-secondary);padding:0 8px 6px;}
   .chat-sidebar-sync.show{display:flex;}
@@ -2638,8 +2641,6 @@
   body.styled-skin .chat-sidebar-empty{font-size:12px;padding:8px 9px;color:var(--sand-text-secondary);}
   body.styled-skin .chat-plugins-row{height:40px;padding:6px 20px;}
   body.styled-skin .chat-sidebar-footer{border-top:0;padding:4px 12px 12px;}
-  body.styled-skin .chat-sidebar-footer > .csf-dot,
-  body.styled-skin .chat-sidebar-footer > #chatSyncFooter{display:none;}
   body.styled-skin .chat-acct-row{padding:8px;border-radius:10px;}
   body.styled-skin .chat-acct-avatar{width:28px;height:28px;background:#eeeeee;color:var(--sand-text-secondary);font-size:10px;}
   body.styled-skin .chat-acct-name{font-size:13px;}
@@ -3753,8 +3754,8 @@
   @media (max-width:1100px){
     body.styled-skin .chat-layout{grid-template-columns:calc(var(--sand-sidebar-width) + var(--workspace-rail-width)) minmax(0,1fr) !important;}
     body.styled-skin .chat-sidebar{width:auto;}
-    body.styled-skin .chat-sidebar .chat-search-wrap,
-    body.styled-skin .chat-sidebar .chat-sidebar-footer{display:block !important;}
+    body.styled-skin .chat-sidebar .chat-search-wrap{display:block !important;}
+    body.styled-skin .chat-sidebar .chat-sidebar-footer{display:flex !important;}
     body.styled-skin .chat-sidebar .chat-recents-head{display:flex !important;}
     body.styled-skin .chat-sidebar .chat-recent-row .row-label{display:block !important;}
     /* A 150-word preview is still too tall when a compact window wraps it
@@ -4250,10 +4251,6 @@ html.mac-inset-titlebar body.mia-call-zoomed .local-browser-overlay .native-brow
 .hub-hidden-bots-toggle:hover{background:var(--sand-fill-ghost-hover,rgba(0,0,0,.04));}
 .hub-hidden-bots-chevron{flex:none;width:10px;height:10px;margin-left:-16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;}
 .hub-hidden-bots-chevron.open{transform:rotate(90deg);}
-.mia-offline-pill{position:fixed;left:88px;bottom:16px;z-index:600;display:flex;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-radius:8px;background:#202124;color:#fff;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.25);}
-.mia-offline-pill[hidden]{display:none;}
-.mia-offline-pill svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;}
-.mia-offline-pill button{border:0;background:none;color:inherit;font-size:20px;line-height:1;padding:0 2px;cursor:pointer;}
 .chat-msg-mention-face{display:inline-flex;position:relative;width:16px;height:16px;border-radius:50%;overflow:hidden;font-size:7px;font-weight:600;}
 .chat-msg-mention-face .human-avatar-initials{display:flex;align-items:center;justify-content:center;width:100%;height:100%;border-radius:50%;line-height:1;}
 .chat-msg-mention-face .human-avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}

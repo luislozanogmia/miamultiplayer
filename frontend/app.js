@@ -5936,42 +5936,39 @@
     if(!hubChat.retryTimer || !hubWorkspace())return;
     clearTimeout(hubChat.retryTimer);hubChat.retryTimer=null;initHubChat();
   });
+  // One line at the foot of the sidebar says whether this Mia is connected:
+  // a green dot and Online, or a red dot and Offline while the company can't
+  // be reached. A refusal reconnecting won't fix says why, in red.
   function renderHubStatus(){
-    renderOfflinePill();
-    var footer=el('#chatSyncFooter');
+    var footer=el('#chatSyncFooter'), dot=el('#chatSyncDot');
     if(!footer)return;
-    var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
-    // Connection trouble is the Offline pill's to show; the line keeps quiet
-    // and red text is left for refusals reconnecting won't fix.
-    var connection=hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
-    footer.style.display='block';
+    var offline=browserOffline() || hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
+    footer.style.display='';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=refusal || (connection ? '' : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
-    footer.classList.toggle('chat-sync-fail',!!refusal || (!connection && chatWs.configured===false));
+    footer.textContent=refusal || (offline ? 'Offline' : 'Online');
+    footer.classList.toggle('chat-sync-fail',!!refusal || offline);
+    if(dot){dot.classList.toggle('offline',!!refusal || offline);dot.classList.remove('connecting');}
   }
-  // Offline, the way Google Calendar shows it: a small dark pill in the
-  // corner, gone by itself when the connection is back. × hides it until
-  // the next time the connection drops.
-  var offlinePill={dismissed:false};
+  function browserOffline(){
+    return typeof navigator!=='undefined' && navigator.onLine===false;
+  }
   function hubConnectionTrouble(){
     return hubWorkspace() && (hubChat.feedStatus==='offline' || !!(hubChat.error && hubChat.errorIsConnection));
   }
-  function renderOfflinePill(){
-    var offline=navigator.onLine===false || hubConnectionTrouble();
-    if(!offline)offlinePill.dismissed=false;
-    var pill=document.getElementById('miaOfflinePill');
-    if(!offline || offlinePill.dismissed){ if(pill)pill.hidden=true; return; }
-    if(!pill){
-      pill=document.createElement('div'); pill.id='miaOfflinePill'; pill.className='mia-offline-pill'; pill.setAttribute('role','status');
-      pill.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 8.6A5 5 0 0 0 6.5 18H17"/><path d="M10.2 6.2A6 6 0 0 1 18.4 11 3.5 3.5 0 0 1 20.6 16.9"/></svg><span>Offline</span><button type="button" aria-label="Hide" title="Hide">&times;</button>';
-      pill.querySelector('button').addEventListener('click',function(){ offlinePill.dismissed=true; pill.hidden=true; });
-      document.body.appendChild(pill);
-    }
-    pill.hidden=false;
+  function renderSoloSyncLine(){
+    var dot=el('#chatSyncDot'), footer=el('#chatSyncFooter');
+    var fail=chatWs.configured===false, offline=!fail && browserOffline();
+    if(dot){dot.classList.toggle('offline',fail || offline);dot.classList.toggle('connecting',!fail && !offline && chatWs.configured!==true);}
+    if(!footer)return;
+    footer.style.display='';
+    footer.setAttribute('role','status');footer.setAttribute('aria-live','polite');
+    footer.textContent=fail ? 'Chat Failure' : offline ? 'Offline' : chatWs.configured===true ? 'Online' : 'Connecting…';
+    footer.classList.toggle('chat-sync-fail',fail || offline);
   }
-  window.addEventListener('offline',renderOfflinePill);
-  window.addEventListener('online',renderOfflinePill);
+  function refreshSyncLine(){ if(hubWorkspace())renderHubStatus(); else renderSoloSyncLine(); }
+  window.addEventListener('offline',refreshSyncLine);
+  window.addEventListener('online',refreshSyncLine);
   function renderHubSidebar(){
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
@@ -19181,18 +19178,10 @@
     var botsWrap = el('#chatBots');
     var allWrap = el('#chatAllConversations');
     var allCountEl = el('#chatAllCount');
-    var syncDot = el('#chatSyncDot');
-    var syncFooter = el('#chatSyncFooter');
     if(!pinnedWrap || !allWrap) return;
     updateChatBackButton();
 
-    if(syncDot) syncDot.classList.toggle('offline', chatWs.configured === false);
-    if(syncFooter){
-      syncFooter.style.display='';
-      syncFooter.removeAttribute('role');syncFooter.removeAttribute('aria-live');
-      syncFooter.textContent = chatWs.configured === false ? 'Chat Failure' : (chatWs.configured === true ? 'Chat Online' : 'Connecting…');
-      syncFooter.classList.toggle('chat-sync-fail', chatWs.configured === false);
-    }
+    renderSoloSyncLine();
 
     // Official channels are represented by their own square initials mark,
     // never by the current member list. The room roster is still loaded

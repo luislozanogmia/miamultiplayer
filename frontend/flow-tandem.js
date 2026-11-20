@@ -55,7 +55,11 @@ function build(){
       button('flowTandemStage','stage','Open the Flow stage')+
       button('flowTandemLeave','leave','Leave Flow Tandem')+
     '</div>';
-  entry.parentNode.insertBefore(card,entry.nextSibling);
+  // The way in is an icon in the rail; the call's card sits in the sidebar,
+  // above the update cue and the Online line.
+  var cue=$('miaUpdateCue');
+  if(cue)cue.parentNode.insertBefore(card,cue);
+  else entry.parentNode.insertBefore(card,entry.nextSibling);
   if(window.MiaMark)window.MiaMark.render($('flowTandemMark'),22,'static');
   $('flowTandemReports').onchange=function(){api().reports(this.value);};
   $('flowTandemVoicePick').onclick=function(){api().voiceNext();};
