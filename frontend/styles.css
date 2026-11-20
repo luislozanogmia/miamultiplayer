@@ -1864,6 +1864,13 @@
   .cc-model-btn .caret{font-size:17px;line-height:12px;color:var(--sand-text-secondary);}
   .cc-model-menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:264px;max-width:min(320px,calc(100vw - 32px));background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);padding:6px;display:none;flex-direction:column;gap:5px;z-index:60;}
   .cc-model-menu.open{display:flex;}
+  /* The automation editor's Model field reuses the composer picker: a full-width
+     field-style button, with the menu opening downward. */
+  .cc-model-select.is-field{display:block;width:100%;}
+  .cc-model-select.is-field .cc-model-btn{width:100%;max-width:none;height:auto;padding:9px 12px;border:1px solid var(--sand-border-default);border-radius:10px;background:var(--sand-bg-base);font-size:14px;justify-content:flex-start;}
+  .cc-model-select.is-field .cc-model-btn:hover,.cc-model-select.is-field .cc-model-btn[aria-expanded="true"]{background:var(--sand-bg-base);border-color:var(--sand-border-focus);}
+  .cc-model-select.is-field .cc-model-tags{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;text-align:left;}
+  .cc-model-select.is-field .cc-model-menu{position:relative;bottom:auto;top:auto;margin-top:6px;min-width:0;max-width:none;width:100%;box-sizing:border-box;}
   .cc-model-menu-head{display:flex;align-items:center;gap:2px;min-height:24px;}
   .cc-model-back{appearance:none;border:none;background:transparent;color:var(--sand-text-secondary);width:24px;height:24px;border-radius:6px;font-size:20px;line-height:20px;padding:0;cursor:pointer;}
   .cc-model-back:hover,.cc-model-back:focus-visible{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);outline:none;}

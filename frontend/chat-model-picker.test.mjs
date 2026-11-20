@@ -26,12 +26,13 @@ test('chat picker is a real connected inventory control with staged menus', asyn
   assert.match(appSource, /function readCachedChatModelSelection\(scope\)/);
   assert.match(appSource, /function clearCachedChatModelSelection\(workspaceKey\)/);
   assert.match(appSource, /candidate\.provider === cached\.provider && candidate\.model === cached\.model/);
-  assert.match(appSource, /cacheChatModelSelection\(picker\.selection\)/);
-  assert.match(appSource, /cacheChatModelSelection\(Object\.assign\(\{\}, picker\.selection, \{speed:'normal'\}\)\)/);
+  assert.match(appSource, /function commitSelection\(selection\)\{\s*if\(!modelOnly\)\{ cacheChatModelSelection\(selection\); return; \}/);
+  assert.match(appSource, /commitSelection\(picker\.selection\)/);
+  assert.match(appSource, /commitSelection\(Object\.assign\(\{\}, picker\.selection, \{speed:'normal'\}\)\)/);
   assert.match(appSource, /if\(!selection\.provider \|\| !selection\.model\) selection = readCachedChatModelSelection\(\) \|\| \{\}/);
   assert.match(appSource, /picker\.ensureLoaded = function\(\)\{ return load\(\{refresh:true\}\); \};/);
   assert.match(appSource, /picker\.resetAndReload = function\(\)\{[\s\S]*clearCachedChatModelSelection\(\)/);
-  assert.match(appSource, /else \{\s*clearCachedChatModelSelection\(\);\s*picker\.selection = \{provider:null/);
+  assert.match(appSource, /else \{\s*if\(!modelOnly\) clearCachedChatModelSelection\(\);\s*picker\.selection = \{provider:null/);
   assert.match(appSource, /title\.textContent = 'Connect a model'/);
   assert.match(appSource, /Connect a provider in Settings → Access\./);
   assert.match(appSource, /if\(res\.status !== 200\) throw new Error/);
@@ -93,7 +94,7 @@ test('a "switch provider" screen, reached only via the family stage\'s back butt
   // shown on first open.
   assert.match(appSource, /showProviderSwitcher: false/);
   assert.match(appSource, /var currentStage = picker\.showApiProviders \? 'api-providers' : \(picker\.showProviderSwitcher \? 'providers' : stage\(\)\);/);
-  assert.match(appSource, /if\(currentStage === 'family'\)\{\s*title\.textContent = 'Choose a model family';\s*var families = \{\};/);
+  assert.match(appSource, /if\(currentStage === 'family'\)\{\s*title\.textContent = 'Choose a model family';\s*if\(opts\.defaultChoice\)\{[\s\S]*?\}\s*var families = \{\};/);
   assert.match(appSource, /if\(currentStage === 'family'\)\{\s*\/\/ The default \(unchanged\) resting screen has nowhere shallower to go\s*\/\/ — pressing back here reveals the full setup-provider switcher\s*\/\/ instead of closing the menu\.\s*picker\.showProviderSwitcher = true;/);
 
   // Connection detection uses only the picker's inventory, which the backend
@@ -220,4 +221,28 @@ test('switching chats refreshes the picker to that chat\'s choice', async () => 
 test('an unversioned GPT model is named without the word Gpt', async () => {
   const appSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
   assert.match(appSource, /variant:chatModelTitleCase\(raw\.replace\(\/\^gpt-\/, ''\)\.replace\(\/-latest\$\/, ''\)/);
+});
+
+test('an automation picks its model with the composer picker, not a separate control', async () => {
+  const appSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
+  const cssSource = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  // One picker implementation serves both the composer and automations.
+  assert.match(appSource, /function mountChatModelPicker\(pickerRoot, picker, opts\)/);
+  assert.match(appSource, /var api = mountChatModelPicker\(pickerRoot, chatModelPicker, \{\}\);/);
+  // The automation field copies the composer's markup and keeps the
+  // "provider|model" hidden value the save path reads.
+  assert.doesNotMatch(appSource, /<select id="automationEditModel">/);
+  assert.match(appSource, /<input type="hidden" id="automationEditModel" value="' \+ esc\(currentModel\) \+ '">/);
+  assert.match(appSource, /function mountAutomationModelPicker\(slot, input, bot, automation\)\{\s*var source = el\('#ccModelSelect'\);/);
+  assert.match(appSource, /var root = source\.cloneNode\(true\);/);
+  assert.match(appSource, /mountChatModelPicker\(root, sharedInventoryModelPickerState\(\), \{/);
+  assert.match(appSource, /input\.value = choice \? choice\.provider \+ '\|' \+ choice\.model : '';/);
+  // It shares the composer's inventory but never its cached per-chat choice.
+  assert.match(appSource, /get: function\(\)\{ return chatModelPicker\[key\]; \}/);
+  assert.match(appSource, /if\(!modelOnly\)\{ cacheChatModelSelection\(selection\); return; \}/);
+  // Runs take no reasoning effort or speed, so the picker stops at the model.
+  assert.match(appSource, /if\(!picker\.selection\.model\) return 'variant';\s*if\(modelOnly\) return 'family';/);
+  // "Bot's model" clears the automation's own choice.
+  assert.match(appSource, /if\(kind === 'default'\)\{[\s\S]*?commitSelection\(null\);/);
+  assert.match(cssSource, /\.cc-model-select\.is-field \.cc-model-menu\{position:relative;/);
 });
