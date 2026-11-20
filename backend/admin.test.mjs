@@ -635,6 +635,78 @@ cronSync.syncBotAutomation = async (bot) => ({
   }
 });
 
+// MCP apps: the owner's own bot turn runs in the bots' apps profile and is told
+// which apps it has; its request for a new app reaches Mia's chat as a message
+// from the owner, which Mia answers with her usual card.
+test('the owner\'s bot gets the owner\'s MCP apps and can ask Mia for a new one', async () => {
+  const appsRoot = await mkdtemp(path.join(os.tmpdir(), 'miaos-bot-mcp-'));
+  const appsFile = path.join(appsRoot, 'mcp-apps.json');
+  require('./mcp-apps').createMcpAppsStore(appsFile).add({ name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', auth: 'oauth' });
+  const turnsLog = path.join(appsRoot, 'turns.jsonl');
+  const request = JSON.stringify({ schemaVersion: 1, app: 'Attio CRM', why: 'Read deals for the pipeline review', docsUrl: 'https://docs.attio.com/mcp/overview' });
+  const preloadScript = `
+const fs = require('fs');
+const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});
+inference.startHermesGatewayRuntime = async () => {};
+inference.closeHermesGatewayRuntime = async () => {};
+inference.runInferenceViaHermesGateway = async (input) => {
+  const options = (input && input.options) || {};
+  fs.appendFileSync(${JSON.stringify(turnsLog)}, JSON.stringify({ bot: options.botWorker === true, profile: options.profile || '', message: String(input && input.message || '') }) + '\\n');
+  if (options.botWorker === true) return { text: 'I asked Mia for Attio.\\n<MIA_MCP_REQUEST>' + ${JSON.stringify(request)} + '</MIA_MCP_REQUEST>' };
+  return { text: 'Here is the app to review.' };
+};
+`;
+  const server = await startServer({ preloadScript, extraEnv: { MIAOS_MCP_APPS_FILE: appsFile } });
+  try {
+    const cookie = await loginAsBootAdmin(server);
+    const solo = { cookie, 'content-type': 'application/json', 'x-miaos-workspace': 'solo' };
+    const mia = await fetch(`${server.origin}/api/conversations`, { method: 'POST', headers: solo,
+      body: JSON.stringify({ type: 'agent', name: 'Mia', metadata: { agentId: 'gateway' } }) });
+    assert.equal(mia.status, 201);
+    const miaChat = (await mia.json()).conversation;
+    const created = await fetch(`${server.origin}/api/bots`, { method: 'POST', headers: solo,
+      body: JSON.stringify({ name: 'CRM Fixture', instructions: 'Fixture.', model: 'fixture-model', status: 'running', automations: [], departments: [] }) });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    const bot = createdBody.bot || createdBody;
+    const database = new Database(server.dbPath, { readonly: true });
+    const chat = database.prepare("SELECT id FROM conversations WHERE type = 'bot' AND metadata LIKE ? LIMIT 1").get(`%${bot.id}%`);
+    database.close();
+    const events = async (id) => ((await (await fetch(`${server.origin}/api/conversations/${id}/events?workspace=solo`, { headers: solo })).json()).events || []);
+    const waitFor = async (id, pick) => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const found = (await events(id)).find(pick);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return null;
+    };
+    const said = await fetch(`${server.origin}/api/conversations/${chat.id}/events?workspace=solo`, { method: 'POST', headers: solo,
+      body: JSON.stringify({ content: { text: 'We need Attio for the deals.' }, clientIdempotencyKey: 'bot-mcp-ask' }) });
+    assert.equal(said.status, 201);
+    const reply = await waitFor(chat.id, (event) => event.metadata && event.metadata.mcpAppRequest);
+    assert.ok(reply, `the bot posted its request: ${server.logs.join('')}`);
+    assert.equal(reply.metadata.mcpAppRequest.status, 'sent');
+    assert.equal(reply.metadata.mcpAppRequest.miaConversationId, miaChat.id);
+    assert.equal(/MIA_MCP_REQUEST/.test(JSON.stringify(reply.content)), false, 'the block never shows');
+    const asked = await waitFor(miaChat.id, (event) => event.metadata && event.metadata.requestedByBot);
+    assert.ok(asked, 'the request reached Mia\'s chat');
+    assert.equal(asked.senderType, 'user');
+    assert.equal(asked.metadata.requestedByBot.id, bot.id);
+    assert.match(asked.content.text, /CRM Fixture asks you to add an MCP app: Attio CRM\./);
+    const miaReply = await waitFor(miaChat.id, (event) => event.senderType === 'agent' && /app to review/.test(JSON.stringify(event.content)));
+    assert.ok(miaReply, 'Mia answered the request');
+    const turns = fs.readFileSync(turnsLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const botTurn = turns.find((turn) => turn.bot);
+    assert.equal(botTurn.profile, 'miaos-bot-apps-worker', 'the owner\'s turn has the apps');
+    assert.match(botTurn.message, /MCP apps \(authoritative\):/);
+    assert.match(botTurn.message, /- Asana: added, but its owner still needs to sign in/);
+  } finally {
+    await stopServer(server);
+    fs.rmSync(appsRoot, { recursive: true, force: true });
+  }
+});
+
 test('a Solo bot\'s instruction card can be accepted while a company is open', async () => {
   const preloadScript = `
 const inference = require(${JSON.stringify(path.join(BACKEND_DIR, 'inference.js'))});

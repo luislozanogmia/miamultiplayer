@@ -13,6 +13,10 @@ const {
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+  MIAOS_BOT_APPS_HERMES_PROFILE,
+  MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE,
+  MCP_APP_PROFILES,
+  botProfileFor,
   CLAUDE_SUBSCRIPTION_PLUGIN,
   CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE,
   GHOST_FIRST_PLUGIN,
@@ -35,6 +39,48 @@ test('the scheduler home gets the Claude provider too, since scheduled jobs run 
       fs.readFileSync(path.join(CLAUDE_SUBSCRIPTION_PLUGIN_SOURCE, 'plugin.yaml'), 'utf8')
     );
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The owner's MCP apps reach a bot only through the two "apps" bot profiles,
+// which server.js picks only when the owner is the one asking. The plain bot
+// profiles, used for everyone else, never carry them.
+test('MCP apps go to Mia and the bots\' apps profiles only, never the plain bot profiles', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-bot-apps-'));
+  const profilesRoot = path.join(root, 'profiles');
+  const previous = process.env.MIAOS_MCP_APPS_FILE;
+  process.env.MIAOS_MCP_APPS_FILE = path.join(root, 'mcp-apps.json');
+  try {
+    const store = require('./mcp-apps').createMcpAppsStore(process.env.MIAOS_MCP_APPS_FILE);
+    store.add({ name: 'Attio', url: 'https://mcp.attio.com/mcp', auth: 'oauth' });
+    const result = provisionHermesRuntimeProfiles({ profilesRoot });
+    assert.equal(result.appsBot.profile, MIAOS_BOT_APPS_HERMES_PROFILE);
+    assert.equal(result.googleAppsBot.profile, MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE);
+    const config = (profile) => YAML.parse(fs.readFileSync(path.join(profilesRoot, profile, 'config.yaml'), 'utf8'));
+    const servers = (profile) => Object.keys(config(profile).mcp_servers || {});
+    assert.deepEqual(servers(MIAOS_BOT_HERMES_PROFILE), []);
+    assert.deepEqual(servers(MIAOS_BOT_GOOGLE_HERMES_PROFILE).filter((name) => name.startsWith('u_')), []);
+    assert.deepEqual(servers(MIAOS_BOT_APPS_HERMES_PROFILE), ['u_attio']);
+    assert.ok(servers(MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE).includes('u_attio'));
+    assert.ok(servers(MIAOS_AGENT_HERMES_PROFILE).includes('u_attio'));
+    assert.equal(config(MIAOS_BOT_APPS_HERMES_PROFILE).mcp_servers.u_attio.url, 'https://mcp.attio.com/mcp');
+    // Same bot posture as the plain profiles: no delegation, no bot editing.
+    for (const profile of [MIAOS_BOT_APPS_HERMES_PROFILE, MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE]) {
+      assert.deepEqual(config(profile).agent.disabled_toolsets, ['delegation']);
+      assert.equal(config(profile).security, undefined);
+    }
+    assert.equal(botProfileFor({}), MIAOS_BOT_HERMES_PROFILE);
+    assert.equal(botProfileFor({ google: true }), MIAOS_BOT_GOOGLE_HERMES_PROFILE);
+    assert.equal(botProfileFor({ apps: true }), MIAOS_BOT_APPS_HERMES_PROFILE);
+    assert.equal(botProfileFor({ google: true, apps: true }), MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE);
+    // The first profile holds the sign-ins; bots' apps profiles share them.
+    assert.equal(MCP_APP_PROFILES[0], MIAOS_AGENT_HERMES_PROFILE);
+    assert.ok(MCP_APP_PROFILES.includes(MIAOS_BOT_APPS_HERMES_PROFILE));
+    assert.equal(MCP_APP_PROFILES.includes(MIAOS_BOT_HERMES_PROFILE), false);
+    assert.equal(MCP_APP_PROFILES.includes(MIAOS_BOT_GOOGLE_HERMES_PROFILE), false);
+  } finally {
+    if (previous === undefined) delete process.env.MIAOS_MCP_APPS_FILE; else process.env.MIAOS_MCP_APPS_FILE = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

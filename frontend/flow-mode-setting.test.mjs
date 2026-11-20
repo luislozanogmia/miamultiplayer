@@ -38,7 +38,7 @@ test('turned on in Settings, the button is there and glows gold until Flow is fi
   assert.ok(page.body.has('flow-mode-on') && !page.entry.has('fresh'));
   page.context.flowSet(false);
   assert.equal(page.body.has('flow-mode-on'), false);
-  assert.match(css, /\.ai-mode-entry\.fresh\{[^}]*var\(--mia-gold\)[^}]*animation:workspace-invite-glow/, 'the same glow as a new invite');
+  assert.match(css, /\.ai-mode-entry\.fresh \.workspace-rail-mark\{[^}]*var\(--mia-gold\)[^}]*animation:workspace-invite-glow/, 'the same glow as a new invite');
 });
 
 test('the intro never plays by itself, and not at all while Flow mode is off', () => {
@@ -59,6 +59,14 @@ test('Settings has the switch, and offers the intro only once Flow mode is on', 
 test('Flow Tandem keeps its own button, whatever the Flow mode setting', () => {
   assert.match(html, /id="flowTandemEntry" data-flow-tandem-start/);
   assert.doesNotMatch(css, /flow-mode-on[^{]*#flowTandemEntry/);
+});
+
+test('Flow mode and Flow Tandem are preview icons in the rail, above the account', () => {
+  const rail = html.slice(html.indexOf('<nav class="workspace-rail"'), html.indexOf('</nav>', html.indexOf('<nav class="workspace-rail"')));
+  for (const id of ['aiModeEntry', 'flowTandemEntry']) assert.match(rail, new RegExp('class="workspace-rail-tile workspace-rail-util ai-mode-entry" id="' + id + '"'));
+  assert.ok(rail.indexOf('id="flowTandemEntry"') < rail.indexOf('id="chatAcctBtn"'));
+  assert.equal((rail.match(/ai-mode-entry-tag">Preview</g) || []).length, 2);
+  assert.doesNotMatch(html.slice(html.indexOf('</nav>', html.indexOf('<nav class="workspace-rail"'))), /id="(aiModeEntry|flowTandemEntry)"/, 'no longer rows in the sidebar');
 });
 
 test('leaving Flow Tandem puts the stage away at once, so the Flow welcome never flashes over the app', async () => {

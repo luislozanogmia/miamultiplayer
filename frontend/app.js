@@ -4068,6 +4068,13 @@
     '</div>';
   }
 
+  // The hex color a bot shows right now, saved or worked out from its name.
+  function frozenAgentAvatarColor(a){
+    var saved = normalizeAgentAvatarColor(a && a.avatarColor) || agentAvatarColorFor(a && a.name, a && (a.isBuiltin ? a.agentId : a.id));
+    if(saved) return saved;
+    var hue = MOTE_COLOR_PALETTE[moteColorSlotFor(a && a.name)];
+    return newSetupBotColor(function(){ return (Math.round(hue) + 0.5) / 360; });
+  }
   function renderStyledAgentEditColorControls(){
     var options = el('#styledAgentEditColorOptions');
     if(!options) return;
@@ -4101,9 +4108,13 @@
     });
     var colors = el('#styledAgentEditColorOptions', pane);
     if(name) name.addEventListener('input', function(e){
+      var a = findBenchAgent(editState.agentId);
+      // An automatic color comes from the name, so renaming would repaint the
+      // bot on every keystroke. Keep the color it has now: a rename is still
+      // the same bot.
+      if(a && !normalizeAgentAvatarColor(editState.avatarColor)) editState.avatarColor = frozenAgentAvatarColor(a);
       editState.name = e.target.value;
       var avatar = el('#styledAgentEditAvatar', pane);
-      var a = findBenchAgent(editState.agentId);
       if(avatar && a) avatar.innerHTML = agentAvatarHtml(editState.name || a.name, a.isBuiltin ? a.agentId : a.id, 42, null, editState.avatarColor);
     });
     if(instructions) instructions.addEventListener('input', function(e){ editState.instructions = e.target.value; });
@@ -5878,7 +5889,7 @@
     chatWs.activeRoomId=null;chatWs.activeKind=null;chatWs.activeLabel='';
     chatWs.nativeConversations=[];
     chatWs.native=false; chatWs.allAgents=[]; chatWs.humans=[];
-    hubChat.companyBots=[];
+    hubChat.companyBots=[]; hubChat.marketBots=[]; hubChat.companyBotResults=null;
     var teamBots=loadTeamBotChats();
     return loadHubTeams(false).then(refreshHubChannels).then(function(){ loadCompanyBots(); return teamBots; }).then(function(){
       hubChat.error='';hubChat.errorIsConnection=false;hubChat.retryWait=0;clearTimeout(hubChat.retryTimer);
@@ -5925,42 +5936,39 @@
     if(!hubChat.retryTimer || !hubWorkspace())return;
     clearTimeout(hubChat.retryTimer);hubChat.retryTimer=null;initHubChat();
   });
+  // One line at the foot of the sidebar says whether this Mia is connected:
+  // a green dot and Online, or a red dot and Offline while the company can't
+  // be reached. A refusal reconnecting won't fix says why, in red.
   function renderHubStatus(){
-    renderOfflinePill();
-    var footer=el('#chatSyncFooter');
+    var footer=el('#chatSyncFooter'), dot=el('#chatSyncDot');
     if(!footer)return;
-    var typing=hubChat.typing.filter(function(entry){return entry.channel_id===chatWs.activeRoomId;}).map(function(entry){return displayNameForEmail(entry.email);});
-    // Connection trouble is the Offline pill's to show; the line keeps quiet
-    // and red text is left for refusals reconnecting won't fix.
-    var connection=hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
-    footer.style.display='block';
+    var offline=browserOffline() || hubConnectionTrouble(), refusal=hubChat.error && !hubChat.errorIsConnection ? hubChat.error : '';
+    footer.style.display='';
     footer.setAttribute('role','status');
     footer.setAttribute('aria-live','polite');
-    footer.textContent=refusal || (connection ? '' : typing.length ? typing.join(', ')+(typing.length>1?' are':' is')+' typing…' : 'Connected to company');
-    footer.classList.toggle('chat-sync-fail',!!refusal || (!connection && chatWs.configured===false));
+    footer.textContent=refusal || (offline ? 'Offline' : 'Online');
+    footer.classList.toggle('chat-sync-fail',!!refusal || offline);
+    if(dot){dot.classList.toggle('offline',!!refusal || offline);dot.classList.remove('connecting');}
   }
-  // Offline, the way Google Calendar shows it: a small dark pill in the
-  // corner, gone by itself when the connection is back. × hides it until
-  // the next time the connection drops.
-  var offlinePill={dismissed:false};
+  function browserOffline(){
+    return typeof navigator!=='undefined' && navigator.onLine===false;
+  }
   function hubConnectionTrouble(){
     return hubWorkspace() && (hubChat.feedStatus==='offline' || !!(hubChat.error && hubChat.errorIsConnection));
   }
-  function renderOfflinePill(){
-    var offline=navigator.onLine===false || hubConnectionTrouble();
-    if(!offline)offlinePill.dismissed=false;
-    var pill=document.getElementById('miaOfflinePill');
-    if(!offline || offlinePill.dismissed){ if(pill)pill.hidden=true; return; }
-    if(!pill){
-      pill=document.createElement('div'); pill.id='miaOfflinePill'; pill.className='mia-offline-pill'; pill.setAttribute('role','status');
-      pill.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M8.5 8.6A5 5 0 0 0 6.5 18H17"/><path d="M10.2 6.2A6 6 0 0 1 18.4 11 3.5 3.5 0 0 1 20.6 16.9"/></svg><span>Offline</span><button type="button" aria-label="Hide" title="Hide">&times;</button>';
-      pill.querySelector('button').addEventListener('click',function(){ offlinePill.dismissed=true; pill.hidden=true; });
-      document.body.appendChild(pill);
-    }
-    pill.hidden=false;
+  function renderSoloSyncLine(){
+    var dot=el('#chatSyncDot'), footer=el('#chatSyncFooter');
+    var fail=chatWs.configured===false, offline=!fail && browserOffline();
+    if(dot){dot.classList.toggle('offline',fail || offline);dot.classList.toggle('connecting',!fail && !offline && chatWs.configured!==true);}
+    if(!footer)return;
+    footer.style.display='';
+    footer.setAttribute('role','status');footer.setAttribute('aria-live','polite');
+    footer.textContent=fail ? 'Chat Failure' : offline ? 'Offline' : chatWs.configured===true ? 'Online' : 'Connecting…';
+    footer.classList.toggle('chat-sync-fail',fail || offline);
   }
-  window.addEventListener('offline',renderOfflinePill);
-  window.addEventListener('online',renderOfflinePill);
+  function refreshSyncLine(){ if(hubWorkspace())renderHubStatus(); else renderSoloSyncLine(); }
+  window.addEventListener('offline',refreshSyncLine);
+  window.addEventListener('online',refreshSyncLine);
   function renderHubSidebar(){
     var pinned=el('#chatPinned'), all=el('#chatAllConversations');
     var pinnedChannels=hubChat.channels.filter(function(channel){return !!channel.pinned;});
@@ -6141,9 +6149,12 @@
   // The same bot can be added to several channels; the Hub lists it per
   // channel, so it shows once here, by name, with the channels it is in.
   function companyBotsFromChannels(results){
-    var byKey={},list=[];
+    var byKey={},list=[],current={};
+    marketBotRecords().forEach(function(bot){ current[bot.id]=bot; });
     results.forEach(function(result){
       (result.bots||[]).forEach(function(bot){
+        var now=bot && bot.id && current[String(bot.id)];
+        if(now)bot=Object.assign({},bot,{name:now.name,avatar_color:now.avatarColor||bot.avatar_color});
         if(!bot.published || !bot.name)return;
         var key=String(bot.name).toLowerCase(), entry=byKey[key];
         if(!entry){ entry=byKey[key]={key:key,name:bot.name,avatarColor:normalizeAgentAvatarColor(bot.avatar_color),botIds:[],channels:[],places:[]}; list.push(entry); }
@@ -6162,6 +6173,7 @@
       if(workspace!==activeWorkspaceKey || request!==hubChat.companyBotsRequest)return;
       // The Hub decides who sees which bot: everyone by default, unless an
       // admin limits it. The sidebar shows exactly what it returns.
+      hubChat.companyBotResults=results;
       hubChat.companyBots=companyBotsFromChannels(results);
       renderChatSidebar();
     }).catch(function(){/* The sidebar keeps its last list; the next team open retries. */});
@@ -11843,6 +11855,139 @@
     });
   }
 
+  // ---------- Bot copies ----------
+  // A bot's copies report through /api/bot-copies; the side panel shows each
+  // one with the bot's mote and its number (1, 2, 3), and opens by itself
+  // while a copy is working.
+  var botCopies = {key:'', list:[], known:{}, expanded:{}, timer:null, ticker:null};
+  function activeBotForCopies(){
+    if(chatWs.activeKind !== 'agent' || !chatWs.activeRoomId) return null;
+    var agent = (chatWs.allAgents || []).filter(function(a){ return a.roomId === chatWs.activeRoomId || a.nativeConversationId === chatWs.activeRoomId || a.name === chatWs.activeLabel; })[0];
+    var name = chatWs.activeLabel || (agent && agent.name) || '';
+    if(!name || isMiaOrchestrator(name, agent && agent.id)) return null;
+    return {id: agent && agent.id || '', name: name, color: normalizeAgentAvatarColor(agent && agent.avatarColor) || agentAvatarColorFor(name, agent && agent.id)};
+  }
+  function botCopiesKey(bot){ return bot ? bot.id + '|' + bot.name : ''; }
+  function activeBotHasWorkingCopies(){
+    var bot = activeBotForCopies();
+    if(!bot || botCopies.key !== botCopiesKey(bot)) return false;
+    return botCopies.list.some(function(copy){ return copy.state === 'working'; });
+  }
+  function copyElapsedText(copy){
+    var end = copy.state === 'working' ? Date.now() : (copy.finishedAt || copy.updatedAt || Date.now());
+    var secs = Math.max(0, Math.round((end - (copy.startedAt || end)) / 1000));
+    if(secs < 60) return secs + 's';
+    var mins = Math.floor(secs / 60);
+    if(mins < 60) return mins + 'm ' + (secs % 60) + 's';
+    return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+  }
+  function copyStepText(copy){
+    if(copy.state === 'done') return 'Done';
+    if(copy.state === 'failed') return 'Stopped with an error';
+    if(copy.state === 'stopped') return 'Stopped';
+    if(!copy.step) return 'Starting';
+    return 'step ' + copy.step + (copy.totalSteps ? ' of ' + copy.totalSteps : '');
+  }
+  function detailsCopiesHtml(){
+    var bot = activeBotForCopies();
+    if(!bot || botCopies.key !== botCopiesKey(bot) || !botCopies.list.length) return '';
+    var working = botCopies.list.filter(function(copy){ return copy.state === 'working'; }).length;
+    var filter = moteColorFilterFor(bot.name, bot.color);
+    var rows = botCopies.list.map(function(copy){
+      var live = copy.state === 'working';
+      var pct = copy.state === 'done' ? 100 : (copy.totalSteps ? Math.min(100, Math.round(copy.step / copy.totalSteps * 100)) : 0);
+      var pill = live ? (copy.quiet ? 'Quiet' : 'Working') : copy.state === 'done' ? 'Done' : copy.state === 'failed' ? 'Error' : 'Stopped';
+      var open = !!botCopies.expanded[copy.id];
+      var steps = (copy.steps || []).map(function(step, i){
+        var cls = (copy.state === 'done' || i + 1 < copy.step) ? 'ok' : (i + 1 === copy.step && live ? 'now' : '');
+        return '<li' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(step) + '</li>';
+      }).join('');
+      return '<div class="cip-copy is-' + esc(copy.state) + (open ? ' open' : '') + '" data-copy-id="' + esc(copy.id) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '" aria-label="Copy ' + esc(String(copy.number)) + ': ' + esc(copy.title) + '">' +
+        '<span class="cip-copy-av">' + (live ? '<span class="cip-copy-halo" aria-hidden="true"></span>' : '') +
+          '<img src="' + esc(moteSrcFor(bot.name, !live)) + '" alt="" draggable="false" style="filter:' + esc(filter) + '">' +
+          '<span class="cip-copy-num">' + esc(String(copy.number)) + '</span></span>' +
+        '<span class="cip-copy-body">' +
+          '<span class="cip-copy-title"><b>' + esc(copy.title) + '</b><span class="cip-copy-pill">' + pill + '</span></span>' +
+          '<span class="cip-copy-status">' + (live && !copy.quiet ? '<span class="chat-thinking-shimmer">' + esc(copy.status || copyStepText(copy)) + '</span>' : esc(copy.status || copyStepText(copy))) + '</span>' +
+          '<span class="cip-copy-bar"><i style="width:' + pct + '%"></i></span>' +
+          '<span class="cip-copy-meta"><span>' + esc(copyStepText(copy)) + '</span><span data-copy-elapsed="' + esc(copy.id) + '">' + esc(copyElapsedText(copy)) + '</span></span>' +
+          (open ? '<span class="cip-copy-drawer">' + (steps ? '<ol>' + steps + '</ol>' : '<span class="cip-copy-note">No step list yet.</span>') +
+            (live && !copy.stopRequested ? '<button type="button" class="cip-copy-stop" data-copy-stop="' + esc(copy.id) + '">Stop</button>' : '') +
+            (live && copy.stopRequested ? '<span class="cip-copy-note">Asked to stop.</span>' : '') + '</span>' : '') +
+        '</span></div>';
+    }).join('');
+    return '<section class="cip-section cip-copies" id="cipCopies"><div class="cip-routines-head"><span class="cip-routines-title">Bot copies</span>' +
+      (working ? '<span class="cip-copies-live"><span class="cip-copies-dot" aria-hidden="true"></span>' + working + ' working</span>' : '') +
+      '</div><div class="cip-copy-list">' + rows + '</div></section>';
+  }
+  function bindDetailsCopies(pane){
+    els('[data-copy-id]', pane).forEach(function(row){
+      var toggle = function(){
+        var id = row.getAttribute('data-copy-id');
+        botCopies.expanded[id] = !botCopies.expanded[id];
+        renderChatInfoPane();
+      };
+      row.addEventListener('click', function(event){ if(!event.target.closest('[data-copy-stop]')) toggle(); });
+      row.addEventListener('keydown', function(event){ if(event.target === row && (event.key === 'Enter' || event.key === ' ')){ event.preventDefault(); toggle(); } });
+    });
+    els('[data-copy-stop]', pane).forEach(function(button){
+      button.addEventListener('click', function(event){
+        event.stopPropagation();
+        button.disabled = true;
+        api('/api/bot-copies/' + encodeURIComponent(button.getAttribute('data-copy-stop')) + '/stop', {method:'POST'}).then(loadBotCopies, loadBotCopies);
+      });
+    });
+  }
+  function loadBotCopies(){
+    var bot = activeBotForCopies();
+    if(!bot){
+      botCopies.list = [];
+      botCopies.key = '';
+      return Promise.resolve([]);
+    }
+    var key = botCopiesKey(bot);
+    return api('/api/bot-copies?bot=' + encodeURIComponent(bot.id) + '&name=' + encodeURIComponent(bot.name)).then(function(res){
+      if(key !== botCopiesKey(activeBotForCopies())) return [];
+      var next = res.status === 200 && res.data && Array.isArray(res.data.copies) ? res.data.copies : [];
+      var changed = botCopies.key !== key || JSON.stringify(botCopies.list) !== JSON.stringify(next);
+      // A copy that starts working opens the panel, even if it was closed.
+      var started = next.some(function(copy){ return copy.state === 'working' && !botCopies.known[copy.id]; });
+      next.forEach(function(copy){ botCopies.known[copy.id] = true; });
+      botCopies.key = key;
+      botCopies.list = next;
+      var paneFree = chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatInfo.mode !== 'automation-detail';
+      if(started && !chatInfo.open && paneFree && STYLED_SKIN && !isMobileChat() && isInfoPaneAvailable() && !document.body.classList.contains('browser-collab-mode')){
+        chatInfo.open = true;
+        chatInfo.mode = 'automations';
+        chatInfo.roomId = chatWs.activeRoomId;
+        renderChatInfoPane();
+        syncSidebarToolButtons();
+      } else if(changed && chatInfo.open && chatInfo.mode === 'automations' && !liveRefreshBlocked()){
+        renderChatInfoPane();
+      }
+      return next;
+    }).catch(function(){ return []; });
+  }
+  function scheduleBotCopies(){
+    if(botCopies.timer) clearTimeout(botCopies.timer);
+    var fast = botCopies.list.some(function(copy){ return copy.state === 'working'; });
+    botCopies.timer = setTimeout(function(){
+      (document.hidden ? Promise.resolve() : loadBotCopies()).then(scheduleBotCopies, scheduleBotCopies);
+    }, fast ? 3000 : 8000);
+  }
+  // Started by the first room that opens, not when the script loads.
+  function startBotCopiesWatch(){
+    if(botCopies.ticker) return;
+    botCopies.ticker = setInterval(function(){
+      botCopies.list.forEach(function(copy){
+        if(copy.state !== 'working') return;
+        var node = document.querySelector('[data-copy-elapsed="' + copy.id + '"]');
+        if(node) node.textContent = copyElapsedText(copy);
+      });
+    }, 1000);
+    scheduleBotCopies();
+  }
+
   function activeAutomationRunsForPanel(isMia, agent){
     var runs = chatWs.automationRuns || [];
     if(isMia) return runs;
@@ -12972,8 +13117,16 @@
   // Who a bot's message is from. A message saves the bot's name as it was when sent, so
   // its sender ID finds the bot as it is now. A bot that no longer exists keeps its saved
   // name. Mia's replies are left as they are: her name depends on the conversation.
+  // A company bot's current name and color come from the company's bot list;
+  // the per-channel list can still carry the name it was first added under.
+  function marketBotRecords(){
+    var bots = typeof hubChat !== 'undefined' && Array.isArray(hubChat.marketBots) ? hubChat.marketBots : [];
+    return bots.filter(function(bot){ return bot && bot.id && bot.name; }).map(function(bot){
+      return {id: String(bot.id), name: bot.name, avatarColor: normalizeAgentAvatarColor(bot.avatar_color)};
+    });
+  }
   function messageBotRecords(){
-    var lists = [chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
+    var lists = [marketBotRecords(), chatWs.allAgents, typeof benchAgents !== 'undefined' ? benchAgents : null, chatWs.myBotRecords, typeof hubChat !== 'undefined' ? hubChat.companyBots : null];
     return lists.reduce(function(all, list){ return Array.isArray(list) ? all.concat(list) : all; }, []);
   }
   function messageBotIdentity(m){
@@ -13835,8 +13988,9 @@
   function chatMsgHtml(m, grouped, opts){
     opts = opts || {};
     if(m.system){
-      // A site's notification: its own icon with Mia's dot, never an emoji.
-      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m);
+      // A site's notification is a message from the site: its own icon with
+      // Mia's dot, never an emoji, and it can be replied to in a thread.
+      if(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) return window.MiaSiteNotices.noticeHtml(m, {inThread: !!opts.inThread, direct: isDirectChatRoom(), timeText: chatRelTime(m.ts), footerHtml: opts.footerHtml});
       // A row from when bringing a bot was a request an admin answered.
       if(m.hubBotRequest && hubWorkspace()){
         return '<div class="chat-msg-system"><p>' + esc(displayNameForEmail(m.hubBotRequest.requester_email)) + (m.hubBotRequest.status === 'accepted' ? ' added ' : ' asked to add ') + esc(m.hubBotRequest.name) + '.</p></div>';
@@ -14807,12 +14961,15 @@
     var prevHumanKey = null;
     var html = mainMessages.map(function(m){
       if(m.steps) return chatStepsHtml(m);
-      if(m.siteNotices){ prevHumanKey = null; return window.MiaSiteNotices.groupHtml(m); }
+      if(m.siteNotices){
+        prevHumanKey = null;
+        return window.MiaSiteNotices.groupHtml(m, {direct: isDirectChatRoom(), footerFor: function(item){ return chatThreadFooterHtml(state, item.id); }});
+      }
       var isHuman = !m.system && isHumanSender(m.sender);
       var key = isHuman ? chatHumanSenderKey(m) : null;
       var grouped = key !== null && key === prevHumanKey;
       prevHumanKey = key;
-      var footerHtml = m.system ? '' : chatThreadFooterHtml(state, m.id);
+      var footerHtml = m.system && !(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) ? '' : chatThreadFooterHtml(state, m.id);
       footerHtml = miaOnboardingChoicesHtml(m, state) + footerHtml;
       return chatMsgHtml(m, grouped, {footerHtml: footerHtml});
     }).join('');
@@ -16268,6 +16425,7 @@
     var me = hubChat.membership && hubChat.membership.clerk_user_id;
     return hubCall('GET', '/v1/teams/' + teamId + '/market/bots').then(function(result){
       var bots = (result.bots || []).filter(function(bot){ return bot && !bot.archived_at; });
+      if(activeWorkspaceKey === 'hub:' + teamId) showMarketBotNames(bots);
       return shareMarketFolders(teamId, bots).then(function(){ return linkSharedBots(teamId, bots); }).then(function(){
         var copies = (chatWs.botRecords || []).filter(function(bot){ return bot && bot.marketSource && bot.marketSource.teamId === teamId; });
         return copies.reduce(function(done, copy){
@@ -16279,6 +16437,14 @@
         }, Promise.resolve());
       });
     }).catch(function(){ /* The next change or company open retries. */ }).then(showBotMemoryIntro);
+  }
+  // Renamed or recolored company bots show their current name and color in
+  // the sidebar and on every message they wrote, old ones included.
+  function showMarketBotNames(bots){
+    hubChat.marketBots = bots;
+    if(hubChat.companyBotResults) hubChat.companyBots = companyBotsFromChannels(hubChat.companyBotResults);
+    renderChatSidebar();
+    if(typeof renderChatThread === 'function') renderChatThread();
   }
   // Every company bot has a shared folder, where its memory lives, unless an
   // admin turned it off. A bot that never had one gets it from the first owner
@@ -16589,11 +16755,12 @@
     chatInfo.filesKey = JSON.stringify([chatWs.activeRoomId, fileRows.map(function(row){ return row.id; })]);
     pane.innerHTML = '<div class="cip-pane-head"><span class="cip-pane-title">' + esc(name) + '</span><span class="cip-pane-spacer" aria-hidden="true"></span><div class="cip-pane-actions">' +
       '<button type="button" class="cip-pane-btn" id="chatInfoClose" aria-label="Hide details" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5 7 7-7 7"></path></svg></button></div></div>' +
-      '<div class="cip-details">' + detailsFilesHtml(fileRows) +
+      '<div class="cip-details">' + detailsCopiesHtml() + detailsFilesHtml(fileRows) +
       '<section class="cip-section"><div class="cip-routines-head"><span class="cip-routines-title">Automations</span>' +
       '<button type="button" class="cip-routines-add" id="chatInfoAddRoutineTop" aria-label="Add automation">+</button></div>' +
       (running || routines ? '<div class="cip-routine-list">' + running + routines + '</div>' : '<div class="cip-section-empty">No automations yet.</div>') + '</section>' +
       detailsBotSettingsHtml(agent) + '</div>';
+    bindDetailsCopies(pane);
     bindDetailsFiles(pane, fileRows);
     bindDetailsBotSettings(pane, agent);
     var close = el('#chatInfoClose', pane);
@@ -16905,7 +17072,7 @@
     var collabMode = document.body.classList.contains('browser-collab-mode');
     var collabOverlayMode = chatInfo.mode === 'agent-edit' || chatInfo.mode === 'automation-detail';
     if(collabMode && !collabOverlayMode) chatInfo.open = false;
-    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && chatInfoOpenPreference();
+    else if(!collabMode && STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && chatWs.activeKind === 'agent') chatInfo.open = !isMobileChat() && (chatInfoOpenPreference() || (typeof activeBotHasWorkingCopies === 'function' && activeBotHasWorkingCopies()));
     if(STYLED_SKIN && chatInfo.mode !== 'plugins' && chatInfo.mode !== 'agents' && chatInfo.mode !== 'agent-edit' && !isInfoPaneAvailable()) chatInfo.open = false;
     syncSidebarToolButtons();
     // Official channels use a square initials mark. The owner's personal avatar
@@ -17640,6 +17807,7 @@
     // open thread, or none, right away rather than after its first render.
     syncChatThreadPanel();
     chatWs.activeLabel = label;
+    if(typeof startBotCopiesWatch === 'function'){ startBotCopiesWatch(); setTimeout(loadBotCopies, 0); }
     if(chatModelPicker && typeof chatModelPicker.showChatSelection === 'function') chatModelPicker.showChatSelection();
     if(roomId !== AGENT_SETUP_ROOM_ID) saveActiveChatLocation(roomId);
     rememberAgentChat(roomId);
@@ -19010,18 +19178,10 @@
     var botsWrap = el('#chatBots');
     var allWrap = el('#chatAllConversations');
     var allCountEl = el('#chatAllCount');
-    var syncDot = el('#chatSyncDot');
-    var syncFooter = el('#chatSyncFooter');
     if(!pinnedWrap || !allWrap) return;
     updateChatBackButton();
 
-    if(syncDot) syncDot.classList.toggle('offline', chatWs.configured === false);
-    if(syncFooter){
-      syncFooter.style.display='';
-      syncFooter.removeAttribute('role');syncFooter.removeAttribute('aria-live');
-      syncFooter.textContent = chatWs.configured === false ? 'Chat Failure' : (chatWs.configured === true ? 'Chat Online' : 'Connecting…');
-      syncFooter.classList.toggle('chat-sync-fail', chatWs.configured === false);
-    }
+    renderSoloSyncLine();
 
     // Official channels are represented by their own square initials mark,
     // never by the current member list. The room roster is still loaded

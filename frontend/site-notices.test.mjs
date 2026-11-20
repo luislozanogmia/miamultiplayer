@@ -13,9 +13,26 @@ test('a notification shows the site icon with Mia\'s dot and no emoji', () => {
   const html = notices.noticeHtml(notice('e1', 'Notification from web.whatsapp.com\nAna\nHola'));
   assert.match(html, /<img class="site-notice-site" src="data:image\/png;base64,iVBORw0KGgo="/);
   assert.match(html, /site-notice-pip/);
-  assert.match(html, /<b>WhatsApp<\/b> · notification from web\.whatsapp\.com/);
+  assert.match(html, /site-notice-meta">notification from web\.whatsapp\.com</);
   assert.match(html, /site-notice-title">Ana<\/span> <span class="site-notice-body">Hola/);
   assert.doesNotMatch(html, /\u{1F514}/u);
+});
+
+test('a notification is a message in the message column: icon as avatar, site as author, Notification tag, time', () => {
+  const html = notices.noticeHtml(notice('e1', 'Notification from web.whatsapp.com\nAna\nHola', { ts: 1700000000000 }), { timeText: 'just now', footerHtml: '<div class="chat-thread-pill">1 reply</div>' });
+  assert.match(html, /^<div class="chat-msg-row site-notice-row" data-event-id="e1" data-can-thread="1"/);
+  assert.doesNotMatch(html, /chat-msg-system/);
+  assert.match(html, /<span class="chat-msg-mark site-notice-mark"><span class="site-notice-icon"/);
+  assert.match(html, /<span class="chat-msg-name">WhatsApp<\/span><span class="chat-msg-tag">Notification<\/span><span class="chat-msg-time" data-ts="1700000000000">just now<\/span>/);
+  assert.match(html, /<div class="chat-msg-text site-notice-card">/);
+  assert.match(html, /<div class="chat-thread-pill">1 reply<\/div><\/div><\/div>$/);
+});
+
+test('a notification offers Reply in thread, except inside its own open thread', () => {
+  assert.match(notices.noticeHtml(notice('e1', 'Notification from web.whatsapp.com\nAna\nHola')), /data-can-thread="1" data-can-delete="" data-can-edit=""/);
+  const inThread = notices.noticeHtml(notice('e1', 'Notification from web.whatsapp.com\nAna\nHola'), { inThread: true });
+  assert.match(inThread, /class="chat-msg-row site-notice-row in-thread"/);
+  assert.match(inThread, /data-can-thread=""/);
 });
 
 test('an older row written with the bell reads the same', () => {
@@ -54,11 +71,16 @@ test('notices in a row from one site fold into one line; others stay apart', () 
   assert.equal(out[1], other);
   assert.equal(out[2].id, 'd');
   assert.equal(out[3].id, 'e');
-  const html = notices.groupHtml(out[0]);
-  assert.match(html, /<details class="chat-msg-system site-notice-group"/);
+  const html = notices.groupHtml(out[0], { footerFor: (item) => item.id === 'b' ? '<div class="chat-thread-pill">2 replies</div>' : '' });
+  assert.match(html, /^<div class="chat-msg-row site-notice-row site-notice-group-row" data-can-thread=""/);
+  assert.match(html, /<span class="chat-msg-name">WhatsApp<\/span><span class="chat-msg-tag">Notification<\/span>/);
+  assert.match(html, /<details class="chat-msg-text site-notice-card site-notice-group" data-site-notices="site-notices-a"/);
   assert.match(html, /3 new<\/span> <span class="site-notice-body">from Ana, Pat/);
   assert.match(html, /site-notice-count">3</);
-  assert.equal((html.match(/site-notice-item/g) || []).length, 3);
+  // Each notice in the fold is its own row the message menu can reply to.
+  const rows = [...html.matchAll(/<div class="chat-msg-row site-notice-item" data-event-id="(\w+)" data-can-thread="1"/g)].map((m) => m[1]);
+  assert.deepEqual(rows, ['a', 'b', 'c']);
+  assert.match(html, /data-event-id="b"[^]*?<div class="chat-thread-pill">2 replies<\/div><\/div><div class="chat-msg-row site-notice-item" data-event-id="c"/);
 });
 
 test('"Stopped by you" gets the stop square, with or without the old emoji', () => {

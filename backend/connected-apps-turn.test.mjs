@@ -53,19 +53,25 @@ test('Mia and bots select current capability profiles independently of wording a
   const source = readFileSync(new URL('./server.js', import.meta.url), 'utf8');
   const begin = source.indexOf('  const googleProfileAuthorized =');
   const end = source.indexOf('  const googleWorkspaceWriteAuthorized', begin);
+  const { botProfileFor } = require('./hermes-bot-profile');
   for (const message of ['Triage my inbox', 'Do it', 'Read those messages', 'Clasifica mis correos']) {
     for (const enabled of [true, false]) {
+      // The owner's MCP apps come only with the owner's own turn (botMcpAppsFor).
+      for (const ownsApps of [true, false]) {
       const context = { message, connectionInventory: { googleToolsEnabled: enabled, revision: enabled ? 'new-grant' : 'disconnected' },
         googleWorkspaceConnected: enabled, googleToolRequested: false,
         googleAccountOwnerBinding: { connectorFor: () => enabled ? {} : null }, senderLabel: base.ownerEmail,
-        workspaceConnection: { connectionRevision: 'new-grant' },
-        MIAOS_AGENT_GOOGLE_HERMES_PROFILE: 'google-agent', MIAOS_AGENT_HERMES_PROFILE: 'ordinary-agent',
-        MIAOS_BOT_GOOGLE_HERMES_PROFILE: 'google-bot', MIAOS_BOT_HERMES_PROFILE: 'ordinary-bot' };
+        workspaceConnection: { connectionRevision: 'new-grant' }, isGatewayAgent: false, agent: { id: 'bot' },
+        botMcpAppsFor: () => ownsApps ? { available: true, apps: [{ name: 'Attio', ready: true }] } : { available: false, apps: [] },
+        botProfileFor,
+        MIAOS_AGENT_GOOGLE_HERMES_PROFILE: 'google-agent', MIAOS_AGENT_HERMES_PROFILE: 'ordinary-agent' };
       vm.runInNewContext(source.slice(begin, end) + '\nthis.result = { googleProfileAuthorized, googleGatewayProfile, googleGatewaySessionKey, googleBotProfile };', context);
       assert.equal(!!context.result.googleProfileAuthorized, enabled, message);
-      assert.equal(context.result.googleBotProfile, enabled ? 'google-bot' : 'ordinary-bot');
+      assert.equal(context.result.googleBotProfile, botProfileFor({ google: enabled, apps: ownsApps }));
+      assert.equal(/apps/.test(context.result.googleBotProfile), ownsApps);
       assert.equal(context.result.googleGatewayProfile, enabled ? 'google-agent' : 'ordinary-agent');
       assert.match(context.result.googleGatewaySessionKey, enabled ? /new-grant/ : /disconnected/);
+      }
     }
   }
 });

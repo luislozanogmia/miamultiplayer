@@ -1361,3 +1361,33 @@ test('Run now starts a long run and answers at once instead of waiting for it to
     fs.writeFileSync(jobsFile, before);
   }
 });
+
+// The owner's MCP apps in scheduled runs: only jobs of the owner's bots get
+// them. Hermes adds every configured MCP server to a job that names none, so
+// any other bot's job says no_mcp.
+test('only the owner\'s bots\' scheduled jobs get the owner\'s MCP apps', async () => {
+  try {
+    cronSync.setScheduledMcpAppsPolicy({
+      ownerOwnsApps: (bot) => bot.owner === 'owner@example.com',
+      servers: () => ({ u_attio: { url: 'https://mcp.attio.com/mcp', auth: 'oauth' } }),
+      serverPrefix: 'u_',
+    });
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'owner@example.com' }), cronSync.scheduledBotToolsets());
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'teammate@example.com' }), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
+    // The home config's apps are replaced as a set: a removed app leaves it.
+    const lines = cronSync.CRON_GUARD_SCRIPT.split('\n');
+    const start = lines.findIndex((line) => line.startsWith('ap='));
+    const snippet = ['import json,sys', 'cfg={}', 'm={"google":{"command":"g"},"u_asana":{"url":"https://old"}}',
+      ...lines.slice(start, lines.findIndex((line, index) => index > start && line === 'save_config(cfg)')), 'print(json.dumps(cfg["mcp_servers"],sort_keys=True))'].join('\n');
+    const { spawnSync } = await import('node:child_process');
+    const run = spawnSync('python3', ['-I', '-c', snippet, '', '', '', JSON.stringify({ u_attio: { url: 'https://mcp.attio.com/mcp' } }), 'u_'], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout), { google: { command: 'g' }, u_attio: { url: 'https://mcp.attio.com/mcp' } });
+    // No prefix (no policy yet): the apps are left as they are.
+    const untouched = spawnSync('python3', ['-I', '-c', snippet, '', '', '', '', ''], { encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(untouched.stdout), { google: { command: 'g' }, u_asana: { url: 'https://old' } });
+  } finally {
+    cronSync.setScheduledMcpAppsPolicy(null);
+  }
+  assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'teammate@example.com' }), cronSync.scheduledBotToolsets());
+});

@@ -6,7 +6,9 @@
 // address, or an npx/uvx package), how you sign in, and its logo. No key is
 // ever stored here: a key you paste in Connected apps goes to Hermes's own
 // environment, and the config only names it (${MIA_MCP_<NAME>_KEY}).
-// They reach Mia's own agent; bots get none of them.
+// They reach Mia's own agent, and a bot's turn only when the person who
+// added them (the installation owner) is the one asking (hermes-bot-profile.js
+// bot "apps" profiles; cron-sync.js for scheduled runs).
 
 const fs = require('fs');
 const path = require('path');
@@ -206,6 +208,35 @@ function hermesMcpServerLines(apps) {
   return lines;
 }
 
+// The same servers as objects, for scheduled runs, which read them from the
+// Hermes home's config.yaml (cron-sync.js). Keys and OAuth clients stay
+// ${NAME} references that Hermes fills from its .env; no secret is here.
+function hermesMcpServerObjects(apps) {
+  const servers = {};
+  for (const app of apps || []) {
+    const server = {};
+    if (app.url) {
+      server.url = app.url;
+      if (app.auth === 'oauth') server.auth = 'oauth';
+      if (app.auth === 'oauth' && app.oauthClient) {
+        const names = oauthClientEnvNames(app.id);
+        const { redirectPort } = cleanOAuthClient(app.oauthClient);
+        server.oauth = { client_id: `\${${names.clientId}}`, client_secret: `\${${names.clientSecret}}`,
+          redirect_port: redirectPort, token_endpoint_auth_method: 'client_secret_post', cimd: false };
+      }
+      if (app.auth === 'key') server.headers = { [app.keyHeader]: `${app.keyPrefix || ''}\${${keyEnvName(app.id)}}` };
+    } else {
+      server.command = app.runner;
+      server.args = [...(app.runner === 'npx' ? ['-y'] : []), app.package, ...app.args];
+      if (app.auth === 'key') server.env = { [app.keyEnv]: `\${${keyEnvName(app.id)}}` };
+    }
+    servers[serverName(app.id)] = server;
+  }
+  return servers;
+}
+// Every app server name starts with this, so a removed app's entry can be found.
+const SERVER_PREFIX = 'u_';
+
 // What the app shows: the record without anything that could carry a secret.
 // For an oauth app, signIn says where its sign-in stands (mcp-app-sign-in.js):
 // { signedIn, state } with state 'starting' | 'waiting' | 'error' | null.
@@ -309,11 +340,40 @@ function setProfileOAuthClient(envPath, id, credentials) {
   }
 }
 
+// A profile added later (the bots' apps profiles, the Hermes home for
+// scheduled runs) gets the key and OAuth client the first profile already
+// holds, so nobody pastes them again. Only fills what is missing; never logs
+// or returns a value. -> number of files changed.
+function copyMissingProfileSecrets(sourceEnv, targetEnvs, apps) {
+  let changed = 0;
+  for (const app of apps || []) {
+    for (const target of targetEnvs || []) {
+      if (target === sourceEnv) continue;
+      if (app.auth === 'key') {
+        const name = keyEnvName(app.id);
+        const value = readProfileKey(sourceEnv, name);
+        if (value && !hasProfileKey(target, name)) { setProfileKey(target, name, value); changed += 1; }
+      }
+      if (app.auth === 'oauth' && hasProfileOAuthClient(sourceEnv, app.id) && !hasProfileOAuthClient(target, app.id)) {
+        const names = oauthClientEnvNames(app.id);
+        const read = (name) => {
+          const matcher = oauthEnvAssignment(name);
+          const line = fs.readFileSync(sourceEnv, 'utf8').split('\n').find((item) => matcher.test(item)) || '';
+          return line.replace(matcher, '').replace(/\r$/, '');
+        };
+        setProfileOAuthClient(target, app.id, { clientId: read(names.clientId), clientSecret: read(names.clientSecret) });
+        changed += 1;
+      }
+    }
+  }
+  return changed;
+}
+
 const defaultStore = createMcpAppsStore();
 
 module.exports = {
   McpAppError, cleanMcpApp, createMcpAppsStore, defaultMcpAppsFile, defaultStore,
-  hermesMcpServerLines, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, readProfileKey,
+  hermesMcpServerLines, hermesMcpServerObjects, SERVER_PREFIX, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, readProfileKey,
   builtInMcpApps, builtInMcpApp, MAX_LOGO_BYTES,
-  requiresOAuthClient, oauthClientEnvNames, hasProfileOAuthClient, setProfileOAuthClient, validateOAuthClientCredentials,
+  requiresOAuthClient, oauthClientEnvNames, hasProfileOAuthClient, copyMissingProfileSecrets, setProfileOAuthClient, validateOAuthClientCredentials,
 };
