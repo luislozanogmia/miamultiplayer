@@ -9,6 +9,9 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Added
+- Each step of a team workflow can name the model its bot runs on. A model icon sits beside the step's bot and owner, and the step editor uses the composer's model picker. When the owner has not connected that model, their default model runs the step. Needs the matching Hub update.
+
 ### Changed
 - An automation's model is chosen with the same picker as the chat composer, in the bot's automation editor and under the schedule on the Automations page, where a pick saves at once. Its "Bot's model" row returns the automation to the bot's model.
 

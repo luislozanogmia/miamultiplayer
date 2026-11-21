@@ -38,6 +38,14 @@ const TYPES = {'.pdf':'application/pdf','.txt':'text/plain','.md':'text/markdown
 function failure(status,code) { return Object.assign(new Error(code),{status,code}); }
 // What the bot's reply means for the team. The block is read by the shared report
 // code; anything in it that looks like a credential goes to the owner, not the team.
+// The model a work order names for its step, or null for the owner's default.
+// Whether it is connected on this computer is checked when the bot runs.
+function stepModel(model) {
+  if(!model || typeof model!=='object') return null;
+  const provider=typeof model.provider==='string' ? model.provider : '', id=typeof model.model==='string' ? model.model : '';
+  if(!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(provider) || !id || id.length>128 || !/^[a-z0-9][a-z0-9._\/\[\]-]*$/i.test(id)) return null;
+  return {provider,model:id};
+}
 function readOutcome(reply) {
   const read=stepReport.readReply(reply);
   if(read.report && stepReport.FIELDS.some(field=>looksLikeSecret(read.report[field])))
@@ -454,7 +462,7 @@ function createHubWorkflowClient({db,dataDirectory,isOwnerActive,getAccountIdent
         trigger:{author_email:s.email,body:stepPrompt(order,input.inputs,filesSupported?outbox:null)},
         // Only the step's own text may name Google files to open, never a teammate's note.
         contextText:order.text,history:[],channel:{teamId:s.teamId,channelId},
-        signal:controller.signal,modelSelection:null});
+        signal:controller.signal,modelSelection:stepModel(order.model),modelFallback:true});
       if(!controller.signal.aborted) read=readOutcome(typeof reply==='string'?reply:reply && reply.text);
       if(read && read.kind==='send' && read.outcome==='done') files=await shareOutputs(s,order,outbox,token,controller.signal);
     } catch {
@@ -664,4 +672,4 @@ function createHubWorkflowRouter(options) {
   router.post('/resume',handle(req=>client.resume(req.userEmail,req.body,req.get('x-hub-token'))));
   return router;
 }
-module.exports={createHubWorkflowClient,createHubWorkflowRouter,readOutcome,oneLine,stepPrompt,acceptKey};
+module.exports={createHubWorkflowClient,createHubWorkflowRouter,readOutcome,oneLine,stepPrompt,acceptKey,stepModel};

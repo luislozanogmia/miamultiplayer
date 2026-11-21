@@ -6931,6 +6931,7 @@
         if(changed)renderHubStatus();
       }});
     if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.attach({teamId:workspace.slice(4),call:hubCall,confirm:appConfirm,toast:showToast,
+      mountModelPicker:mountWorkflowStepModelPicker,modelLabel:automationModelLabel,
       subject:function(){return hubChat.membership && hubChat.membership.clerk_user_id;},
       isAdmin:function(){return !!(hubChat.membership && hubChat.membership.role==='admin');},
       showPage:function(){ if(!automationsPage.open)runToolsAction('automations'); },
@@ -11805,9 +11806,10 @@
     return label.replace(/^GPT (\d)/, 'GPT-$1');
   }
 
-  function mountAutomationModelPicker(slot, input, bot, automation, onChange){
+  // A copy of the composer's picker markup, placed in slot.
+  function cloneModelPickerInto(slot, ariaLabel){
     var source = el('#ccModelSelect');
-    if(!slot || (!input && !onChange) || !source) return null;
+    if(!slot || !source) return null;
     var root = source.cloneNode(true);
     root.removeAttribute('id');
     els('[id]', root).forEach(function(node){ node.removeAttribute('id'); });
@@ -11816,8 +11818,32 @@
     var menu = root.querySelector('.cc-model-menu');
     if(menu) menu.classList.remove('open');
     var button = root.querySelector('.cc-model-btn');
-    if(button) button.setAttribute('aria-label', 'Choose the automation\'s model');
+    if(button) button.setAttribute('aria-label', ariaLabel);
     slot.appendChild(root);
+    return root;
+  }
+
+  // A team workflow step's model: the same picker, with "Owner's default"
+  // clearing it. The owner's Mia falls back to their default when the chosen
+  // model is not connected there, so a model this computer lacks still saves.
+  function mountWorkflowStepModelPicker(slot, initial, onSelect){
+    var root = cloneModelPickerInto(slot, 'Choose this step\'s model');
+    if(!root) return null;
+    return mountChatModelPicker(root, sharedInventoryModelPickerState(), {
+      initial: initial || null,
+      defaultChoice: {label: 'Owner\'s default', meta: ''},
+      emptyLabel: function(committed){
+        if(!committed) return 'Owner\'s default';
+        return automationModelLabel(committed.provider, committed.model);
+      },
+      onSelect: function(choice){ onSelect(choice || null); }
+    });
+  }
+
+  function mountAutomationModelPicker(slot, input, bot, automation, onChange){
+    if(!slot || (!input && !onChange)) return null;
+    var root = cloneModelPickerInto(slot, 'Choose the automation\'s model');
+    if(!root) return null;
     var botProvider = String(bot && bot.modelProvider || '');
     var botModel = String(bot && bot.model || '');
     function botLabel(){

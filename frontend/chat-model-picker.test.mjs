@@ -233,8 +233,12 @@ test('an automation picks its model with the composer picker, not a separate con
   // "provider|model" hidden value the save path reads.
   assert.doesNotMatch(appSource, /<select id="automationEditModel">/);
   assert.match(appSource, /<input type="hidden" id="automationEditModel" value="' \+ esc\(currentModel\) \+ '">/);
-  assert.match(appSource, /function mountAutomationModelPicker\(slot, input, bot, automation, onChange\)\{\s*var source = el\('#ccModelSelect'\);/);
+  assert.match(appSource, /function cloneModelPickerInto\(slot, ariaLabel\)\{\s*var source = el\('#ccModelSelect'\);/);
   assert.match(appSource, /var root = source\.cloneNode\(true\);/);
+  assert.match(appSource, /function mountAutomationModelPicker\(slot, input, bot, automation, onChange\)\{[\s\S]*?var root = cloneModelPickerInto\(slot, 'Choose the automation\\'s model'\);/);
+  // A team workflow step uses the same picker, with "Owner's default" clearing it.
+  assert.match(appSource, /function mountWorkflowStepModelPicker\(slot, initial, onSelect\)\{\s*var root = cloneModelPickerInto\(slot, 'Choose this step\\'s model'\);/);
+  assert.match(appSource, /mountModelPicker:mountWorkflowStepModelPicker,modelLabel:automationModelLabel,/);
   assert.match(appSource, /mountChatModelPicker\(root, sharedInventoryModelPickerState\(\), \{/);
   assert.match(appSource, /if\(input\) input\.value = choice \? choice\.provider \+ '\|' \+ choice\.model : '';/);
   // The Automations page shows the same picker under the schedule; a pick saves.

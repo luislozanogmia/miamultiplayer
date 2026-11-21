@@ -204,3 +204,17 @@ test('resume sends the person\'s answer and looks again', async () => {
   assert.ok(posts.some(p => p[0] === '/workflow/poll'));
   assert.deepEqual(Object.keys(posts[0][1]).sort(), ['action', 'n', 'runId', 'teamId']);
 });
+
+test('a step keeps its model through the draft and back; a bad or missing model means the owner\'s default', () => {
+  const model = { provider: 'anthropic', model: 'claude-sonnet-5-5' };
+  const step = extra => ({ text: 'Draft it', botId: ID(2), ownerMemberId: 'u1', approverMemberId: '', ...extra });
+  assert.equal(wf.blankStep().model, null);
+  assert.deepEqual(wf.checkDraft(draft({ steps: [step({ model })] })).definition.steps[0], { text: 'Draft it', botId: ID(2), ownerMemberId: 'u1', model });
+  assert.equal('model' in wf.checkDraft(draft({ steps: [step({ model: null })] })).definition.steps[0], false);
+  for (const bad of ['claude', { provider: 'an thropic', model: 'x' }, { provider: 'anthropic', model: '../x' }, { provider: 'anthropic', model: 'x'.repeat(129) }]) {
+    assert.equal(wf.stepModel(bad), null, JSON.stringify(bad));
+  }
+  assert.deepEqual(wf.stepModel({ provider: 'openrouter', model: 'openai/gpt-5.1', extra: 1 }), { provider: 'openrouter', model: 'openai/gpt-5.1' });
+  const back = wf.draftFromWorkflow({ id: ID(3), name: 'Flow', channel_id: ID(1), definition: { trigger: { kind: 'flag', label: 'L', starters: ['u1'] }, steps: [step({ model }), step()] } });
+  assert.deepEqual(back.steps.map(s => s.model), [model, null]);
+});

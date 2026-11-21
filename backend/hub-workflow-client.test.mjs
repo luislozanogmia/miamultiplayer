@@ -6,7 +6,7 @@ import {existsSync,mkdtempSync,readdirSync,readFileSync,writeFileSync} from 'nod
 import {tmpdir} from 'node:os';
 import {basename,dirname,join} from 'node:path';
 const require=createRequire(import.meta.url),Database=require('better-sqlite3');
-const {createHubWorkflowClient,readOutcome,oneLine,stepPrompt,acceptKey}=require('./hub-workflow-client');
+const {createHubWorkflowClient,readOutcome,oneLine,stepPrompt,acceptKey,stepModel}=require('./hub-workflow-client');
 // Every Hub answer here is a stub. Nothing in this file talks to a real Hub or to S3.
 const owner='local-user@localhost',teamId='a'.repeat(32),runId='b'.repeat(32),channelId='c'.repeat(32),botId='d'.repeat(32),spaceId='e'.repeat(32),fileId='f'.repeat(32);
 const ident={subject:'user_owner',email:'owner@example.test',issuer:'https://clerk.miamultiplayer.com'};
@@ -32,7 +32,7 @@ function fixture(t,{interrupted=false,previous=[],reply='Worked hard.\n'+block()
   const hub={claims:[],progress:[],reports:[],uploads:[],puts:[],scans:0,runs:[],stepState:'queued',detailReads:0,definitionReads:0,summary,botVersion,
     stepRow:{runId,n:stepN,workflowName:'Quote flow',text:'Draft the quote',botId,botName:'Drafter',state:'queued',attempt:1,interrupted}};
   const order=n=>({runId,n,text:hub.stepRow.text,workflowName:'Quote flow',summary:hub.summary,definition:{version:hub.botVersion,instructions:hub.orderInstructions??'Pinned instructions v'+hub.botVersion},
-    botId,botName:'Drafter',spaceId,previous,deadline:1,interrupted:hub.stepRow.interrupted,attempt:1});
+    botId,botName:'Drafter',spaceId,previous,deadline:1,interrupted:hub.stepRow.interrupted,attempt:1,model:hub.orderModel??null});
   const fetcher=async(url,options={})=>{
     url=String(url);
     const body=typeof options.body==='string'?JSON.parse(options.body):options.body;
@@ -1331,4 +1331,17 @@ test('a shared bot version with long instructions and skills fits the app limits
   assert.ok(hubRouteLimits('GET',bot+'/definition').response>=worst);
   assert.ok(hubRouteLimits('GET',bot+'/versions').response>=5*worst);
   assert.equal(hubRouteLimits('POST',bot+'/messages').request,8192,'other routes keep their small limit');
+});
+
+test('a step runs on the model its work order names, and on the owner\'s default when it names none',async t=>{
+  const named=fixture(t);
+  named.hub.orderModel={provider:'anthropic',model:'claude-sonnet-5-5'};
+  await poll(named);await named.client.idle();
+  assert.deepEqual(named.hub.runs[0].modelSelection,{provider:'anthropic',model:'claude-sonnet-5-5'});
+  assert.equal(named.hub.runs[0].modelFallback,true); // not connected here: the owner's default runs
+  const plain=fixture(t);
+  await poll(plain);await plain.client.idle();
+  assert.equal(plain.hub.runs[0].modelSelection,null);
+  assert.equal(stepModel({provider:'anthropic',model:'claude-opus-5-5[1m]'}).model,'claude-opus-5-5[1m]');
+  for(const bad of [null,'x',{provider:'a b',model:'x'},{provider:'anthropic',model:''},{provider:'anthropic',model:'x'.repeat(129)},{provider:'anthropic',model:'a b'}]) assert.equal(stepModel(bad),null);
 });
