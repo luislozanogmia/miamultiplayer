@@ -10,6 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { app, BrowserWindow, protocol, session, WebContentsView } = require("electron");
 const { APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes } = require("../src/app-sandbox.cjs");
+const { appServers } = require("../src/app-server.cjs");
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "mia-app-smoke-"));
 app.setPath("userData", path.join(scratch, "data"));
@@ -156,6 +157,40 @@ app.whenReady().then(async () => {
   assert.equal(downloads, 0, "no download started");
   assert.equal(session.fromPartition(oneId.partition).getStoragePath().includes("Partitions"), true);
   assert.notEqual(oneId.partition, "persist:mia-browser");
+
+  // The person's own folder app can run a server from its folder: the page
+  // reaches it at /api/ on its own origin and it keeps files there. The same
+  // folder opened as someone else's app runs nothing.
+  const SERVER = `require("node:http").createServer((req, res) => { let b = ""; req.on("data", c => b += c); req.on("end", () => {
+    if (req.method === "POST") require("node:fs").appendFileSync("saved.txt", b + "\\n");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ path: req.url, token: req.headers["x-mia-app-token"] === process.env.MIA_APP_TOKEN, saved: require("node:fs").existsSync("saved.txt") ? require("node:fs").readFileSync("saved.txt", "utf8") : "" })); }); })
+    .listen(Number(process.env.PORT), process.env.HOST);`;
+  const writeServedApp = (name) => {
+    const root = writeApp(name);
+    fs.writeFileSync(path.join(root, "mia-app.json"), JSON.stringify({ server: "server.js" }));
+    fs.writeFileSync(path.join(root, "server.js"), SERVER);
+    return root;
+  };
+  const servedId = appIdentity("local/served"), foreignId = appIdentity("team/foreign");
+  assert.equal(servedId.local, true);
+  const servedRoot = writeServedApp("served"), foreignRoot = writeServedApp("foreign");
+  panes.open(servedId, servedRoot);
+  panes.open(foreignId, foreignRoot);
+  const [served, foreign] = created.slice(-2).map((view) => view.webContents);
+  await until(() => !served.isLoading() && !foreign.isLoading(), "both served apps load");
+  const saved = await run(served, `fetch("/api/save", { method: "POST", body: "row 1" }).then(r => r.json())`);
+  assert.deepEqual(saved, { path: "/api/save", token: true, saved: "row 1\n" });
+  assert.equal(fs.readFileSync(path.join(servedRoot, "saved.txt"), "utf8"), "row 1\n", "the server keeps its data in the app's folder");
+  const info = JSON.parse(fs.readFileSync(path.join(servedRoot, ".mia", "server.json"), "utf8"));
+  assert.equal(await run(served, blocked(info.url + "/api/save")), "blocked", "the page still can't reach any localhost address directly");
+  assert.equal(await run(two, `fetch("${servedId.origin}/api/save").then(r => r.status, () => "blocked")`), "blocked", "another app can't reach it");
+  assert.equal(await run(foreign, `fetch("/api/save").then(r => r.status)`), 404, "someone else's app runs no server");
+  assert.equal(fs.existsSync(path.join(foreignRoot, ".mia")), false);
+  assert.equal(fs.existsSync(path.join(foreignRoot, "saved.txt")), false);
+  panes.close(servedId.key);
+  panes.close(foreignId.key);
+  appServers().stopAll();
 
   // The Mia window closes and reopens without quitting (a Mac habit), on the same
   // sessions. The app it already opened must open again, on the files of the newest version.

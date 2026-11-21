@@ -9,6 +9,9 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+### Added
+- A person's own folder app can run a server: put `{ "server": "server.js" }` in `mia-app.json` and Mia runs it with its own Node inside the folder, so the app can keep files and a database there. The page reaches it at `/api/` on its own address; the page still can't reach localhost, and apps shared by a team never run a server.
+
 ## [0.3.12] — 2026-11-19
 
 ### Added

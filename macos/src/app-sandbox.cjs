@@ -17,6 +17,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { Readable } = require("node:stream");
+const { appServers } = require("./app-server.cjs");
 
 const APP_SCHEME = "mia-app";
 const APP_PARTITION_PREFIX = "persist:mia-app-";
@@ -59,9 +60,11 @@ const APP_CSP = [
 
 // One app's identity on this computer. The key survives new versions, so an
 // app keeps its data when it updates; team and local apps can never share one.
+// `local` marks the person's own folder apps, the only ones that may run a
+// server (app-server.cjs): a team app is someone else's code.
 function appIdentity(source) {
   const key = crypto.createHash("sha256").update(source).digest("hex").slice(0, 32);
-  return { key, host: `app-${key}`, partition: `${APP_PARTITION_PREFIX}${key}`, origin: `${APP_SCHEME}://app-${key}` };
+  return { key, host: `app-${key}`, partition: `${APP_PARTITION_PREFIX}${key}`, origin: `${APP_SCHEME}://app-${key}`, local: String(source).startsWith("local/") };
 }
 
 function teamAppIdentity(teamId, appId) {
@@ -137,6 +140,48 @@ function appResponseHeaders(full) {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cache-Control": "no-store",
   };
+}
+
+// Requests under /api/ go to the app's own server, when it is the person's own
+// folder app and its mia-app.json names one. Same origin as the page, so the
+// sandbox's network rules don't change and no other app can reach it.
+const API_PATH = /^\/api(?:\/|$)/;
+const API_BODY_LIMIT = 50000000;
+const HOP_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "upgrade"]);
+function isApiRequest(requestUrl, host) {
+  try {
+    const url = new URL(String(requestUrl));
+    return url.protocol === `${APP_SCHEME}:` && url.hostname === host && API_PATH.test(url.pathname);
+  } catch (_) { return false; }
+}
+const jsonResponse = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" } });
+async function appApiResponse(root, request, servers = appServers()) {
+  let server;
+  try { server = await servers.ensure(root); } catch (error) {
+    return jsonResponse(503, { error: error.code || "app_server_failed", message: error.message || "The app's server could not start." });
+  }
+  if (!server) return jsonResponse(404, { error: "no_app_server", message: "This app has no server. Name one in mia-app.json." });
+  const url = new URL(request.url);
+  const headers = new Headers();
+  request.headers.forEach((value, name) => { if (!HOP_HEADERS.has(name.toLowerCase()) && name.toLowerCase() !== "host") headers.set(name, value); });
+  headers.set("X-Mia-App-Token", server.token);
+  let body;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength > API_BODY_LIMIT) return jsonResponse(413, { error: "too_large", message: "That request is too large." });
+    body = bytes;
+  }
+  let reply;
+  try {
+    reply = await fetch(`${server.url}${url.pathname}${url.search}`, { method: request.method, headers, body, redirect: "manual" });
+  } catch (_) {
+    return jsonResponse(502, { error: "app_server_unreachable", message: "The app's server did not answer." });
+  }
+  const out = new Headers();
+  reply.headers.forEach((value, name) => { if (!HOP_HEADERS.has(name.toLowerCase())) out.set(name, value); });
+  out.set("X-Content-Type-Options", "nosniff");
+  out.set("Content-Security-Policy", APP_CSP);
+  return new Response(request.method === "HEAD" ? null : reply.body, { status: reply.status, headers: out });
 }
 
 function appFileResponse(root, request, host) {
@@ -275,7 +320,9 @@ function configureAppSession(ses, record) {
     if (!/^(?:https|wss):/i.test(details.url)) return callback({});
     addressAllowed(details.url).then(allowed => callback(allowed ? {} : { cancel: true }), () => callback({ cancel: true }));
   });
-  ses.protocol.handle(APP_SCHEME, request => appFileResponse(record.root, request, record.host));
+  ses.protocol.handle(APP_SCHEME, request => (record.local && isApiRequest(request.url, record.host)
+    ? appApiResponse(record.root, request)
+    : appFileResponse(record.root, request, record.host)));
 }
 
 // A session lasts as long as Mia does and can be set up only once, while the
@@ -286,7 +333,7 @@ const configuredSessions = new WeakMap();
 function appSessionRecord(ses, host) {
   let record = configuredSessions.get(ses);
   if (!record) {
-    record = { host, root: "" };
+    record = { host, root: "", local: false };
     configureAppSession(ses, record);
     configuredSessions.set(ses, record);
   }
@@ -296,7 +343,12 @@ function appSessionRecord(ses, host) {
 // Points an app's session at the folder it serves. The Apps page and a browser
 // tab of the same app go through here, so both run in one session with one set of data.
 function prepareAppSession(ses, identity, root) {
-  appSessionRecord(ses, identity.host).root = root;
+  const record = appSessionRecord(ses, identity.host);
+  record.root = root;
+  record.local = identity.local === true;
+  // Start the app's server as it opens, so it is ready for the first request
+  // and for the person's bots. An app without one costs a file check.
+  if (record.local) appServers().ensure(root).catch(() => { /* the first /api/ request reports it */ });
 }
 
 // Where a web link from an app goes: an https page opens in Mia's browser, where
@@ -475,7 +527,7 @@ function createAppPanes({ window, session, WebContentsView, openWebLink, onState
 
 module.exports = {
   APP_CSP, APP_PARTITION_PREFIX, APP_SCHEME, APP_SCHEME_PRIVILEGES,
-  appFileResponse, appIdentity, appResponseHeaders, appWebPreferences, configureAppContents, configureAppSession,
+  appApiResponse, appFileResponse, appIdentity, appResponseHeaders, appWebPreferences, configureAppContents, configureAppSession,
   createAddressCheck, createAppPanes, createWebLinkGate, isInside, isPrivateAddress, localAppRoot, prepareAppSession, requestAllowed,
-  requestSegments, resolveAppFile, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot,
+  isApiRequest, requestSegments, resolveAppFile, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot,
 };

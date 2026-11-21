@@ -26,6 +26,7 @@ const { pathToFileURL } = require("node:url");
 const { BROWSER_PARTITION, createBrowser } = require("./browser.cjs");
 const { findApp } = require("./app-address.cjs");
 const { APP_PARTITION_PREFIX, APP_SCHEME_PRIVILEGES, appIdentity, createAppPanes, localAppRoot, teamAppIdentity, teamAppPreviewIdentity, teamAppRoot } = require("./app-sandbox.cjs");
+const { appServers } = require("./app-server.cjs");
 const { createActorDiagnostics } = require("./browser-actor-diagnostics.cjs");
 const { mainWindowLinkAction } = require("./main-navigation.cjs");
 const { createExternalLinkQueue, isWebLink, webLinksFromArgv } = require("./external-links.cjs");
@@ -3033,6 +3034,7 @@ app.on("before-quit", () => {
   browserWorkBroker?.stop().catch(() => {});
   ghostBridge?.stop().catch(error => desktopLog(`Ghost browser bridge stop failed: ${error.message}`));
   googleWorkspaceBroker?.close().catch(error => desktopLog(`Google credential broker stop failed: ${error.message}`));
+  appServers().stopAll();
   stopBackendForQuit();
 });
 
