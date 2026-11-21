@@ -10,7 +10,7 @@ automatically through the in-app updater.
 ## [Unreleased]
 
 ### Changed
-- An automation's Model field uses the same model picker as the chat composer. Its "Bot's model" row returns the automation to the bot's model.
+- An automation's model is chosen with the same picker as the chat composer, in the bot's automation editor and under the schedule on the Automations page, where a pick saves at once. Its "Bot's model" row returns the automation to the bot's model.
 
 ### Fixed
 - A bot can take a screenshot of its page while that page is docked and the browser is closed; the capture no longer times out.

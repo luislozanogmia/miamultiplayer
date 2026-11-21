@@ -233,10 +233,14 @@ test('an automation picks its model with the composer picker, not a separate con
   // "provider|model" hidden value the save path reads.
   assert.doesNotMatch(appSource, /<select id="automationEditModel">/);
   assert.match(appSource, /<input type="hidden" id="automationEditModel" value="' \+ esc\(currentModel\) \+ '">/);
-  assert.match(appSource, /function mountAutomationModelPicker\(slot, input, bot, automation\)\{\s*var source = el\('#ccModelSelect'\);/);
+  assert.match(appSource, /function mountAutomationModelPicker\(slot, input, bot, automation, onChange\)\{\s*var source = el\('#ccModelSelect'\);/);
   assert.match(appSource, /var root = source\.cloneNode\(true\);/);
   assert.match(appSource, /mountChatModelPicker\(root, sharedInventoryModelPickerState\(\), \{/);
-  assert.match(appSource, /input\.value = choice \? choice\.provider \+ '\|' \+ choice\.model : '';/);
+  assert.match(appSource, /if\(input\) input\.value = choice \? choice\.provider \+ '\|' \+ choice\.model : '';/);
+  // The Automations page shows the same picker under the schedule; a pick saves.
+  assert.match(appSource, /<div class="automations-model"><span class="automations-model-label">Model<\/span><div id="automationsModelPicker"><\/div><\/div>/);
+  assert.match(appSource, /mountAutomationModelPicker\(el\('#automationsModelPicker', body\), null, found\.bot, found\.automation, function\(choice\)\{\s*setAutomationModel\(found\.bot, found\.automation, choice\);/);
+  assert.match(appSource, /function setAutomationModel\(bot, automation, choice\)\{/);
   // It shares the composer's inventory but never its cached per-chat choice.
   assert.match(appSource, /get: function\(\)\{ return chatModelPicker\[key\]; \}/);
   assert.match(appSource, /if\(!modelOnly\)\{ cacheChatModelSelection\(selection\); return; \}/);

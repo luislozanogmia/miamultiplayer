@@ -9404,8 +9404,10 @@
     var schedule = String(row.schedule || '').replace(/^Paused · /, '');
     var sub = editing === 'schedule' ? automationsScheduleEditHtml(automation) + '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>'
       : '<div class="automations-detail-sub">' + esc([schedule, row.botName].filter(Boolean).join(' · ')) + ' ' + state + '</div>';
+    // The model it runs on, picked with the composer's picker; a pick saves.
+    var model = '<div class="automations-model"><span class="automations-model-label">Model</span><div id="automationsModelPicker"></div></div>';
     return '<div class="automations-detail-head"' + (editing ? ' data-editing="' + esc(editing) + '"' : '') + '><div><div class="automations-detail-title">' + esc(row.name) + '</div>' + sub + '</div>' +
-      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + needs + body + last;
+      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + model + needs + body + last;
   }
 
   function renderAutomationsPage(){
@@ -9438,6 +9440,8 @@
     var editKey = found && automationsPage.editing ? automationsTabId(found.bot.id, found.automation.id) + '|' + automationsPage.editing : '';
     var openEdit = el('[data-edit-key]', body);
     if(editKey && openEdit && openEdit.getAttribute('data-edit-key') === editKey) return;
+    // Nor while its model menu is open.
+    if(found && openEdit && el('.cc-model-select.is-field .cc-model-menu.open', body)) return;
     var scroll = body.scrollTop;
     // Team workflows sit above the bot automations, in team workspaces only.
     var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
@@ -9506,6 +9510,9 @@
       setAutomationEnabled(found.bot, found.automation, found.automation.enabled !== true, toggleButton);
     });
     if(found) wireAutomationsInlineEdit(body, found.bot, found.automation);
+    if(found) mountAutomationModelPicker(el('#automationsModelPicker', body), null, found.bot, found.automation, function(choice){
+      setAutomationModel(found.bot, found.automation, choice);
+    });
     var fix = el('#automationsFix', body);
     if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
   }
@@ -9617,6 +9624,31 @@
   // Pause and Resume on the Automations page: the same save the editor's
   // Active switch makes, changing only this automation's enabled flag. A run
   // already going finishes; pausing stops the next ones.
+  // choice is {provider, model}, or null to run on the bot's model.
+  function setAutomationModel(bot, automation, choice){
+    var current = automationRecordById(bot.id, automation.id);
+    var owner = current ? current.bot : bot;
+    var automations = botAutomationList(owner).map(function(item){
+      if(String(item.id) !== String(automation.id)) return item;
+      var next = Object.assign({}, item);
+      if(choice){ next.modelProvider = choice.provider; next.model = choice.model; }
+      else { delete next.model; delete next.modelProvider; }
+      return next;
+    });
+    return api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:{automations: automations}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && (res.data.message || res.data.error)) || 'Could not change the model.');
+      var saved = res.data.bot;
+      chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
+      chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
+      showToast(choice ? 'Model saved' : 'Runs on the bot\'s model');
+      renderChatSidebar();
+      renderAutomationsPage();
+    }).catch(function(error){
+      showToast(error && error.message || 'Could not change the model.');
+      renderAutomationsPage();
+    });
+  }
+
   function setAutomationEnabled(bot, automation, enabled, button){
     if(button) button.disabled = true;
     var automations = botAutomationList(bot).map(function(item){
@@ -11773,9 +11805,9 @@
     return label.replace(/^GPT (\d)/, 'GPT-$1');
   }
 
-  function mountAutomationModelPicker(slot, input, bot, automation){
+  function mountAutomationModelPicker(slot, input, bot, automation, onChange){
     var source = el('#ccModelSelect');
-    if(!slot || !input || !source) return null;
+    if(!slot || (!input && !onChange) || !source) return null;
     var root = source.cloneNode(true);
     root.removeAttribute('id');
     els('[id]', root).forEach(function(node){ node.removeAttribute('id'); });
@@ -11804,7 +11836,8 @@
         return automationModelLabel(committed.provider, committed.model) + ' (not connected)';
       },
       onSelect: function(choice){
-        input.value = choice ? choice.provider + '|' + choice.model : '';
+        if(input) input.value = choice ? choice.provider + '|' + choice.model : '';
+        if(onChange) onChange(choice);
       }
     });
   }

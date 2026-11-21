@@ -1871,6 +1871,9 @@
   .cc-model-select.is-field .cc-model-btn:hover,.cc-model-select.is-field .cc-model-btn[aria-expanded="true"]{background:var(--sand-bg-base);border-color:var(--sand-border-focus);}
   .cc-model-select.is-field .cc-model-tags{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;text-align:left;}
   .cc-model-select.is-field .cc-model-menu{position:relative;bottom:auto;top:auto;margin-top:6px;min-width:0;max-width:none;width:100%;box-sizing:border-box;}
+  .automations-model{display:flex;align-items:flex-start;gap:12px;margin:12px 0 6px;max-width:440px;}
+  .automations-model-label{font:13px var(--styled-sans);color:var(--sand-text-secondary);padding-top:10px;flex:0 0 auto;}
+  .automations-model > div{flex:1 1 auto;min-width:0;}
   .cc-model-menu-head{display:flex;align-items:center;gap:2px;min-height:24px;}
   .cc-model-back{appearance:none;border:none;background:transparent;color:var(--sand-text-secondary);width:24px;height:24px;border-radius:6px;font-size:20px;line-height:20px;padding:0;cursor:pointer;}
   .cc-model-back:hover,.cc-model-back:focus-visible{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);outline:none;}
