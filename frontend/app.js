@@ -6931,6 +6931,7 @@
         if(changed)renderHubStatus();
       }});
     if(window.MiaTeamWorkflowsUi)window.MiaTeamWorkflowsUi.attach({teamId:workspace.slice(4),call:hubCall,confirm:appConfirm,toast:showToast,
+      mountModelPicker:mountWorkflowStepModelPicker,modelLabel:automationModelLabel,
       subject:function(){return hubChat.membership && hubChat.membership.clerk_user_id;},
       isAdmin:function(){return !!(hubChat.membership && hubChat.membership.role==='admin');},
       showPage:function(){ if(!automationsPage.open)runToolsAction('automations'); },
@@ -9404,8 +9405,10 @@
     var schedule = String(row.schedule || '').replace(/^Paused · /, '');
     var sub = editing === 'schedule' ? automationsScheduleEditHtml(automation) + '<div class="cip-automation-form-error" id="automationsEditError" role="alert"></div>'
       : '<div class="automations-detail-sub">' + esc([schedule, row.botName].filter(Boolean).join(' · ')) + ' ' + state + '</div>';
+    // The model it runs on, picked with the composer's picker; a pick saves.
+    var model = '<div class="automations-model"><span class="automations-model-label">Model</span><div id="automationsModelPicker"></div></div>';
     return '<div class="automations-detail-head"' + (editing ? ' data-editing="' + esc(editing) + '"' : '') + '><div><div class="automations-detail-title">' + esc(row.name) + '</div>' + sub + '</div>' +
-      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + needs + body + last;
+      '<span class="automations-row-side">' + side + '</span>' + runNow + clock + pencil + '</div>' + model + needs + body + last;
   }
 
   function renderAutomationsPage(){
@@ -9438,6 +9441,8 @@
     var editKey = found && automationsPage.editing ? automationsTabId(found.bot.id, found.automation.id) + '|' + automationsPage.editing : '';
     var openEdit = el('[data-edit-key]', body);
     if(editKey && openEdit && openEdit.getAttribute('data-edit-key') === editKey) return;
+    // Nor while its model menu is open.
+    if(found && openEdit && el('.cc-model-select.is-field .cc-model-menu.open', body)) return;
     var scroll = body.scrollTop;
     // Team workflows sit above the bot automations, in team workspaces only.
     var teamWorkflows = !found && hubWorkspace() && window.MiaTeamWorkflowsUi ? window.MiaTeamWorkflowsUi : null;
@@ -9506,6 +9511,9 @@
       setAutomationEnabled(found.bot, found.automation, found.automation.enabled !== true, toggleButton);
     });
     if(found) wireAutomationsInlineEdit(body, found.bot, found.automation);
+    if(found) mountAutomationModelPicker(el('#automationsModelPicker', body), null, found.bot, found.automation, function(choice){
+      setAutomationModel(found.bot, found.automation, choice);
+    });
     var fix = el('#automationsFix', body);
     if(fix && found) fix.addEventListener('click', function(){ fixAutomationWithMia(row, fix); });
   }
@@ -9617,6 +9625,31 @@
   // Pause and Resume on the Automations page: the same save the editor's
   // Active switch makes, changing only this automation's enabled flag. A run
   // already going finishes; pausing stops the next ones.
+  // choice is {provider, model}, or null to run on the bot's model.
+  function setAutomationModel(bot, automation, choice){
+    var current = automationRecordById(bot.id, automation.id);
+    var owner = current ? current.bot : bot;
+    var automations = botAutomationList(owner).map(function(item){
+      if(String(item.id) !== String(automation.id)) return item;
+      var next = Object.assign({}, item);
+      if(choice){ next.modelProvider = choice.provider; next.model = choice.model; }
+      else { delete next.model; delete next.modelProvider; }
+      return next;
+    });
+    return api('/api/bots/' + encodeURIComponent(owner.id), {method:'PUT', body:{automations: automations}}).then(function(res){
+      if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && (res.data.message || res.data.error)) || 'Could not change the model.');
+      var saved = res.data.bot;
+      chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
+      chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
+      showToast(choice ? 'Model saved' : 'Runs on the bot\'s model');
+      renderChatSidebar();
+      renderAutomationsPage();
+    }).catch(function(error){
+      showToast(error && error.message || 'Could not change the model.');
+      renderAutomationsPage();
+    });
+  }
+
   function setAutomationEnabled(bot, automation, enabled, button){
     if(button) button.disabled = true;
     var automations = botAutomationList(bot).map(function(item){
@@ -11757,6 +11790,82 @@
     add('Latest delivery', delivery.deliveredAt);
     add('Latest session', delivery.sessionId);
     return fields;
+  }
+
+  // The automation's Model field is the composer's model picker: a copy of
+  // its markup (#ccModelSelect) wired by mountChatModelPicker. The hidden
+  // input keeps the "provider|model" value the save path already reads;
+  // empty means the automation runs on the bot's model.
+  function automationModelLabel(provider, model){
+    var entry = chatConnectedModelEntries().filter(function(item){
+      return item.provider === provider && item.model === model;
+    })[0];
+    if(!entry) return model;
+    var label = String(entry.variant || model);
+    if(entry.family && label.toLowerCase().indexOf(String(entry.family).toLowerCase()) !== 0) label = entry.family + ' ' + label;
+    return label.replace(/^GPT (\d)/, 'GPT-$1');
+  }
+
+  // A copy of the composer's picker markup, placed in slot.
+  function cloneModelPickerInto(slot, ariaLabel){
+    var source = el('#ccModelSelect');
+    if(!slot || !source) return null;
+    var root = source.cloneNode(true);
+    root.removeAttribute('id');
+    els('[id]', root).forEach(function(node){ node.removeAttribute('id'); });
+    root.classList.remove('is-fast');
+    root.classList.add('is-field');
+    var menu = root.querySelector('.cc-model-menu');
+    if(menu) menu.classList.remove('open');
+    var button = root.querySelector('.cc-model-btn');
+    if(button) button.setAttribute('aria-label', ariaLabel);
+    slot.appendChild(root);
+    return root;
+  }
+
+  // A team workflow step's model: the same picker, with "Owner's default"
+  // clearing it. The owner's Mia falls back to their default when the chosen
+  // model is not connected there, so a model this computer lacks still saves.
+  function mountWorkflowStepModelPicker(slot, initial, onSelect){
+    var root = cloneModelPickerInto(slot, 'Choose this step\'s model');
+    if(!root) return null;
+    return mountChatModelPicker(root, sharedInventoryModelPickerState(), {
+      initial: initial || null,
+      defaultChoice: {label: 'Owner\'s default', meta: ''},
+      emptyLabel: function(committed){
+        if(!committed) return 'Owner\'s default';
+        return automationModelLabel(committed.provider, committed.model);
+      },
+      onSelect: function(choice){ onSelect(choice || null); }
+    });
+  }
+
+  function mountAutomationModelPicker(slot, input, bot, automation, onChange){
+    if(!slot || (!input && !onChange)) return null;
+    var root = cloneModelPickerInto(slot, 'Choose the automation\'s model');
+    if(!root) return null;
+    var botProvider = String(bot && bot.modelProvider || '');
+    var botModel = String(bot && bot.model || '');
+    function botLabel(){
+      return 'Bot\'s model' + (botModel ? ' (' + automationModelLabel(botProvider, botModel) + ')' : '');
+    }
+    var own = automation && automation.model && automation.modelProvider
+      ? {provider: String(automation.modelProvider), model: String(automation.model)} : null;
+    return mountChatModelPicker(root, sharedInventoryModelPickerState(), {
+      initial: own,
+      defaultChoice: {label: 'Bot\'s model', meta: botModel ? automationModelLabel(botProvider, botModel) : ''},
+      // A saved model that is no longer connected still shows, marked, until
+      // another is picked; the save keeps it.
+      emptyLabel: function(committed){
+        if(!committed) return botLabel();
+        if(!chatModelPicker.loaded || chatModelPicker.loading) return automationModelLabel(committed.provider, committed.model);
+        return automationModelLabel(committed.provider, committed.model) + ' (not connected)';
+      },
+      onSelect: function(choice){
+        if(input) input.value = choice ? choice.provider + '|' + choice.model : '';
+        if(onChange) onChange(choice);
+      }
+    });
   }
 
   function normalizedAutomationEditorPayload(bot, automationId, values){
@@ -16125,14 +16234,6 @@
       return '<option value="' + day + '"' + (String(automation.day || 'Monday') === day ? ' selected' : '') + '>' + day + '</option>';
     }).join('');
     var currentModel = automation.model && automation.modelProvider ? automation.modelProvider + '|' + automation.model : '';
-    var modelEntries = chatConnectedModelEntries();
-    var modelOptions = '<option value="">Bot\'s model' + (bot && bot.model ? ' (' + esc(bot.model) + ')' : '') + '</option>' +
-      modelEntries.map(function(entry){
-        var value = entry.provider + '|' + entry.model;
-        return '<option value="' + esc(value) + '"' + (value === currentModel ? ' selected' : '') + '>' + esc(entry.family + ' ' + entry.variant + ' · ' + entry.providerLabel) + '</option>';
-      }).join('') +
-      (currentModel && !modelEntries.some(function(entry){ return entry.provider + '|' + entry.model === currentModel; })
-        ? '<option value="' + esc(currentModel) + '" selected>' + esc(automation.model) + ' (not connected)</option>' : '');
     pane.setAttribute('aria-label', title + ' automation details');
     pane.classList.remove('plugins-open', 'agents-open', 'bot-store-open');
     pane.classList.add('open', 'automation-detail-open');
@@ -16149,13 +16250,14 @@
         '<label class="cip-field" data-frequency-control="weekly"><span class="cip-field-label">Weekday</span><select id="automationEditWeekday">' + weekdayOptions + '</select></label>' +
         '<label class="cip-field" data-frequency-control="monthly"><span class="cip-field-label">Day of month</span><input type="number" id="automationEditMonthDay" min="1" max="31" value="' + esc(automation.day || 1) + '"></label>' +
         '<label class="cip-field" data-frequency-control="time"><span class="cip-field-label">Time' + (Number.isInteger(automation.utcOffsetMinutes) ? ' · ' + newsTimeZoneLabel(automation.utcOffsetMinutes) : '') + '</span><input type="time" id="automationEditTime" value="' + esc(automation.time || '09:00') + '"></label>' +
-        '<label class="cip-field"><span class="cip-field-label">Model</span><select id="automationEditModel">' + modelOptions + '</select></label>' +
+        '<div class="cip-field"><span class="cip-field-label">Model</span><input type="hidden" id="automationEditModel" value="' + esc(currentModel) + '"><div id="automationEditModelPicker"></div></div>' +
         '<div class="cip-field"><span class="cip-field-label">Steps · done in order</span><ol class="cip-automation-steps" id="automationEditSteps">' + automationStepRowsHtml(Array.isArray(automation.steps) ? automation.steps : []) + '</ol></div>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
       '</form>' + metadata + '</div>';
     var form = el('#automationDetailForm', pane);
+    mountAutomationModelPicker(el('#automationEditModelPicker', pane), el('#automationEditModel', pane), bot, automation);
     wireAutomationStepRows(el('#automationEditSteps', pane));
     var enabledInput = el('#automationEditEnabled', pane);
     var frequencyInput = el('#automationEditFrequency', pane);
@@ -22363,23 +22465,64 @@
      The picker is deliberately per-turn. It reads Hermes' authenticated
      inventory, walks model family -> variant -> reasoning effort -> speed,
      and sends the completed choice in native event metadata. It never writes
-     the saved harness preference or invents a provider/model locally. */
-  (function(){
-    var btn = el('#ccModelBtn');
-    var menu = el('#ccModelMenu');
-    var optionsWrap = el('#ccModelOptions');
-    var title = el('#ccModelMenuTitle');
-    var back = el('#ccModelBack');
-    var tags = el('#ccModelTags');
-    var selectionSummary = el('#ccModelSelection');
-    var pickerRoot = el('#ccModelSelect');
-    if(!btn || !menu || !optionsWrap || !title || !back || !tags || !pickerRoot) return;
+     the saved harness preference or invents a provider/model locally.
 
-    var picker = chatModelPicker;
+     The same picker also chooses an automation's model (mountChatModelPicker
+     with opts.onSelect): it shares the composer's inventory, keeps its own
+     selection, stops at the model (runs take no effort or speed), and offers
+     a "Bot's model" row that clears the automation's own choice. */
+  (function(){
+    var pickerRoot = el('#ccModelSelect');
+    var api = mountChatModelPicker(pickerRoot, chatModelPicker, {});
+    if(!api) return;
+    var tags = pickerRoot.querySelector('.cc-model-tags');
     new MutationObserver(function(){
       var value = el('#cipModelValue');
       if(value) value.textContent = tags.textContent.trim();
     }).observe(tags, {childList: true, characterData: true, subtree: true});
+  })();
+
+  // A picker state with its own selection that reads and loads the composer's
+  // connected-model inventory (chatModelPicker), so both stay in step.
+  function sharedInventoryModelPickerState(){
+    var state = {
+      selection: {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''},
+      stage: 'family',
+      showProviderSwitcher: false,
+      showApiProviders: false
+    };
+    ['loaded', 'loading', 'error', 'providers'].forEach(function(key){
+      Object.defineProperty(state, key, {
+        get: function(){ return chatModelPicker[key]; },
+        set: function(value){ chatModelPicker[key] = value; }
+      });
+    });
+    return state;
+  }
+
+  // Wires one model picker: pickerRoot holds the composer's picker markup
+  // (#ccModelSelect, or a copy of it), picker is its state. opts.onSelect
+  // makes it an automation picker; see the comment above.
+  function mountChatModelPicker(pickerRoot, picker, opts){
+    opts = opts || {};
+    if(!pickerRoot) return null;
+    function part(cls){ return pickerRoot.querySelector('.' + cls); }
+    var btn = part('cc-model-btn');
+    var menu = part('cc-model-menu');
+    var optionsWrap = part('cc-model-options');
+    var title = part('cc-model-menu-title');
+    var back = part('cc-model-back');
+    var tags = part('cc-model-tags');
+    var selectionSummary = part('cc-model-selection');
+    if(!btn || !menu || !optionsWrap || !title || !back || !tags) return null;
+    var modelOnly = typeof opts.onSelect === 'function';
+    var committed = modelOnly && opts.initial ? opts.initial : null;
+    // Composer choices are cached per chat; an automation's go to its form.
+    function commitSelection(selection){
+      if(!modelOnly){ cacheChatModelSelection(selection); return; }
+      committed = selection && selection.provider && selection.model ? {provider:selection.provider, model:selection.model} : null;
+      opts.onSelect(committed);
+    }
     var effortLabels = {none:'None', low:'Low', medium:'Medium', high:'High', xhigh:'Extra high', max:'Max', ultra:'Ultra'};
 
     // The "Choose a model family" back screen lists every provider offered by
@@ -22451,6 +22594,7 @@
     // default) rather than picker.selection, which goBack() clears on its way
     // back up to this screen.
     function activeFamilyProviderId(){
+      if(modelOnly) return committed && committed.provider;
       var cached = readCachedChatModelSelection();
       if(cached && cached.provider) return cached.provider;
       var current = currentEntry(entries());
@@ -22525,6 +22669,17 @@
     function hydrateSelection(){
       if(picker.selection.model || !picker.providers.length) return;
       var all = entries();
+      if(modelOnly){
+        var own = committed && all.filter(function(candidate){
+          return candidate.provider === committed.provider && candidate.model === committed.model;
+        })[0];
+        if(own){
+          setEntry(own, true);
+          picker.selection.reasoningEffort = 'none';
+          picker.selection.speed = 'normal';
+        }
+        return;
+      }
       var cached = readCachedChatModelSelection();
       var item = cached && all.filter(function(candidate){
         return candidate.provider === cached.provider && candidate.model === cached.model;
@@ -22544,6 +22699,7 @@
     function stage(){
       if(!picker.selection.familyKey) return 'family';
       if(!picker.selection.model) return 'variant';
+      if(modelOnly) return 'family';
       // Skip the effort stage for non-reasoning models — effort is auto-set to
       // 'none' in setEntry, so the picker proceeds directly to speed.
       var chosen = selectedEntry();
@@ -22568,6 +22724,10 @@
       var s = picker.selection;
       var chosen = selectedEntry();
       pickerRoot.classList.toggle('is-fast', s.speed === 'fast');
+      if(!s.model && modelOnly){
+        tags.textContent = opts.emptyLabel ? opts.emptyLabel(committed) : 'Model';
+        return;
+      }
       if(!s.model){
         // Settings and live inventory arrive asynchronously. Prefer the last
         // validated per-turn choice so its effort does not flash or stick at
@@ -22629,6 +22789,9 @@
       var html = '';
       if(currentStage === 'family'){
         title.textContent = 'Choose a model family';
+        if(opts.defaultChoice){
+          html += button(opts.defaultChoice.label, opts.defaultChoice.meta || '', 'data-choice="default"');
+        }
         var families = {};
         all.forEach(function(item){
           if(!families[item.familyKey]) families[item.familyKey] = {family:item.family, providers:[], key:item.familyKey, entries:[]};
@@ -22708,7 +22871,11 @@
       els('.cc-model-option', optionsWrap).forEach(function(choice){
         choice.addEventListener('click', function(){
           var kind = choice.getAttribute('data-choice');
-          if(kind === 'family'){
+          if(kind === 'default'){
+            picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
+            commitSelection(null);
+            closeMenu();
+          } else if(kind === 'family'){
             picker.selection.familyKey = choice.getAttribute('data-family-key');
             picker.selection.family = choice.getAttribute('data-family');
             picker.selection.familyProviderId = '';
@@ -22751,8 +22918,12 @@
             // stage the model can't act on.
             picker.selection.reasoningEffort = item && item.reasoning === false ? 'none' : '';
             picker.selection.speed = item && item.fast !== true ? 'normal' : '';
+            if(modelOnly){
+              picker.selection.reasoningEffort = 'none';
+              picker.selection.speed = 'normal';
+            }
             if(picker.selection.reasoningEffort && picker.selection.speed){
-              cacheChatModelSelection(picker.selection);
+              commitSelection(picker.selection);
               closeMenu();
             }
           } else if(kind === 'effort'){
@@ -22761,18 +22932,18 @@
             if(effortEntry && effortEntry.fast !== true){
               // No fast tier -> the effort pick completes the selection.
               picker.selection.speed = 'normal';
-              cacheChatModelSelection(picker.selection);
+              commitSelection(picker.selection);
               closeMenu();
             } else {
               picker.selection.speed = '';
               // Effort is already a complete normal-speed selection. Persist it
               // immediately so closing the optional speed step cannot restore
               // the old effort (the reported Medium -> High regression).
-              cacheChatModelSelection(Object.assign({}, picker.selection, {speed:'normal'}));
+              commitSelection(Object.assign({}, picker.selection, {speed:'normal'}));
             }
           } else if(kind === 'speed'){
             picker.selection.speed = choice.getAttribute('data-speed');
-            cacheChatModelSelection(picker.selection);
+            commitSelection(picker.selection);
             closeMenu();
           }
           render();
@@ -22792,7 +22963,8 @@
       renderOptions();
       var chosen = selectedEntry();
       var s = picker.selection;
-      var summary = chosen ? chosen.providerLabel + ' · ' + chosen.model : (s.family || 'No model selected');
+      var summary = chosen ? chosen.providerLabel + ' · ' + chosen.model
+        : (s.family || (modelOnly && opts.emptyLabel ? opts.emptyLabel(committed) : 'No model selected'));
       if(s.reasoningEffort && s.reasoningEffort !== 'none') summary += ' · ' + (effortLabels[s.reasoningEffort] || s.reasoningEffort);
       if(s.speed) summary += ' · ' + titleCase(s.speed);
       if(selectionSummary) selectionSummary.textContent = summary;
@@ -22865,7 +23037,7 @@
         picker.loaded = true;
         if(picker.providers.length) hydrateSelection();
         else {
-          clearCachedChatModelSelection();
+          if(!modelOnly) clearCachedChatModelSelection();
           picker.selection = {provider:null, model:null, family:'', familyKey:'', familyProviderId:'', variant:'', reasoningEffort:'', speed:''};
         }
       }).catch(function(error){
@@ -22878,6 +23050,66 @@
         picker.loading = false;
         render();
       });
+    }
+
+    function closeMenu(){
+      menu.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+      // Always reopen on the default family stage, never mid-switcher.
+      picker.showProviderSwitcher = false;
+      picker.showApiProviders = false;
+    }
+
+    // An automation picker is rebuilt with its form; once its form leaves
+    // the page, its page-level listeners remove themselves.
+    function detached(){
+      if(document.contains(pickerRoot)) return false;
+      document.removeEventListener('click', onDocumentClick);
+      document.removeEventListener('keydown', onDocumentKeydown);
+      return true;
+    }
+    function onDocumentClick(event){
+      if(detached()) return;
+      if(!pickerRoot.contains(event.target)) closeMenu();
+    }
+    function onDocumentKeydown(event){
+      if(detached()) return;
+      if(event.key === 'Escape' && menu.classList.contains('open')){
+        event.preventDefault();
+        closeMenu();
+        btn.focus();
+      }
+    }
+
+    btn.addEventListener('click', function(event){
+      event.stopPropagation();
+      if(menu.classList.contains('open')) closeMenu();
+      else {
+        menu.classList.add('open');
+        render();
+        load();
+      }
+    });
+    back.addEventListener('click', function(event){
+      event.preventDefault();
+      event.stopPropagation();
+      goBack();
+    });
+    // Keep every interaction inside the picker from reaching the page-level
+    // click-away handlers. This is especially important in the IAB renderer,
+    // where a click on a freshly-rendered option can be retargeted while the
+    // menu is being rebuilt and look like an outside click.
+    pickerRoot.addEventListener('click', function(event){
+      event.stopPropagation();
+    });
+    document.addEventListener('click', onDocumentClick);
+    document.addEventListener('keydown', onDocumentKeydown);
+
+    if(modelOnly){
+      if(picker.loaded && picker.providers.length) hydrateSelection();
+      render();
+      if(!picker.loaded) load();
+      return {render: render, close: closeMenu};
     }
 
     picker.ensureLoaded = function(){ return load({refresh:true}); };
@@ -22909,48 +23141,9 @@
       render();
       return load({refresh:true});
     };
-
-    function closeMenu(){
-      menu.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
-      // Always reopen on the default family stage, never mid-switcher.
-      picker.showProviderSwitcher = false;
-      picker.showApiProviders = false;
-    }
-
-    btn.addEventListener('click', function(event){
-      event.stopPropagation();
-      if(menu.classList.contains('open')) closeMenu();
-      else {
-        menu.classList.add('open');
-        render();
-        load();
-      }
-    });
-    back.addEventListener('click', function(event){
-      event.preventDefault();
-      event.stopPropagation();
-      goBack();
-    });
-    // Keep every interaction inside the picker from reaching the page-level
-    // click-away handlers. This is especially important in the IAB renderer,
-    // where a click on a freshly-rendered option can be retargeted while the
-    // menu is being rebuilt and look like an outside click.
-    pickerRoot.addEventListener('click', function(event){
-      event.stopPropagation();
-    });
-    document.addEventListener('click', function(event){
-      if(!pickerRoot.contains(event.target)) closeMenu();
-    });
-    document.addEventListener('keydown', function(event){
-      if(event.key === 'Escape' && menu.classList.contains('open')){
-        event.preventDefault();
-        closeMenu();
-        btn.focus();
-      }
-    });
     render();
-  })();
+    return {render: render, close: closeMenu};
+  }
 
   /* ============ FIRST-RUN GUIDED TOUR ============
      A four-step coach-mark tour runs after the first successful login and can

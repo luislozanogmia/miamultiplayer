@@ -1997,12 +1997,10 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     const pending = previous.catch(() => {}).then(async () => {
       const wc = tab.view.webContents;
       if (tabs.get(tab.id) !== tab || wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed before capture.");
-      // The dock holds this page's debugger to shrink it; capture through it.
-      const dockOwned = tab.dockDebugger === true && wc.debugger && wc.debugger.isAttached();
-      if (!dockOwned && (!wc.debugger || wc.debugger.isAttached())) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
+      if (!wc.debugger || wc.debugger.isAttached()) throw protocolError("CAPTURE_BUSY", "Assigned page capture transport is already in use.");
       let timer, attached = false;
       try {
-        if (!dockOwned) { wc.debugger.attach("1.3"); attached = true; }
+        wc.debugger.attach("1.3"); attached = true;
         const result = await Promise.race([
           wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true }),
           new Promise((_, reject) => { timer = setTimeout(() => reject(protocolError("BROWSER_TIMEOUT", "Assigned page capture timed out.")), PROTOCOL_SCRIPT_TIMEOUT_MS); }),
@@ -3007,9 +3005,13 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       // Both capture paths target this exact WebContents; never select/show
       // the tab or capture the containing BrowserWindow.
       let image;
+      // A docked tab carries the dock's device-metrics override. While the dock
+      // is off screen, Page.captureScreenshot on that page never gets a frame
+      // and times out; capturePage still returns the page at its emulated
+      // size, shown or hidden, so the docked tab always uses it.
       // Viz may not have allocated a surface immediately after first layout.
       // Retry only this tab, without showing it or changing human selection.
-      if (!visible || activeId !== tab.id || tab.id === docked.id) image = await captureHiddenPage(tab);
+      if (tab.id !== docked.id && (!visible || activeId !== tab.id)) image = await captureHiddenPage(tab);
       else for (let attempt = 0; attempt < 4; attempt++) {
         if (wc.isDestroyed()) throw protocolError("TAB_CLOSED", "Assigned tab closed during capture.");
         if (tab.sequence !== generation) throw protocolError("TAB_NAVIGATED", "Document changed during capture.");

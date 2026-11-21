@@ -1414,10 +1414,16 @@ app.use('/api/hub-bots/workflow', requireSessionAuth, require('./hub-workflow-cl
   filesSupported: !MIAOS_AGENT_SEARCH_ONLY,
 }));
 
-async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, asker = null, files = [], unreadableFiles = [] }) {
+async function runSharedBotTurn({ owner, bot, trigger, contextText, history, channel, signal, modelSelection, modelFallback = false, asker = null, files = [], unreadableFiles = [] }) {
     // The requester's composer model choice applies to the runs they start,
     // validated against their own connected inventory exactly like Solo.
-    const selection = await chatModelSelectionForUser(modelSelection, owner);
+    // A workflow step's model (modelFallback) was chosen by whoever wrote the
+    // workflow, so when this owner has not connected it, the owner's default runs.
+    const selection = modelFallback
+      ? await chatModelSelectionForUser(modelSelection, owner)
+        .catch(() => chatModelSelectionForUser(modelSelection && { ...modelSelection, reasoningEffort: 'none' }, owner))
+        .catch(() => null)
+      : await chatModelSelectionForUser(modelSelection, owner);
     const userOptions = await inferenceOptionsForUser(owner, chatModelSelectionInferenceOptions(null, selection));
     // The same bot turn as Solo with a narrower context: the requester's own
     // Google connection, so the bot can read files people share, but no Solo

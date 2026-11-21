@@ -1864,6 +1864,16 @@
   .cc-model-btn .caret{font-size:17px;line-height:12px;color:var(--sand-text-secondary);}
   .cc-model-menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:264px;max-width:min(320px,calc(100vw - 32px));background:var(--sand-bg-elevated);border:1px solid var(--sand-border-default);border-radius:12px;box-shadow:var(--sand-shadow-popover);padding:6px;display:none;flex-direction:column;gap:5px;z-index:60;}
   .cc-model-menu.open{display:flex;}
+  /* The automation editor's Model field reuses the composer picker: a full-width
+     field-style button, with the menu opening downward. */
+  .cc-model-select.is-field{display:block;width:100%;}
+  .cc-model-select.is-field .cc-model-btn{width:100%;max-width:none;height:auto;padding:9px 12px;border:1px solid var(--sand-border-default);border-radius:10px;background:var(--sand-bg-base);font-size:14px;justify-content:flex-start;}
+  .cc-model-select.is-field .cc-model-btn:hover,.cc-model-select.is-field .cc-model-btn[aria-expanded="true"]{background:var(--sand-bg-base);border-color:var(--sand-border-focus);}
+  .cc-model-select.is-field .cc-model-tags{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;text-align:left;}
+  .cc-model-select.is-field .cc-model-menu{position:relative;bottom:auto;top:auto;margin-top:6px;min-width:0;max-width:none;width:100%;box-sizing:border-box;}
+  .automations-model{display:flex;align-items:flex-start;gap:12px;margin:12px 0 6px;max-width:440px;}
+  .automations-model-label{font:13px var(--styled-sans);color:var(--sand-text-secondary);padding-top:10px;flex:0 0 auto;}
+  .automations-model > div{flex:1 1 auto;min-width:0;}
   .cc-model-menu-head{display:flex;align-items:center;gap:2px;min-height:24px;}
   .cc-model-back{appearance:none;border:none;background:transparent;color:var(--sand-text-secondary);width:24px;height:24px;border-radius:6px;font-size:20px;line-height:20px;padding:0;cursor:pointer;}
   .cc-model-back:hover,.cc-model-back:focus-visible{background:var(--sand-fill-ghost-hover);color:var(--sand-text-primary);outline:none;}
@@ -4673,6 +4683,12 @@ body.styled-skin .chat-info-pane.agent-edit-open .styled-agent-edit-info-wrap:no
 .twf-who-names b{font-size:12.5px;font-weight:600;color:var(--sand-text-primary,#1d1d1f);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .twf-who-owner{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sand-text-tertiary,#6b6560);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .twf-who-owner .human-avatar-initials{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:7.5px;flex:none;line-height:1;}
+.twf-model{display:inline-flex;align-items:center;justify-content:center;flex:none;width:22px;height:22px;border-radius:6px;color:var(--sand-text-tertiary,#6b6560);background:var(--sand-surface-2,rgba(0,0,0,.04));}
+.twf-who .twf-model{margin-left:auto;}
+.twf-model[data-set="yes"]{color:var(--sand-text-primary,#1d1d1f);}
+.twf-model svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
+.twf-model-row{display:flex;align-items:center;gap:8px;margin-top:4px;}
+.twf-model-slot{min-width:0;flex:1;font-size:12.5px;}
 .twf-trigger{display:grid;grid-template-columns:40px minmax(0,1fr);align-items:center;margin:12px 0 0;padding:10px 0;border-top:1px solid var(--sand-border-subtle,#ece8e2);font-size:14px;}
 .twf-bolt{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#fff3e0;color:#e8590c;}
 .twf-bolt svg{width:14px;height:14px;fill:currentColor;}
