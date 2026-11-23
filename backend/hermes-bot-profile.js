@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const YAML = require('yaml');
 const { provisionMiaosWorkspace } = require('./miaos-workspace');
 const {
   EFFECTIVE_RELEASE_PROFILE,
@@ -101,6 +102,58 @@ const isManagedProfileConfig = text => typeof text === 'string' && (
   text.startsWith(MANAGED_MARKER)
   || LEGACY_MANAGED_MARKERS.some(marker => text.startsWith(marker))
 );
+// Hermes rewrites config.yaml when it enables a plugin and drops YAML comments.
+// Keep a separate, profile-specific ownership record so the next launch does
+// not mistake a profile Mia just provisioned for somebody's personal profile.
+const PROFILE_PROVENANCE_FILE = 'MIAOS_PROFILE_PROVENANCE.json';
+const profileProvenance = profile => `${JSON.stringify({ managedBy: 'Mia', profile, schema: 1 })}\n`;
+
+function hasProfileProvenance(profileDir) {
+  const marker = path.join(profileDir, PROFILE_PROVENANCE_FILE);
+  try {
+    const stat = fs.lstatSync(marker);
+    return stat.isFile() && stat.nlink === 1
+      && fs.readFileSync(marker, 'utf8') === profileProvenance(path.basename(profileDir));
+  } catch (_) { return false; }
+}
+
+function isManagedProfileDirectory(profileDir, config) {
+  try {
+    if (!fs.lstatSync(profileDir).isDirectory()) return false;
+  } catch (_) { return false; }
+  return isManagedProfileConfig(config) || hasProfileProvenance(profileDir);
+}
+
+// A separate marker proves origin, but must not make a replaced or weakened
+// config safe to overwrite. Hermes' serializer retains these Mia-owned guards.
+function retainsManagedProfilePosture(config, profileDir, { terminalRequired = false } = {}) {
+  let parsed;
+  try { parsed = YAML.parse(config); } catch (_) { return false; }
+  if (!parsed || typeof parsed !== 'object') return false;
+  const enabled = parsed.plugins?.enabled;
+  if (!Array.isArray(enabled) || ![ASK_BEFORE_DO_PLUGIN, PROVIDER_LIMITS_PLUGIN].every(name => enabled.includes(name))) return false;
+  if (path.basename(profileDir).startsWith('miaos-bot-')
+    && (!Array.isArray(parsed.agent?.disabled_toolsets)
+      || !parsed.agent.disabled_toolsets.includes('delegation'))) return false;
+  if (terminalRequired && !parsed.terminal) return false;
+  if (parsed.terminal) {
+    const guard = path.join(path.dirname(path.dirname(profileDir)), 'miaos-shell-guard.sh');
+    if (parsed.terminal.auto_source_bashrc !== false
+      || !Array.isArray(parsed.terminal.shell_init_files)
+      || !parsed.terminal.shell_init_files.includes(guard)) return false;
+  }
+  return true;
+}
+
+function ensureProfileProvenance(profileDir) {
+  const marker = path.join(profileDir, PROFILE_PROVENANCE_FILE);
+  if (fs.existsSync(marker) || fs.lstatSync(marker, { throwIfNoEntry: false })) {
+    if (!hasProfileProvenance(profileDir)) throw new Error(`refusing to replace unexpected Hermes profile provenance: ${path.basename(profileDir)}`);
+    fs.chmodSync(marker, 0o600);
+    return;
+  }
+  writeAtomic(marker, profileProvenance(path.basename(profileDir)), 0o600);
+}
 
 const SHELL_GUARD = `#!/bin/bash
 # Managed by Mia. Keep browser launches inside the app-owned browser.
@@ -248,20 +301,11 @@ function profileModelBlock(selection) {
 
 // The model block a previous turn wrote, so re-provisioning at boot keeps it.
 function existingProfileModel(config) {
-  const lines = String(config || '').split('\n');
-  const start = lines.indexOf('model:');
-  if (start < 0) return null;
-  const read = (key) => {
-    for (let index = start + 1; index < lines.length && lines[index].startsWith('  '); index += 1) {
-      const match = lines[index].match(new RegExp(`^  ${key}: (".*")$`));
-      if (match) {
-        try { return JSON.parse(match[1]); } catch (_) { return ''; }
-      }
-    }
-    return '';
-  };
-  const selection = { model: read('default'), provider: read('provider') };
-  return selection.model && selection.provider ? selection : null;
+  try {
+    const model = YAML.parse(String(config || ''))?.model;
+    const selection = { model: model?.default, provider: model?.provider };
+    return validProfileModel(selection) ? selection : null;
+  } catch (_) { return null; }
 }
 
 // Every Mia profile (Mia, bots, private agents, scheduled runs) compresses at
@@ -404,22 +448,28 @@ function provisionRuntimeProfile({
   const profileDir = path.join(profilesRoot, profile);
   const configPath = path.join(profileDir, 'config.yaml');
   const envPath = path.join(profileDir, '.env');
+  const profileStat = fs.lstatSync(profileDir, { throwIfNoEntry: false });
+  if (profileStat && !profileStat.isDirectory()) {
+    throw new Error(`refusing non-directory Hermes profile: ${profile}`);
+  }
   let existing = '';
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  const next = runtimeProfileConfig({
-    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots, mcpApps, disabledToolsets,
-    model: existing.startsWith(MANAGED_MARKER) ? existingProfileModel(existing) : null,
-  });
-
-  const ownedByMia = isManagedProfileConfig(existing);
-  if (existing && !ownedByMia) {
+  const ownedByMia = isManagedProfileDirectory(profileDir, existing);
+  if (existing && (!ownedByMia
+    || (!isManagedProfileConfig(existing)
+      && !retainsManagedProfilePosture(existing, profileDir, { terminalRequired: !!terminal?.cwd })))) {
     throw new Error(`refusing to overwrite unmanaged Hermes profile: ${profile}`);
   }
+  const next = runtimeProfileConfig({
+    toolsets, maxTurns, terminal, googleWorkspace, backgroundReview, editsBots, mcpApps, disabledToolsets,
+    model: ownedByMia ? existingProfileModel(existing) : null,
+  });
 
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(profileDir, 0o700);
+  ensureProfileProvenance(profileDir);
   provisionBundledPlugin(profileDir, CLAUDE_SUBSCRIPTION_PLUGIN);
   provisionBundledPlugin(profileDir, ASK_BEFORE_DO_PLUGIN);
   provisionBundledPlugin(profileDir, PROVIDER_LIMITS_PLUGIN);
@@ -446,10 +496,12 @@ function setHermesProfileModel(profile, selection, { profilesRoot = path.join(he
   if (!validProfileModel(selection) || !/^[a-z0-9-]+$/.test(String(profile || ''))) return false;
   const block = profileModelBlock(selection);
   const configPath = path.join(profilesRoot, profile, 'config.yaml');
+  const profileDir = path.dirname(configPath);
   let existing;
   try { existing = fs.readFileSync(configPath, 'utf8'); } catch (_) { return false; }
-  if (!existing.startsWith(MANAGED_MARKER)) return false;
-  const lines = existing.split('\n');
+  if (!isManagedProfileDirectory(profileDir, existing)
+    || (!isManagedProfileConfig(existing) && !retainsManagedProfilePosture(existing, profileDir))) return false;
+  const lines = (isManagedProfileConfig(existing) ? existing : `${MANAGED_MARKER}\n${existing}`).split('\n');
   const start = lines.indexOf('model:');
   if (start >= 0) {
     let end = start + 1;
@@ -638,6 +690,7 @@ function provisionHermesRuntimeProfiles(options = {}) {
 module.exports = {
   COMPRESSION_THRESHOLD_TOKENS,
   isManagedProfileConfig,
+  isManagedProfileDirectory,
   MIAOS_AGENT_HERMES_PROFILE,
   MIAOS_AGENT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_HERMES_PROFILE,

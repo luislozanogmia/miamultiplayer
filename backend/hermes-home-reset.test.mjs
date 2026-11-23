@@ -6,6 +6,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const YAML = require('yaml');
+const { MIAOS_BOT_APPS_HERMES_PROFILE, provisionHermesRuntimeProfiles } = require('./hermes-bot-profile');
 const {
   listHermesCredentialProviders,
   removeProfileCopiesOfRootCredentials,
@@ -172,6 +174,25 @@ test('profile copies of root keys are removed; profile-only logins stay', () => 
     assert.deepEqual(removeProfileCopiesOfRootCredentials(root).cleaned, []);
     assert.deepEqual(removeProfileCopiesOfRootCredentials('').cleaned, []);
     assert.deepEqual(removeProfileCopiesOfRootCredentials(path.join(root, 'missing')).cleaned, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('credential cleanup recognizes a Mia profile after Hermes drops its config comment', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-profile-rewritten-'));
+  try {
+    const profilesRoot = path.join(root, 'profiles');
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir: path.join(root, 'workspace') });
+    const config = path.join(profilesRoot, MIAOS_BOT_APPS_HERMES_PROFILE, 'config.yaml');
+    fs.writeFileSync(config, YAML.stringify(YAML.parse(fs.readFileSync(config, 'utf8'))));
+    fs.writeFileSync(path.join(root, 'auth.json'), JSON.stringify({ credential_pool: { openrouter: [{ id: 'root' }] } }));
+    const auth = path.join(profilesRoot, MIAOS_BOT_APPS_HERMES_PROFILE, 'auth.json');
+    fs.writeFileSync(auth, JSON.stringify({ credential_pool: { openrouter: [{ id: 'copy' }] } }));
+    const result = removeProfileCopiesOfRootCredentials(root);
+    assert.deepEqual(result.failures, []);
+    assert.deepEqual(result.cleaned, [auth]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(auth, 'utf8')).credential_pool, {});
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
