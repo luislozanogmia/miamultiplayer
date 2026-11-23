@@ -1,8 +1,8 @@
 diff --git a/hermes_cli/web_routers/mcp.py b/hermes_cli/web_routers/mcp.py
-index 4eab73b..cf79656 100644
+index 4eab73b..9aa0e9e 100644
 --- a/hermes_cli/web_routers/mcp.py
 +++ b/hermes_cli/web_routers/mcp.py
-@@ -306,7 +306,7 @@ async def mcp_oauth_callback(
+@@ -306,17 +306,16 @@ async def mcp_oauth_callback(
          None,
      )
      if flow is None:
@@ -11,7 +11,8 @@ index 4eab73b..cf79656 100644
      try:
          flow.deliver_callback(code=code, state=state, error=error, iss=iss)
      except ValueError as exc:
-@@ -315,5 +315,5 @@ async def mcp_oauth_callback(
+         return HTMLResponse(
+             "<h1>OAuth callback rejected</h1><p>The callback was invalid or already used.</p>",
              status_code=409 if "already received" in str(exc) else 400,
          )
      if error:
@@ -19,6 +20,10 @@ index 4eab73b..cf79656 100644
 -    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Hermes.</p>")
 +        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Mia for details.</p>", status_code=400)
 +    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Mia.</p>")
+-
+-
++
+ @router.put("/api/mcp/servers/{name}/enabled")
 diff --git a/tools/connectors/mcp_oauth.py b/tools/connectors/mcp_oauth.py
 index 79ea23f..5c37d08 100644
 --- a/tools/connectors/mcp_oauth.py
