@@ -180,7 +180,7 @@
   function localTimezone(){
     try { return root.Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch(_){ return 'UTC'; }
   }
-  function blankStep(){ return {text: '', ownerMemberId: '', botId: '', approverMemberId: ''}; }
+  function blankStep(){ return {text: '', ownerMemberId: '', botId: '', approverMemberId: '', model: null}; }
   function blankDraft(timezone){
     return {name: '', channelId: '', triggerKind: 'schedule', frequency: 'daily', weekdaysOnly: true, time: '09:00', timezone: timezone || localTimezone(),
       weekday: 'monday', monthDay: '1', intervalMinutes: '60', label: '', starters: [], steps: [blankStep()], remindMemberId: '', escalate: true};
@@ -202,7 +202,7 @@
     }
     if(Array.isArray(definition.steps) && definition.steps.length){
       draft.steps = definition.steps.map(function(step){
-        return {text: step.text || '', ownerMemberId: step.ownerMemberId || '', botId: step.botId || '', approverMemberId: step.approverMemberId || ''};
+        return {text: step.text || '', ownerMemberId: step.ownerMemberId || '', botId: step.botId || '', approverMemberId: step.approverMemberId || '', model: stepModel(step.model)};
       });
     }
     if(definition.stuck){
@@ -216,6 +216,17 @@
   }
   // The form's flat shape into exactly what the Hub accepts, with every problem
   // named in the person's words. Returns {definition, errors}.
+  // A step's model is {provider, model}, or null for the owner's default model.
+  var MODEL_PROVIDER = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+  var MODEL_ID = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?(?:\[1m\])?$/i;
+  function stepModel(value){
+    if(!value || typeof value !== 'object') return null;
+    var provider = value.provider, model = value.model;
+    if(typeof provider !== 'string' || !MODEL_PROVIDER.test(provider)) return null;
+    if(typeof model !== 'string' || model.length > 128 || !MODEL_ID.test(model)) return null;
+    return {provider: provider, model: model};
+  }
+
   function buildDefinition(draft){
     var errors = [], trigger;
     if(draft.triggerKind === 'flag'){
@@ -259,6 +270,8 @@
         if(step.approverMemberId === step.ownerMemberId) errors.push('Step ' + n + ': the approver must be someone other than the owner.');
         out.approverMemberId = step.approverMemberId;
       }
+      var model = stepModel(step.model);
+      if(model) out.model = model;
       return out;
     });
     var definition = {trigger: trigger, steps: steps,
@@ -387,7 +400,7 @@
     runState: runState, isOpenRun: isOpenRun, pausedReason: pausedReason, stepMark: stepMark, stepMarkOf: stepMarkOf, stepLine: stepLine, runLine: runLine,
     canCancel: canCancel, canRetry: canRetry, canFix: canFix, canStart: canStart,
     cleanLine: cleanLine, randomId: randomId, startBody: startBody, triggerLine: triggerLine, titleCase: titleCase, localTimezone: localTimezone,
-    blankStep: blankStep, blankDraft: blankDraft, draftFromWorkflow: draftFromWorkflow, buildDefinition: buildDefinition, checkDraft: checkDraft,
+    blankStep: blankStep, blankDraft: blankDraft, draftFromWorkflow: draftFromWorkflow, buildDefinition: buildDefinition, checkDraft: checkDraft, stepModel: stepModel,
     regularChannels: regularChannels, botOptions: botOptions, latestProposal: latestProposal, workflowStatus: workflowStatus,
     createClient: createClient, createQueue: createQueue
   };

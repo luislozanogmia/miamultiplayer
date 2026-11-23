@@ -36,6 +36,7 @@ const {
   PRIVATE_AGENT_PROFILE_PATTERN,
   MIAOS_BOT_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
+  BOT_HERMES_PROFILES,
   FULL_AGENT_TOOLSETS,
   SEARCH_ONLY_TOOLSETS,
   setHermesProfileModel,
@@ -999,10 +1000,9 @@ function standaloneGatewayOptions(options = {}) {
     && /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(options.provider)
     ? options.provider
     : '';
+  // A bot runs only in one of the bot profiles; anything else is the plain one.
   const profile = options.botWorker === true
-    ? (options.profile === MIAOS_BOT_GOOGLE_HERMES_PROFILE
-      ? MIAOS_BOT_GOOGLE_HERMES_PROFILE
-      : MIAOS_BOT_HERMES_PROFILE)
+    ? (BOT_HERMES_PROFILES.includes(options.profile) ? options.profile : MIAOS_BOT_HERMES_PROFILE)
     : MIAOS_AGENT_HERMES_PROFILE;
   const gatewayOptions = { ...options, profile };
   delete gatewayOptions.gatewayClient;

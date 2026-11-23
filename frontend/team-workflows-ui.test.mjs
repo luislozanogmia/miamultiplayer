@@ -446,3 +446,16 @@ test('the who column escapes names and uses the bot\'s Mote when the app provide
     assert.match(html, /class="twf-mote" src="assets\/mote\/mote-&lt;img/);
   } finally { globalThis.MiaBots = saved; }
 });
+
+test('each step shows its model beside the bot and owner, and the editor has a model row', () => {
+  const steps = [{ text: 'A', botName: 'B', ownerMemberId: 'u1', model: { provider: 'anthropic', model: 'claude-<b>' } }, { text: 'C', botName: 'D', ownerMemberId: 'u2', model: { provider: 'anthropic', model: 'claude-sonnet-5-5' } }, { text: 'E', botName: 'F', ownerMemberId: 'u2' }];
+  const page = ui.workflowHtml({ workflow: { id: ID(1), name: 'Flow', enabled: true, published: true, definition: { trigger: { kind: 'flag', label: 'Go', starters: ['u1'] }, steps } }, people, me: 'u1', isAdmin: false });
+  assert.equal((page.match(/class="twf-model"/g) || []).length, 3);
+  assert.match(page, /title="Model: claude-sonnet-5-5"/);
+  assert.match(page, /data-set="no" title="Model: Owner’s default model"/);
+  assert.doesNotMatch(page, /claude-<b>/); // a malformed model never reaches the page
+  const editor = ui.editorHtml({ draft: { ...wf.blankDraft('UTC'), steps: [{ ...wf.blankStep(), model: { provider: 'anthropic', model: 'claude-sonnet-5-5' } }] }, people, channels: [], bots: [] });
+  assert.match(editor, /data-wf-step-model="0"/);
+  assert.match(editor, /If the owner has not connected it, their default runs/);
+  assert.match(ui.modelChipHtml(null), /data-set="no"/);
+});

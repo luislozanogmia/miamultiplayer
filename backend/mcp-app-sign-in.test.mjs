@@ -12,6 +12,32 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sign-in-'));
 const APP = { id: 'attio', name: 'Attio' };
 const PROMPT = '\n  MCP OAuth: authorization required.\n  Open this URL in your browser:\n\n    https://vendor.test/authorize?client_id=abc&state=xyz\n\n  (Could not open a browser)\n';
 
+test('upgrade removes the shared-home token link without deleting the owner sign-in', () => {
+  const home = temp();
+  try {
+    const tokenDir = signIn.tokensDir(home, 'owner-app');
+    fs.mkdirSync(tokenDir, { recursive: true });
+    const token = path.join(tokenDir, 'u_asana.json');
+    fs.writeFileSync(token, 'fixture-token');
+    signIn.shareSignInsWithHome(home, 'owner-app');
+    assert.equal(signIn.removeHomeSignInLink(home, 'owner-app'), true);
+    assert.equal(fs.existsSync(path.join(home, 'mcp-tokens')), false);
+    assert.equal(fs.readFileSync(token, 'utf8'), 'fixture-token');
+    assert.equal(signIn.removeHomeSignInLink(home, 'owner-app'), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('an unrelated shared-home token folder is preserved during upgrade', () => {
+  const home = temp();
+  try {
+    const rootTokens = path.join(home, 'mcp-tokens');
+    fs.mkdirSync(rootTokens);
+    fs.writeFileSync(path.join(rootTokens, 'other.json'), 'fixture');
+    assert.equal(signIn.removeHomeSignInLink(home, 'owner-app'), false);
+    assert.equal(fs.readFileSync(path.join(rootTokens, 'other.json'), 'utf8'), 'fixture');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 // Stands for `hermes mcp login`: prints what the test feeds it, then closes.
 function login() {
   const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), killed: false });

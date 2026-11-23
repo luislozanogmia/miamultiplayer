@@ -70,6 +70,24 @@ const HERMES_STATE_DB = process.env.HERMES_STATE_DB || path.join(HERMES_HOME, 's
 const HERMES_AGENT_ROOT = process.env.HERMES_AGENT_ROOT
   ? path.resolve(process.env.HERMES_AGENT_ROOT)
   : path.join(HERMES_HOME, 'hermes-agent');
+const { MIAOS_BOT_APPS_HERMES_PROFILE } = require('./hermes-bot-profile');
+const APP_CRON_PROFILE = MIAOS_BOT_APPS_HERMES_PROFILE;
+const CRON_PROFILES = Object.freeze(['default', APP_CRON_PROFILE]);
+const cronHome = (profile = 'default') => profile === 'default' ? HERMES_HOME : path.join(HERMES_HOME, 'profiles', profile);
+const cronJobsFile = (profile = 'default') => profile === 'default' ? CRON_JOBS_FILE : path.join(cronHome(profile), 'cron', 'jobs.json');
+const cronExecutionsDb = (profile = 'default') => profile === 'default' ? HERMES_CRON_EXECUTIONS_DB : path.join(cronHome(profile), 'cron', 'executions.db');
+const cronStateDb = (profile = 'default') => profile === 'default' ? HERMES_STATE_DB : path.join(cronHome(profile), 'state.db');
+function cronProcessEnv(profile = 'default') {
+  const env = hermesProcessEnv();
+  env.HERMES_HOME = HERMES_HOME;
+  env.HERMES_STATE_DB = cronStateDb(profile);
+  env.HERMES_CRON_JOBS_FILE = cronJobsFile(profile);
+  env.HERMES_CRON_EXECUTIONS_DB = cronExecutionsDb(profile);
+  return env;
+}
+function cronPythonEnv(profile = 'default') {
+  return { ...cronProcessEnv(profile), HERMES_HOME: cronHome(profile) };
+}
 const BOT_PACKAGE_ROOT = path.resolve(
   process.env.MIAOS_BOT_PACKAGE_DIR
     || path.join(path.dirname(path.resolve(process.env.DB_PATH || path.join(__dirname, 'mia-os.db'))), 'bots')
@@ -99,17 +117,17 @@ function isValidAutomationTime(value) {
   return typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
-function runHermes(args) {
-  return runHermesCommand(['cron', '--accept-hooks', ...args]);
+function runHermes(args, profile = 'default') {
+  return runHermesCommand(['cron', '--accept-hooks', ...args], profile);
 }
 
-function runHermesCommand(args) {
+function runHermesCommand(args, profile = 'default') {
   return new Promise((resolve, reject) => {
     const launch = configuredHermesLaunch(HERMES_BIN);
     execFile(
       launch.command,
-      [...launch.prefixArgs, ...args],
-      { timeout: 90000, maxBuffer: 4 * 1024 * 1024, env: hermesProcessEnv() },
+      [...launch.prefixArgs, '--profile', profile, ...args],
+      { timeout: 90000, maxBuffer: 4 * 1024 * 1024, env: cronProcessEnv(profile) },
       (err, stdout, stderr) => {
         if (err) return reject(new Error(String(stderr || stdout || err.message || '').trim().slice(0, 1000)));
         resolve(String(stdout || ''));
@@ -404,9 +422,9 @@ const cronPluginsReady = new Map();
 // sync and never blocks the schedule itself.
 // Whether the Hermes home's config.yaml already lists the plugin as enabled,
 // so startup only pays for `hermes plugins enable` the first time.
-function cronPluginEnabled(plugin) {
+function cronPluginEnabled(plugin, profile = 'default') {
   let text = '';
-  try { text = fs.readFileSync(path.join(HERMES_HOME, 'config.yaml'), 'utf8'); } catch (_) { return false; }
+  try { text = fs.readFileSync(path.join(cronHome(profile), 'config.yaml'), 'utf8'); } catch (_) { return false; }
   const block = /^plugins:\n((?:[ \t]+.*\n?)*)/m.exec(text);
   const enabled = block && /^  enabled:\n((?:    - .*\n?)*)/m.exec(block[1]);
   const disabled = block && /^  disabled:\n((?:    - .*\n?)*)/m.exec(block[1]);
@@ -414,14 +432,15 @@ function cronPluginEnabled(plugin) {
   return listed(enabled) && !listed(disabled);
 }
 
-function ensureCronPlugin(plugin) {
-  if (!cronPluginsReady.has(plugin)) {
-    cronPluginsReady.set(plugin, (async () => {
+function ensureCronPlugin(plugin, profile = 'default') {
+  const key = `${profile}:${plugin}`;
+  if (!cronPluginsReady.has(key)) {
+    cronPluginsReady.set(key, (async () => {
       const { provisionBundledPlugin } = require('./hermes-bot-profile');
-      provisionBundledPlugin(HERMES_HOME, plugin);
-      if (!cronPluginEnabled(plugin)) await runHermesCommand(['plugins', 'enable', plugin]);
+      provisionBundledPlugin(cronHome(profile), plugin);
+      if (!cronPluginEnabled(plugin, profile)) await runHermesCommand(['plugins', 'enable', plugin], profile);
     })().catch(() => {
-      cronPluginsReady.delete(plugin);
+      cronPluginsReady.delete(key);
       console.error('automation plugin unavailable');
       throw new Error('automation plugin unavailable');
     }));
@@ -439,7 +458,7 @@ function ensureCronPlugin(plugin) {
 // you" step (ask-before-do.js decide); when it is off, the run just does it.
 // Google's server is the one in the bot's chat (hermes-bot-profile.js); it
 // carries no credential, which the gateway sends over the MCP pipe.
-let cronGuardsReady = null;
+const cronGuardsReady = new Map();
 // Run by Hermes' own Python so Hermes writes its own config.yaml.
 const CRON_GUARD_SCRIPT = [
   'import json,sys',
@@ -465,29 +484,76 @@ const CRON_GUARD_SCRIPT = [
   'm.update({"google":gs}) if gs else m.pop("google",None)',
   'cfg["mcp_servers"]=m',
   'gs and cfg.setdefault("tools",{}).setdefault("tool_search",{}).update({"enabled":"off"})',
+  // The owner's own MCP apps (mcp-apps.js), replaced as a set: an app removed
+  // from Connected apps leaves the config too. Only the owner's bots' jobs
+  // may use them (restrictHermesJob); every other job lists no_mcp.
+  'ap=json.loads(sys.argv[4]) if len(sys.argv)>4 and sys.argv[4] else {}',
+  'px=sys.argv[5] if len(sys.argv)>5 and sys.argv[5] else ""',
+  'px and [m.pop(k) for k in list(m) if k.startswith(px)]',
+  'px and m.update(ap)',
+  'cfg["mcp_servers"]=m',
   'save_config(cfg)',
 ].join('\n');
-function ensureCronGuards() {
-  if (!cronGuardsReady) {
-    cronGuardsReady = (async () => {
+function ensureCronGuards(profile = 'default') {
+  if (!cronGuardsReady.has(profile)) {
+    cronGuardsReady.set(profile, (async () => {
       const { cronShellGuard, COMPRESSION_THRESHOLD_TOKENS, googleWorkspaceMcpServer } = require('./hermes-bot-profile');
-      const guardPath = cronShellGuard(HERMES_HOME) || '';
+      const guardPath = cronShellGuard(cronHome(profile)) || '';
       const google = googleWorkspaceMcpServer();
       await new Promise((resolve, reject) => {
-        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : ''], {
+        execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', CRON_GUARD_SCRIPT, guardPath, String(COMPRESSION_THRESHOLD_TOKENS), google ? JSON.stringify(google) : '',
+          '', profile === 'default' ? require('./mcp-apps').SERVER_PREFIX : ''], {
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
-          env: hermesProcessEnv(),
+          env: cronPythonEnv(profile),
         }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || stdout || err.message || '').trim().slice(0, 1000))) : resolve()));
       });
-      await ensureCronPlugin(ASK_BEFORE_DO_PLUGIN);
+      await ensureCronPlugin(ASK_BEFORE_DO_PLUGIN, profile);
     })().catch((error) => {
-      cronGuardsReady = null;
+      cronGuardsReady.delete(profile);
       throw error;
-    });
+    }));
   }
-  return cronGuardsReady;
+  return cronGuardsReady.get(profile);
+}
+
+// The owner's MCP apps in scheduled runs. The server-owned approval record is
+// checked for each automation; an editable bot document cannot grant itself
+// access. An empty or stale approval has no MCP tools.
+let scheduledMcpAppsPolicy = null;
+function setScheduledMcpAppsPolicy(policy) {
+  scheduledMcpAppsPolicy = policy && typeof policy.approvedServers === 'function' && typeof policy.servers === 'function'
+    && typeof policy.approvalStatus === 'function' && typeof policy.approvalStatusForJob === 'function'
+    && typeof policy.serverPrefix === 'string' && policy.serverPrefix ? policy : null;
+}
+const hasScheduledAppApproval = (bot, automation) => scheduledMcpAppsPolicy
+  && scheduledMcpAppsPolicy.approvalStatus(bot, automation) === 'valid';
+// After an app is added, removed or signed in to: rewrite the home config's
+// apps. Hermes reads them when its gateway next starts (Mia restarts it then).
+function refreshScheduledMcpApps() {
+  if (!scheduledMcpAppsPolicy) return Promise.resolve(false);
+  cronGuardsReady.delete('default');
+  return ensureCronGuards('default').then(() => true, (error) => {
+    console.error('[cron-sync] could not update the apps for scheduled runs:', String(error && error.message || error).slice(0, 200));
+    return false;
+  });
+}
+// Hermes adds every configured MCP server to a job that names none. Every
+// job therefore names exactly its approved servers or says no_mcp.
+function scheduledJobToolsets(bot, automation) {
+  if (!scheduledMcpAppsPolicy) return [...scheduledBotToolsets(), 'no_mcp'];
+  const configured = scheduledMcpAppsPolicy.servers();
+  const names = scheduledMcpAppsPolicy.approvedServers(bot, automation);
+  if (!Array.isArray(names) || names.some((name) => typeof name !== 'string' || !Object.hasOwn(configured, name))) {
+    return [...scheduledBotToolsets(), 'no_mcp'];
+  }
+  return names.length ? [...scheduledBotToolsets(), ...new Set(names)] : [...scheduledBotToolsets(), 'no_mcp'];
+}
+function cronProfileFor(bot, automation) {
+  const prefix = scheduledMcpAppsPolicy && scheduledMcpAppsPolicy.serverPrefix;
+  return prefix && scheduledJobToolsets(bot, automation).some((name) => name.startsWith(prefix))
+    ? APP_CRON_PROFILE : 'default';
 }
 
 // Hermes loads plugins when its gateway starts, so Mia prepares scheduled
@@ -496,9 +562,12 @@ function ensureCronGuards() {
 let scheduledPreparationFailed = false;
 async function prepareScheduledRuns() {
   try {
-    await ensureCronGuards();
-    await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
-    await ensureCronPlugin(RUN_REPORT_PLUGIN);
+    for (const profile of CRON_PROFILES) {
+      await ensureCronGuards(profile);
+      await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN, profile);
+      await ensureCronPlugin(RUN_REPORT_PLUGIN, profile);
+    }
+    await pauseUnapprovedJobs();
     scheduledPreparationFailed = false;
   } catch (_) {
     scheduledPreparationFailed = true;
@@ -506,13 +575,25 @@ async function prepareScheduledRuns() {
   }
 }
 
-async function restrictHermesJob(jobId, bot, workdir, automation) {
+async function pauseUnapprovedJobs() {
+  const registry = readHermesJobs();
+  for (const job of registry.byId.values()) {
+    if (jobIsPaused(job)) continue;
+    // The owner-app profile is reserved for Mia-managed, approved work.
+    // Unknown jobs there must never inherit its connected-app credentials.
+    if (job.miaCronProfile === APP_CRON_PROFILE || jobOwnerFromJob(job)) {
+      await runHermes(['pause', job.id], job.miaCronProfile);
+    }
+  }
+}
+
+async function restrictHermesJob(jobId, bot, workdir, automation, profile = 'default') {
   const artifactWorkspace = artifactWorkspaceForBot(bot);
   const runReport = runReportContextFor(automation);
   // A job never gets the bot's tools without the bot's guards.
-  await ensureCronGuards();
-  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN);
-  if (runReport) await ensureCronPlugin(RUN_REPORT_PLUGIN);
+  await ensureCronGuards(profile);
+  await ensureCronPlugin(PROVIDER_LIMITS_PLUGIN, profile);
+  if (runReport) await ensureCronPlugin(RUN_REPORT_PLUGIN, profile);
   const source = [
     'import json,sys',
     'from cron.jobs import update_job',
@@ -520,11 +601,11 @@ async function restrictHermesJob(jobId, bot, workdir, automation) {
     'raise SystemExit(0 if job else 2)',
   ].join(';');
   return new Promise((resolve, reject) => {
-    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(scheduledBotToolsets()), workdir, artifactWorkspace, JSON.stringify(runReport)], {
+    execFile(requiredConfiguredExecutable('HERMES_PYTHON', HERMES_PYTHON), ['-c', source, jobId, JSON.stringify(scheduledJobToolsets(bot, automation)), workdir, artifactWorkspace, JSON.stringify(runReport)], {
       timeout: 30000,
       maxBuffer: 1024 * 1024,
       cwd: requiredConfiguredPath('HERMES_AGENT_ROOT', HERMES_AGENT_ROOT, { mustExist: true, directory: true }),
-      env: hermesProcessEnv(),
+      env: cronPythonEnv(profile),
     }, (err, stdout, stderr) => {
       if (err) return reject(new Error(String(stderr || stdout || err.message || '').trim().slice(0, 1000)));
       resolve();
@@ -732,7 +813,7 @@ function hermesTimestampMs(value) {
   return Date.parse(String(value));
 }
 
-function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReport = null) {
+function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReport = null, toolsets = scheduledBotToolsets()) {
   if (!job) return true;
   const sched = (job.schedule && job.schedule.expr) || job.schedule_display || '';
   return (
@@ -742,7 +823,7 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspa
     String(job.deliver || '') !== deliver ||
     String(job.model || '') !== model ||
     String(job.provider || '') !== provider ||
-    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(scheduledBotToolsets()) ||
+    JSON.stringify(job.enabled_toolsets || []) !== JSON.stringify(toolsets) ||
     String(job.workdir || '') !== workdir ||
     String(job.artifact_workspace || '') !== artifactWorkspace ||
     JSON.stringify(job.mia_run_report || null) !== JSON.stringify(runReport)
@@ -750,16 +831,24 @@ function jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspa
 }
 
 function readHermesJobs() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(CRON_JOBS_FILE, 'utf8'));
-    const list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.jobs) ? raw.jobs : null;
-    if (!list) throw new Error('Hermes jobs registry has an invalid shape');
-    const byId = new Map();
-    const byName = new Map();
-    const byBotId = new Map();
-    const byOwnerKey = new Map();
-    for (const job of list) {
+  const byId = new Map();
+  const byName = new Map();
+  const byBotId = new Map();
+  const byOwnerKey = new Map();
+  for (const profile of CRON_PROFILES) {
+    let list;
+    try {
+      const raw = JSON.parse(fs.readFileSync(cronJobsFile(profile), 'utf8'));
+      list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.jobs) ? raw.jobs : null;
+      if (!list) throw new Error('Hermes jobs registry has an invalid shape');
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      throw new Error(`could not read hermes jobs file: ${err.message}`);
+    }
+    for (const stored of list) {
+      const job = { ...stored, miaCronProfile: profile };
       if (!job || !job.id) continue;
+      if (byId.has(job.id)) throw new Error(`duplicate scheduler job id across profiles: ${job.id}`);
       byId.set(job.id, job);
       if (job.name) byName.set(job.name, job);
       const owner = jobOwnerFromJob(job);
@@ -775,20 +864,8 @@ function readHermesJobs() {
         }
       }
     }
-    return { byId, byName, byBotId, byOwnerKey };
-  } catch (err) {
-    // A brand-new Hermes profile legitimately has no registry yet. The
-    // Hermes CLI owns creation and locking, so represent only ENOENT as an
-    // empty registry and let the first `cron add` initialize it. Corrupt or
-    // unreadable existing files still fail closed below.
-    if (err && err.code === 'ENOENT') {
-      return { byId: new Map(), byName: new Map(), byBotId: new Map(), byOwnerKey: new Map() };
-    }
-    // An unreadable registry is not proof that no jobs exist. Creating from an
-    // assumed-empty state can duplicate live schedules, so fail closed and let
-    // the next reconciliation retry after the registry is healthy.
-    throw new Error(`could not read hermes jobs file: ${err.message}`);
   }
+  return { byId, byName, byBotId, byOwnerKey };
 }
 
 function hasActiveMiaJobs() {
@@ -796,12 +873,16 @@ function hasActiveMiaJobs() {
   return [...registry.byId.values()].some(job => jobOwnerFromJob(job) && !jobIsPaused(job));
 }
 
-function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy) {
+function resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy, targetProfile = cronProfileFor(bot, automation)) {
   const key = automationOwnerKey(bot.id, automation.id);
   const ownedJobs = (registry.byOwnerKey.get(key) || []).slice();
-  if (ownedJobs.length > 1) throw new Error(`multiple scheduler jobs already belong to automation ${key}`);
+  if (ownedJobs.length > 2 || new Set(ownedJobs.map((item) => item.miaCronProfile)).size !== ownedJobs.length) {
+    throw new Error(`multiple scheduler jobs already belong to automation ${key}`);
+  }
   let job = null;
-  if (existingJob && jobOwnedByAutomation(existingJob, bot, automation, allowLegacy)) job = existingJob;
+  const atTarget = ownedJobs.find((item) => item.miaCronProfile === targetProfile);
+  if (atTarget) job = atTarget;
+  if (!job && existingJob && jobOwnedByAutomation(existingJob, bot, automation, allowLegacy)) job = existingJob;
   const stampedId = bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
   if (!job && stampedId) {
     const stamped = registry.byId.get(stampedId) || null;
@@ -828,12 +909,13 @@ async function runBotAutomationNow(bot, automationId) {
   const automation = botAutomations(bot).find((item) => item.id === automationId);
   if (!automation) return { status: 'missing' };
   if (automation.enabled !== true) return { status: 'off' };
+  if (!hasScheduledAppApproval(bot, automation)) return { status: 'off', reason: 'app_review_required' };
   // The lookup stamps job ids onto the bot it is given; keep the caller's copy unchanged.
   const lookup = migrateBotAutomations(JSON.parse(JSON.stringify(bot)));
   const job = resolveOwnedAutomationJob(lookup, automation, readHermesJobs(), null, false);
   if (!job) return { status: 'missing' };
   if (jobIsPaused(job)) return { status: 'off' };
-  await startHermesRun(job.id);
+  await startHermesRun(job.id, job.miaCronProfile);
   return { status: 'started', jobId: job.id };
 }
 
@@ -842,13 +924,13 @@ async function runBotAutomationNow(bot, automationId) {
 // "Could not start" and kill the run halfway. The run now goes on in its own
 // process; Mia only waits long enough to see that it did not fail at once.
 const RUN_START_GRACE_MS = 2500;
-function startHermesRun(jobId) {
+function startHermesRun(jobId, profile = 'default') {
   return new Promise((resolve, reject) => {
     const launch = configuredHermesLaunch(HERMES_BIN);
     let child;
     try {
-      child = spawn(launch.command, [...launch.prefixArgs, 'cron', '--accept-hooks', 'run', jobId],
-        { detached: true, stdio: 'ignore', env: hermesProcessEnv() });
+      child = spawn(launch.command, [...launch.prefixArgs, '--profile', profile, 'cron', '--accept-hooks', 'run', jobId],
+        { detached: true, stdio: 'ignore', env: cronProcessEnv(profile) });
     } catch (error) {
       return reject(error);
     }
@@ -871,22 +953,23 @@ function startHermesRun(jobId) {
 // run, sees it within a second and interrupts that run only. The automation
 // itself stays on; its next scheduled runs happen as usual.
 // -> { status: 'stopping'|'not_running'|'missing', executionId }
-const CRON_STOP_DIR = path.join(path.dirname(HERMES_CRON_EXECUTIONS_DB), 'mia-stop');
+const cronStopDir = (profile = 'default') => path.join(path.dirname(cronExecutionsDb(profile)), 'mia-stop');
 const CRON_STOP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 function stopBotAutomationRun(conn, bot, automationId) {
   const automation = botAutomations(bot).find((item) => item.id === automationId);
   if (!automation) return { status: 'missing' };
   const run = listActiveBotCronRuns(conn, { includePaused: true }).find((item) => item.bot && item.bot.id === bot.id && item.automationId === automationId);
   if (!run || !/^[A-Za-z0-9_-]{1,80}$/.test(String(run.sessionId || ''))) return { status: 'not_running' };
-  fs.mkdirSync(CRON_STOP_DIR, { recursive: true, mode: 0o700 });
+  const stopDir = cronStopDir(run.profile);
+  fs.mkdirSync(stopDir, { recursive: true, mode: 0o700 });
   // Old requests are cleared so the folder never grows.
-  for (const name of fs.readdirSync(CRON_STOP_DIR)) {
+  for (const name of fs.readdirSync(stopDir)) {
     try {
-      const file = path.join(CRON_STOP_DIR, name);
+      const file = path.join(stopDir, name);
       if (Date.now() - fs.lstatSync(file).mtimeMs > CRON_STOP_MAX_AGE_MS) fs.rmSync(file, { force: true });
     } catch (_) { /* gone already */ }
   }
-  const file = path.join(CRON_STOP_DIR, run.sessionId);
+  const file = path.join(stopDir, run.sessionId);
   if (!fs.existsSync(file)) fs.writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
   return { status: 'stopping', executionId: run.sessionId };
 }
@@ -905,20 +988,32 @@ function schedulerUtcOffsetMinutes() {
 }
 
 async function syncOneBotAutomation(bot, automation, registry, allowLegacy, existingJob, options = {}) {
+  const targetProfile = cronProfileFor(bot, automation);
   const prompt = jobPromptFor(bot, automation, options);
   const schedulerOffset = prompt && automation.enabled && Number.isInteger(automation.utcOffsetMinutes) ? await schedulerUtcOffsetMinutes() : 0;
-  const expr = prompt ? automationToCronExpr(automation, schedulerOffset) : null;
+  const expr = prompt && hasScheduledAppApproval(bot, automation) ? automationToCronExpr(automation, schedulerOffset) : null;
   const name = jobNameFor(bot, automation);
   // Mia owns the conversation event store; external delivery targets are
   // intentionally not selected here. The native event sink will consume
   // scheduled output in a later slice, while Hermes keeps local run output.
   const deliver = 'local';
-  const job = resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy);
+  let job = resolveOwnedAutomationJob(bot, automation, registry, existingJob, allowLegacy, targetProfile);
+  if (job && !job.miaCronProfile) job = { ...job, miaCronProfile: 'default' };
+  const priorJobs = (registry.byOwnerKey.get(automationOwnerKey(bot.id, automation.id)) || [])
+    .filter((item) => item.miaCronProfile !== targetProfile);
+  if (priorJobs.length > 1) throw new Error('multiple old automation jobs need migration');
+  const priorJob = priorJobs[0] || (job && job.miaCronProfile !== targetProfile ? job : null);
+  if (priorJob && !jobIsPaused(priorJob)) {
+    await runHermes(['pause', priorJob.id], priorJob.miaCronProfile);
+    const paused = readHermesJobs().byId.get(priorJob.id);
+    if (!paused || !jobIsPaused(paused)) throw new Error('old automation job was not paused for migration');
+  }
+  if (job && job.miaCronProfile !== targetProfile) job = null;
 
   if (!expr) {
     // Automation off or malformed: nothing should fire. Pause rather than
     // remove — re-enabling later resumes the same job.
-    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id], job.miaCronProfile);
     return;
   }
 
@@ -933,7 +1028,7 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
     // Hermes deliberately falls back to a context-free run when a configured
     // workdir disappears. Mia bots must fail closed instead: pause only the
     // already ownership-verified job and let reconciliation retry later.
-    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id], job.miaCronProfile);
     throw error;
   }
   const artifactWorkspace = artifactWorkspaceForBot(bot);
@@ -944,13 +1039,14 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
   } catch (error) {
     // A job left running would keep sending its old model; pause it until a
     // connected model is there, the way a missing workdir does.
-    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id], job.miaCronProfile);
     throw error;
   }
   const { model, provider } = jobModel;
 
   if (job) {
-    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation))) {
+    if (jobNeedsEdit(job, expr, prompt, deliver, name, workdir, artifactWorkspace, model, provider, runReportContextFor(automation), scheduledJobToolsets(bot, automation))) {
+      if (!jobIsPaused(job)) await runHermes(['pause', job.id], targetProfile);
       await runHermes([
         'edit',
         job.id,
@@ -968,28 +1064,33 @@ async function syncOneBotAutomation(bot, automation, registry, allowLegacy, exis
         model,
         '--provider',
         provider,
-      ]);
-      await restrictHermesJob(job.id, bot, workdir, automation);
+      ], targetProfile);
+      await restrictHermesJob(job.id, bot, workdir, automation, targetProfile);
+      await runHermes(['resume', job.id], targetProfile);
+    } else if (jobIsPaused(job)) {
+      // Editing a paused job does not activate it. Resume independently so a
+      // changed schedule cannot remain paused after the user re-enables it.
+      await runHermes(['resume', job.id], targetProfile);
     }
-    // Editing a paused job does not activate it. Resume independently so a
-    // changed schedule cannot remain paused after the user re-enables it.
-    if (jobIsPaused(job)) await runHermes(['resume', job.id]);
+    if (priorJob) await runHermes(['remove', priorJob.id], priorJob.miaCronProfile);
     return;
   }
 
   const out = await runHermes([
     'create', expr, prompt,
+    '--paused',
     '--name', name,
     '--deliver', deliver,
     '--workdir', workdir,
     '--model', model,
     '--provider', provider,
-  ]);
+  ], targetProfile);
   const m = String(out).match(/Created job:\s*([\w-]+)/i);
-  if (m) {
-    bot.hermesCronJobIds[automation.id] = m[1];
-    await restrictHermesJob(m[1], bot, workdir, automation);
-  }
+  if (!m) throw new Error('Hermes did not return the paused automation job id');
+  bot.hermesCronJobIds[automation.id] = m[1];
+  await restrictHermesJob(m[1], bot, workdir, automation, targetProfile);
+  await runHermes(['resume', m[1]], targetProfile);
+  if (priorJob) await runHermes(['remove', priorJob.id], priorJob.miaCronProfile);
 }
 
 // Bring every stored automation in line with its independent scheduler job.
@@ -1006,7 +1107,7 @@ async function syncBotAutomation(bot, existingJob, existingRegistry, options = {
   for (const job of registry.byBotId.get(String(bot.id)) || []) {
     const owner = jobOwnerFromJob(job);
     if (!owner || owner.legacy || liveIds.has(owner.automationId)) continue;
-    await runHermes(['remove', job.id]);
+    await runHermes(['remove', job.id], job.miaCronProfile);
   }
   for (const automationId of Object.keys(bot.hermesCronJobIds)) {
     if (!liveIds.has(automationId)) delete bot.hermesCronJobIds[automationId];
@@ -1020,9 +1121,8 @@ async function syncBotAutomation(bot, existingJob, existingRegistry, options = {
 async function pauseBotCron(bot, _existingJob, existingRegistry) {
   migrateBotAutomations(bot);
   const registry = existingRegistry || readHermesJobs();
-  for (const automation of bot.automations) {
-    const job = resolveOwnedAutomationJob(bot, automation, registry, null, automation === bot.automations[0]);
-    if (job && !jobIsPaused(job)) await runHermes(['pause', job.id]);
+  for (const job of registry.byBotId.get(String(bot.id)) || []) {
+    if (!jobIsPaused(job)) await runHermes(['pause', job.id], job.miaCronProfile);
   }
   return bot;
 }
@@ -1032,7 +1132,7 @@ async function removeBotCron(bot, _existingJob, existingRegistry) {
   const registry = existingRegistry || readHermesJobs();
   for (const job of registry.byBotId.get(String(bot.id)) || []) {
     try {
-      await runHermes(['remove', job.id]);
+      await runHermes(['remove', job.id], job.miaCronProfile);
     } catch (err) {
       console.error('cron-sync: remove failed for', bot.id, err.message);
     }
@@ -1082,7 +1182,7 @@ async function reconcileBotCrons(conn, options = {}) {
     if (!owner || seenBotIds.has(owner.botId)) continue;
     if (!jobIsPaused(job)) {
       try {
-        await runHermes(['pause', job.id]);
+        await runHermes(['pause', job.id], job.miaCronProfile);
         paused++;
       } catch (err) {
         errors++;
@@ -1205,20 +1305,38 @@ function hasSqliteTable(database, table) {
   ).get(table));
 }
 
+function profileForJobId(registry, jobId) {
+  const job = registry.byId.get(jobId);
+  return job && job.miaCronProfile || 'default';
+}
+
+function withCronStatements(fileFor, tables, sql, action) {
+  const Database = require('better-sqlite3');
+  const databases = [];
+  const statements = new Map();
+  const forProfile = (profile) => {
+    if (!statements.has(profile)) {
+      const file = fileFor(profile);
+      if (!fs.existsSync(file)) statements.set(profile, null);
+      else {
+        const database = new Database(file, { readonly: true, fileMustExist: true });
+        databases.push(database);
+        statements.set(profile, tables.every((table) => hasSqliteTable(database, table)) ? database.prepare(sql) : null);
+      }
+    }
+    return statements.get(profile);
+  };
+  try { return action(forProfile); }
+  finally { for (const database of databases) database.close(); }
+}
+
 // Return the newest terminal Hermes cron result for each bot when Mia has
 // not yet persisted that exact run. Successful runs come from the transcript
 // store; failed runs come from the execution ledger so provider/configuration
 // failures are visible instead of disappearing silently.
 function listUndeliveredBotCronResults(conn) {
-  const Database = require('better-sqlite3');
-  const state = fs.existsSync(HERMES_STATE_DB)
-    ? new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true })
-    : null;
-  const executions = fs.existsSync(HERMES_CRON_EXECUTIONS_DB)
-    ? new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true })
-    : null;
-  try {
-    const latest = hasSqliteTable(state, 'sessions') && hasSqliteTable(state, 'messages') && state.prepare(
+  const registry = readHermesJobs();
+  return withCronStatements(cronStateDb, ['sessions', 'messages'],
       `SELECT s.id AS sessionId, s.started_at AS startedAt, s.ended_at AS endedAt,
               (SELECT m.content FROM messages m
                 WHERE m.session_id = s.id AND m.role = 'assistant'
@@ -1227,24 +1345,24 @@ function listUndeliveredBotCronResults(conn) {
          FROM sessions s
         WHERE s.source = 'cron' AND s.id LIKE ?
           AND s.ended_at IS NOT NULL AND s.end_reason = 'cron_complete'
-        ORDER BY s.started_at DESC LIMIT 1`
-    );
+        ORDER BY s.started_at DESC LIMIT 1`, (latestFor) => withCronStatements(cronExecutionsDb, ['executions'],
     // A lost fire claim means another execution owned that fire; it is
     // scheduler-internal overlap, not a run the user should see fail.
-    const latestFailure = hasSqliteTable(executions, 'executions') && executions.prepare(
       `SELECT id AS executionId, coalesce(started_at, claimed_at) AS startedAt, error
          FROM executions
         WHERE job_id = ? AND status = 'failed'
           AND coalesce(error, '') NOT LIKE 'Fire claim lost%'
-        ORDER BY claimed_at DESC, id DESC LIMIT 1`
-    );
+        ORDER BY claimed_at DESC, id DESC LIMIT 1`, (failureFor) => {
     const results = [];
     for (const bot of db.loadAll(conn, 'bots')) {
       migrateBotAutomations(bot);
       for (const automation of bot.automations) {
         const jobId = bot.hermesCronJobIds[automation.id];
         if (!jobId || !jobPromptFor(bot, automation)) continue;
+        const profile = profileForJobId(registry, jobId);
         const delivery = bot.hermesCronDeliveries[automation.id] || {};
+        const latest = latestFor(profile);
+        const latestFailure = failureFor(profile);
         const row = latest ? latest.get(`cron_${jobId}_%`) : null;
         const failed = latestFailure ? latestFailure.get(jobId) : null;
         // A success outranks any failure that began before it ended: a failed
@@ -1273,10 +1391,7 @@ function listUndeliveredBotCronResults(conn) {
       }
     }
     return results;
-  } finally {
-    if (state) state.close();
-    if (executions) executions.close();
-  }
+  }));
 }
 
 // Hermes' execution ledger is the runtime authority for whether a scheduled
@@ -1287,25 +1402,20 @@ function listUndeliveredBotCronResults(conn) {
 // or already marked unknown by Hermes when it found them after a restart.
 const INTERRUPTED_RUN_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 function listInterruptedBotCronRuns(conn) {
-  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
   const registry = readHermesJobs();
-  const Database = require('better-sqlite3');
-  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
   const ownerGone = (pid) => {
     try { process.kill(Number(pid), 0); return false; } catch (error) { return error.code === 'ESRCH'; }
   };
-  try {
-    if (!hasSqliteTable(executions, 'executions')) return [];
-    const latest = executions.prepare(
+  return withCronStatements(cronExecutionsDb, ['executions'],
       `SELECT id, status, pid, claimed_at AS claimedAt, started_at AS startedAt, finished_at AS finishedAt
-         FROM executions WHERE job_id = ? ORDER BY claimed_at DESC, id DESC LIMIT 1`
-    );
+         FROM executions WHERE job_id = ? ORDER BY claimed_at DESC, id DESC LIMIT 1`, (statementFor) => {
     const results = [];
     for (const bot of db.loadAll(conn, 'bots')) {
       migrateBotAutomations(bot);
       for (const automation of bot.automations) {
         const jobId = bot.hermesCronJobIds[automation.id];
-        const row = jobId && latest.get(jobId);
+        const latest = jobId && statementFor(profileForJobId(registry, jobId));
+        const row = latest && latest.get(jobId);
         if (!row) continue;
         const recent = Date.now() - Date.parse(row.finishedAt || '') < INTERRUPTED_RUN_LOOKBACK_MS;
         const cutOff = row.status === 'unknown' ? recent : (['claimed', 'running'].includes(row.status) && ownerGone(row.pid));
@@ -1323,9 +1433,7 @@ function listInterruptedBotCronRuns(conn) {
       }
     }
     return results;
-  } finally {
-    executions.close();
-  }
+  });
 }
 
 function executionOwnerAlive(pid) {
@@ -1335,19 +1443,13 @@ function executionOwnerAlive(pid) {
 }
 
 function listActiveBotCronRuns(conn, options = {}) {
-  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
   const registry = readHermesJobs();
-  const Database = require('better-sqlite3');
-  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
-  try {
-    if (!hasSqliteTable(executions, 'executions')) return [];
-    const latest = executions.prepare(
+  return withCronStatements(cronExecutionsDb, ['executions'],
       `SELECT id AS executionId, status, pid,
               coalesce(started_at, claimed_at) AS startedAt
          FROM executions
         WHERE job_id = ?
-        ORDER BY claimed_at DESC, id DESC LIMIT 1`
-    );
+        ORDER BY claimed_at DESC, id DESC LIMIT 1`, (statementFor) => {
     const results = [];
     for (const bot of db.loadAll(conn, 'bots')) {
       migrateBotAutomations(bot);
@@ -1356,9 +1458,11 @@ function listActiveBotCronRuns(conn, options = {}) {
         if (!jobId) continue;
         const job = registry.byId.get(jobId) || null;
         if (!jobOwnedByAutomation(job, bot, automation, true)) continue;
-        const paused = !automationToCronExpr(automation) || !jobPromptFor(bot, automation) || jobIsPaused(job);
+        const paused = !automationToCronExpr(automation) || !jobPromptFor(bot, automation)
+          || !hasScheduledAppApproval(bot, automation) || jobIsPaused(job);
         if (paused && !options.includePaused) continue;
-        const row = latest.get(jobId);
+        const latest = statementFor(profileForJobId(registry, jobId));
+        const row = latest ? latest.get(jobId) : null;
         if (!row || !['claimed', 'running'].includes(row.status)) continue;
         // A run keeps going after its automation is paused, so Stop can still
         // find it; a paused job's row counts only while its owner is alive,
@@ -1369,15 +1473,14 @@ function listActiveBotCronRuns(conn, options = {}) {
           automation,
           automationId: automation.id,
           jobId,
+          profile: job.miaCronProfile,
           sessionId: row.executionId,
           startedAt: row.startedAt,
         });
       }
     }
     return results;
-  } finally {
-    executions.close();
-  }
+  });
 }
 
 // Step checklists: during a scheduled run the bot reports each step with the
@@ -1467,18 +1570,13 @@ function automationChecklist(steps, reports, run, untilMs) {
 
 // The latest run of every automation that has steps, with its checklist.
 function listAutomationChecklists(conn) {
-  if (!fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return [];
-  const Database = require('better-sqlite3');
-  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
-  try {
-    if (!hasSqliteTable(executions, 'executions')) return [];
-    const latest = executions.prepare(
+  const registry = readHermesJobs();
+  return withCronStatements(cronExecutionsDb, ['executions'],
       `SELECT id AS executionId, status,
               coalesce(started_at, claimed_at) AS startedAt, finished_at AS finishedAt
          FROM executions
         WHERE job_id = ?
-        ORDER BY claimed_at DESC, id DESC LIMIT 1`
-    );
+        ORDER BY claimed_at DESC, id DESC LIMIT 1`, (statementFor) => {
     const results = [];
     for (const bot of db.loadAll(conn, 'bots')) {
       migrateBotAutomations(bot);
@@ -1486,7 +1584,8 @@ function listAutomationChecklists(conn) {
         const steps = Array.isArray(automation.steps) ? automation.steps.map((step) => String(step || '').trim()).filter(Boolean) : [];
         const jobId = bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
         if (!steps.length || !jobId) continue;
-        const run = latest.get(jobId);
+        const latest = statementFor(profileForJobId(registry, jobId));
+        const run = latest ? latest.get(jobId) : null;
         if (!run) continue;
         results.push({
           bot,
@@ -1496,9 +1595,7 @@ function listAutomationChecklists(conn) {
       }
     }
     return results;
-  } finally {
-    executions.close();
-  }
+  });
 }
 
 function botRunReportsDirectory(bot) {
@@ -1513,26 +1610,21 @@ function botRunReportsDirectory(bot) {
 // The checklist of the run a "run now" in a chat started: the first run of the
 // automation's job claimed from that moment on. null until that run begins.
 function automationRunChecklistSince(bot, automationId, sinceMs) {
-  if (!bot || !Number.isFinite(sinceMs) || !fs.existsSync(HERMES_CRON_EXECUTIONS_DB)) return null;
+  if (!bot || !Number.isFinite(sinceMs)) return null;
   migrateBotAutomations(bot);
   const automation = bot.automations.find((item) => item.id === automationId);
   const jobId = automation && bot.hermesCronJobIds && bot.hermesCronJobIds[automation.id];
   if (!jobId) return null;
-  const Database = require('better-sqlite3');
-  const executions = new Database(HERMES_CRON_EXECUTIONS_DB, { readonly: true, fileMustExist: true });
-  let runs;
-  try {
-    if (!hasSqliteTable(executions, 'executions')) return null;
-    runs = executions.prepare(
+  const registry = readHermesJobs();
+  const runs = withCronStatements(cronExecutionsDb, ['executions'],
       `SELECT id AS executionId, status, claimed_at AS claimedAt,
               coalesce(started_at, claimed_at) AS startedAt, finished_at AS finishedAt
          FROM executions
         WHERE job_id = ?
-        ORDER BY claimed_at DESC, id DESC LIMIT 200`
-    ).all(jobId).reverse();
-  } finally {
-    executions.close();
-  }
+        ORDER BY claimed_at DESC, id DESC LIMIT 200`, (statementFor) => {
+      const statement = statementFor(profileForJobId(registry, jobId));
+      return statement ? statement.all(jobId).reverse() : [];
+    });
   const index = runs.findIndex((run) => hermesTimestampMs(run.claimedAt) >= sinceMs - 5000);
   if (index < 0) return null;
   const next = runs[index + 1];
@@ -1551,26 +1643,29 @@ function automationRunChecklistSince(bot, automationId, sinceMs) {
 // A long run can continue under a new session whose parents lead to the root.
 function cronRootForSession(sessionId) {
   const named = (id) => (/^cron_(.+)_\d{8}_\d{6}$/.exec(id) || [])[1] || '';
-  let id = String(sessionId || '');
-  if (!id || id.length > 200 || !fs.existsSync(HERMES_STATE_DB)) return null;
+  const originalId = String(sessionId || '');
+  if (!originalId || originalId.length > 200) return null;
   const Database = require('better-sqlite3');
-  const state = new Database(HERMES_STATE_DB, { readonly: true, fileMustExist: true });
-  try {
-    const parent = state.prepare('SELECT parent_session_id AS parent, source, started_at AS startedAt FROM sessions WHERE id = ?');
-    for (let hop = 0; hop < 8; hop += 1) {
-      const row = parent.get(id);
-      if (!row) return null;
-      const jobId = named(id);
-      if (jobId) return row.source === 'cron' ? { jobId, startedAt: row.startedAt } : null;
-      id = String(row.parent || '');
-      if (!id) return null;
-    }
-    return null;
-  } catch (_) {
-    return null;
-  } finally {
-    state.close();
+  for (const profile of CRON_PROFILES) {
+    const file = cronStateDb(profile);
+    if (!fs.existsSync(file)) continue;
+    const state = new Database(file, { readonly: true, fileMustExist: true });
+    try {
+      if (!hasSqliteTable(state, 'sessions')) continue;
+      const parent = state.prepare('SELECT parent_session_id AS parent, source, started_at AS startedAt FROM sessions WHERE id = ?');
+      let id = originalId;
+      for (let hop = 0; hop < 8; hop += 1) {
+        const row = parent.get(id);
+        if (!row) break;
+        const jobId = named(id);
+        if (jobId) return row.source === 'cron' ? { jobId, startedAt: row.startedAt, profile } : null;
+        id = String(row.parent || '');
+        if (!id) break;
+      }
+    } catch (_) { /* Another profile may hold this session. */ }
+    finally { state.close(); }
   }
+  return null;
 }
 
 // The scheduled run going on right now that a live Hermes session belongs to,
@@ -1578,14 +1673,16 @@ function cronRootForSession(sessionId) {
 function activeBotCronRunForSession(conn, sessionId) {
   const root = cronRootForSession(sessionId);
   if (!root) return null;
-  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === root.jobId);
+  const registry = readHermesJobs();
+  const run = listActiveBotCronRuns(conn).find((candidate) => candidate.jobId === root.jobId
+    && profileForJobId(registry, candidate.jobId) === root.profile);
   if (!run) return null;
   // Hermes creates the root session after marking this execution running.
   // Comparing durable start times rejects a prior execution of the same job.
   const sessionStarted = hermesTimestampMs(root.startedAt);
   const runStarted = hermesTimestampMs(run.startedAt);
   if (!Number.isFinite(sessionStarted) || !Number.isFinite(runStarted) || sessionStarted < runStarted - 1000 || sessionStarted > Date.now() + 1000) return null;
-  const job = readHermesJobs().byId.get(root.jobId) || {};
+  const job = registry.byId.get(root.jobId) || {};
   return { ...run, folders: [job.artifact_workspace, job.workdir].filter(Boolean) };
 }
 
@@ -1594,6 +1691,7 @@ module.exports = {
   isValidAutomationTime,
   jobNameFor,
   botIdFromJob,
+  jobOwnerFromJob,
   jobOwnedByBot,
   jobOwnedByAutomation,
   jobPromptFor,
@@ -1626,8 +1724,12 @@ module.exports = {
   listSessionArtifacts,
   validateBotArtifacts,
   scheduledBotToolsets,
+  scheduledJobToolsets,
+  setScheduledMcpAppsPolicy,
+  refreshScheduledMcpApps,
   CRON_GUARD_SCRIPT,
   prepareScheduledRuns,
+  pauseUnapprovedJobs,
   hasActiveMiaJobs,
   cronPluginEnabled,
 };

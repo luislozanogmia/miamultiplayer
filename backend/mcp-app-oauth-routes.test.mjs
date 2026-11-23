@@ -15,6 +15,7 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   const store = apps.createMcpAppsStore(path.join(root, 'apps.json'));
   const asana = store.add({ name: 'Asana', url: 'https://mcp.asana.com/v2/mcp', auth: 'oauth' });
   const routes = new Map(), spawned = [], cancelled = [];
+  let refreshed = 0, cronPolicy = null;
   const owner = 'local-user@localhost';
   const fakeApp = Object.fromEntries(['get', 'post', 'delete'].map(method => [method, (url, ...handlers) => routes.set(method + ' ' + url, handlers)]));
   const interactive = (req, res, next) => {
@@ -25,12 +26,19 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   const context = {
     app: fakeApp, path,
     require: name => name === './mcp-apps' ? { ...apps, defaultStore: store }
+      : name === './automation-app-grants' ? { read: () => ({ status: 'missing', apps: [] }), revokeApp: () => 0 }
       : name === './mcp-app-sign-in' ? { ...signIns, createMcpAppSignIn: () => ({
         start: async (email, app, server) => { spawned.push({ email, id: app.id, server }); return { state: 'waiting', authorizationUrl: 'https://example.com/fixture-authorize' }; },
         stateOf: () => null, cancel: id => cancelled.push(id),
       }) } : require(name),
     DEFAULT_OWNER: owner, MIAOS_NO_AUTH: false,
     MIAOS_AGENT_HERMES_PROFILE: 'main', MIAOS_AGENT_GOOGLE_HERMES_PROFILE: 'google',
+    MCP_APP_PROFILES: ['main', 'google', 'bots', 'bots-google'], MIAOS_AGENT_SEARCH_ONLY: false,
+    sameOwner: (record, email) => String(record.owner || owner).toLowerCase() === String(email || '').toLowerCase(),
+    cronSync: { refreshScheduledMcpApps: () => { refreshed += 1; }, setScheduledMcpAppsPolicy: (policy) => { cronPolicy = policy; }, pauseBotCron: async () => {} },
+    db: { loadAll: () => [], getMeta: () => '' }, conn: {}, GOOGLE_ACCOUNT_BINDING_META_KEY: 'fixture',
+    googleWorkspaceToolsConfigured: () => false, googleAccountOwnerBinding: { connectorFor: () => null },
+    syncOwnerBotsWithInstructions: async () => {},
     process: { env: { HERMES_HOME: root } }, requireAuth: interactive, requireInteractiveAuth: interactive,
     credentialOperations: require('./credential-operation-coordinator').createCredentialOperationCoordinator(),
     withStoppedHermesGateway: async fn => { await fn(); return { runtimeReady: true }; },
@@ -63,7 +71,23 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   const saved = await invoke('post', clientPath, { body: values });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.app.oauthClientConfigured, true);
-  for (const profile of ['main', 'google']) assert.equal(apps.hasProfileOAuthClient(path.join(root, 'profiles', profile, '.env'), asana.id), true);
+  // Owner profiles retain their existing sign-in; the shared scheduler home
+  // never receives an extra copy.
+  for (const profile of ['main', 'google', 'bots', 'bots-google']) assert.equal(apps.hasProfileOAuthClient(path.join(root, 'profiles', profile, '.env'), asana.id), true);
+  assert.equal(apps.hasProfileOAuthClient(path.join(root, '.env'), asana.id), false);
+  // One sign-in folder for all of them.
+  for (const profile of ['google', 'bots', 'bots-google']) assert.equal(fs.realpathSync(path.join(root, 'profiles', profile, 'mcp-tokens')), fs.realpathSync(path.join(root, 'profiles', 'main', 'mcp-tokens')));
+  assert.equal(fs.existsSync(path.join(root, 'mcp-tokens')), false);
+  assert.ok(refreshed > 0);
+  // Scheduled runs: only the owner's bots get the apps.
+  assert.equal(cronPolicy.approvalStatus({ owner: 'teammate@example.com' }, {}), 'valid');
+  assert.deepEqual(Array.from(cronPolicy.approvedServers({ owner: 'teammate@example.com' }, {})), []);
+  assert.ok(Object.keys(cronPolicy.servers()).every((name) => name.startsWith(cronPolicy.serverPrefix)));
+  // A bot's chat turn: the owner gets the apps, a teammate does not.
+  assert.equal(context.botMcpAppsFor({ owner }, owner).available, true);
+  assert.deepEqual(context.botMcpAppsFor({ owner }, owner).apps.map((app) => app.name), ['Asana']);
+  assert.equal(context.botMcpAppsFor({ owner }, 'teammate@example.com').available, false);
+  assert.equal(context.botMcpAppsFor({ owner: 'teammate@example.com' }, 'teammate@example.com').available, false);
   const read = await invoke('get', '/api/mcp-apps');
   assert.equal(read.status, 200);
   for (const payload of [read.body, saved.body]) {
@@ -78,6 +102,7 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   await invoke('post', clientPath, { body: values });
   assert.equal((await invoke('delete', '/api/mcp-apps/:id')).status, 200);
   assert.equal(store.get(asana.id), null);
-  for (const profile of ['main', 'google']) assert.equal(apps.hasProfileOAuthClient(path.join(root, 'profiles', profile, '.env'), asana.id), false);
+  for (const profile of ['main', 'google', 'bots', 'bots-google']) assert.equal(apps.hasProfileOAuthClient(path.join(root, 'profiles', profile, '.env'), asana.id), false);
+  assert.equal(apps.hasProfileOAuthClient(path.join(root, '.env'), asana.id), false);
   assert.ok(cancelled.length >= 3);
 });

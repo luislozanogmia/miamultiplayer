@@ -126,27 +126,48 @@ function hubRouteLimits(method, route) {
 // boundary (Host/Origin), forwards only to the configured Hub, and every call
 // needs a real production Clerk token the Hub verifies, so a caller gains no
 // access it lacks without the proxy. Revisit if a security review flags it.
-function createHubClient({ dataDirectory, fetcher = fetch }) {
+// Channel edits (rename, description, picture) leave one line in the server
+// log with what was sent and how it ended, so a save that seems to do nothing
+// can be traced. Only the method, part, size and result are written: no
+// token, no picture, no Hub address.
+const HUB_CHANNEL_EDIT = /^\/v1\/teams\/[a-f0-9]{32}\/channels\/([a-f0-9]{32})(\/picture)?$/;
+function channelEditNote(method, route, logger) {
+  // Reading the picture back is logged too: the sidebar shows # when it fails.
+  const edit = typeof route === 'string' && HUB_CHANNEL_EDIT.exec(route);
+  if (!edit || (method === 'GET' && !edit[2])) return null;
+  const part = edit[2] ? 'picture' : 'details';
+  return (code, data, detail, bytes) => {
+    const sent = bytes ? ` (${Math.ceil(bytes / 1024)} KB sent)` : '';
+    // Hub error fields and transport details can contain credentials or
+    // private data. The status code is enough to diagnose this edit path.
+    logger.log(`hub channel edit: ${method} ${part} channel ${edit[1].slice(0, 8)}${sent} -> ${code}`);
+  };
+}
+function createHubClient({ dataDirectory, fetcher = fetch, logger = console }) {
   return async (req, res) => {
     const route = req.url;
+    const note = channelEditNote(req.method, route, logger);
+    let sentBytes = 0;
+    const reply = (code, data, detail) => { if (note) note(code, data, detail, sentBytes); return res.status(code).json(data); };
     // PUT pins a channel and PATCH renames it; nothing else is forwarded.
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) || typeof route !== 'string'
       || !(/^\/v1\/[A-Za-z0-9_/%.-]+$/.test(route) || (req.method === 'GET' && (HUB_AUDIT.test(route) || HUB_WORKFLOW_QUERY.test(route)))) || route.length > 2048 || route.includes('..') || /%2f|%5c/i.test(route)) {
-      return res.status(404).json({ error: 'not_found' });
+      return reply(404, { error: 'not_found' });
     }
-    if (HUB_FILE_AREA.test(route) && !hubFileRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
-    if (HUB_APP_AREA.test(route) && !hubAppRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
-    if (HUB_ADMIN_AREA.test(route) && !hubAdminRoute(req.method, route)) return res.status(404).json({ error: 'not_found' });
+    if (HUB_FILE_AREA.test(route) && !hubFileRoute(req.method, route)) return reply(404, { error: 'not_found' });
+    if (HUB_APP_AREA.test(route) && !hubAppRoute(req.method, route)) return reply(404, { error: 'not_found' });
+    if (HUB_ADMIN_AREA.test(route) && !hubAdminRoute(req.method, route)) return reply(404, { error: 'not_found' });
     const authorization = req.headers.authorization;
     if (typeof authorization !== 'string' || !/^Bearer [A-Za-z0-9_.-]+$/.test(authorization) || authorization.length > 16384) {
-      return res.status(401).json({ error: 'sign_in_required' });
+      return reply(401, { error: 'sign_in_required' });
     }
     try {
       const origin = hubEndpoint(dataDirectory);
-      if (!origin) return res.status(503).json({ error: 'hub_not_configured' });
+      if (!origin) return reply(503, { error: 'hub_not_configured' });
       const limits = hubRouteLimits(req.method, route);
       const body = req.method === 'GET' ? undefined : JSON.stringify(req.body || {});
-      if (body && Buffer.byteLength(body) > limits.request) return res.status(413).json({ error: 'body_too_large' });
+      sentBytes = body ? Buffer.byteLength(body) : 0;
+      if (body && sentBytes > limits.request) return reply(413, { error: 'body_too_large' });
       const response = await fetcher(origin + route, { method: req.method, redirect: 'error',
         headers: { authorization, 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(limits.timeout) });
       let length = 0; const chunks = [];
@@ -154,8 +175,8 @@ function createHubClient({ dataDirectory, fetcher = fetch }) {
         length += chunk.length; if (length > limits.response) throw new Error('Response exceeds limit'); chunks.push(Buffer.from(chunk));
       }
       const result = JSON.parse(Buffer.concat(chunks));
-      return res.status(response.status).json(result);
-    } catch { return res.status(503).json({ error: 'hub_unavailable' }); }
+      return reply(response.status, result);
+    } catch (error) { return reply(503, { error: 'hub_unavailable' }, error && error.message); }
   };
 }
 module.exports = { createHubClient, hubEndpoint, hubRouteLimits, hubFileRoute, hubAppRoute, hubAdminRoute };

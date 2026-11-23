@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" sizes="192x192" href="assets/icons/mia-192.png" />
 <script src="assets/developer-mode-theme.js?v=20260909-csp-1"></script>
 <script src="assets/workspace-handoff.js?v=20261024-1"></script>
-<link rel="stylesheet" href="styles.css?v=20261118-site-notices" />
+<link rel="stylesheet" href="styles.css?v=20261120-step-models" />
 <link rel="stylesheet" href="browser-work.css" />
 </head>
 <!-- Apply the active preview skin before the first paint so the legacy shell
@@ -399,6 +399,14 @@
               <button type="button" class="workspace-rail-tile workspace-rail-util" data-tools-action="connected-apps" aria-label="Connected apps">
                 <span class="workspace-rail-mark" aria-hidden="true"><svg data-icon-set="lucide" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5"></path><path d="M9 8V2"></path><path d="M15 8V2"></path><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"></path></svg></span><strong class="workspace-rail-name">Connected apps</strong>
               </button>
+              <div class="workspace-rail-sep rail-preview-sep" role="separator"></div>
+              <!-- Previews: Flow mode and Flow Tandem, as icons at the foot of the rail. An amber dot marks a preview. -->
+              <button type="button" class="workspace-rail-tile workspace-rail-util ai-mode-entry" id="aiModeEntry" data-ai-mode-enter aria-label="Flow mode, a preview. The ultimate interface, where the human intent becomes AI execution">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2"/></svg></span><strong class="workspace-rail-name rail-preview-tip" aria-hidden="true">Flow mode<span class="ai-mode-entry-tag">Preview</span><small>The ultimate interface, where the human intent becomes AI execution</small></strong>
+              </button>
+              <button type="button" class="workspace-rail-tile workspace-rail-util ai-mode-entry" id="flowTandemEntry" data-flow-tandem-start aria-label="Flow Tandem, a preview. Keep working in the app while you and Mia talk it through">
+                <span class="workspace-rail-mark" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 9.4V8a5.4 5.4 0 0 1 10.8 0v1.4"/><rect x="1.8" y="9.2" width="3" height="4.4" rx="1.2"/><rect x="11.2" y="9.2" width="3" height="4.4" rx="1.2"/></svg></span><strong class="workspace-rail-name rail-preview-tip" aria-hidden="true">Flow Tandem<span class="ai-mode-entry-tag">Preview</span><small>Keep working in the app while you and Mia talk it through</small></strong>
+              </button>
               <button type="button" class="workspace-rail-tile workspace-rail-account" id="chatAcctBtn" aria-label="Your account" aria-haspopup="true" aria-expanded="false">
                 <span class="workspace-rail-mark chat-acct-avatar" id="chatAcctAvatar" aria-hidden="true">?</span><strong class="workspace-rail-name" id="chatAcctName">User</strong>
               </button>
@@ -493,21 +501,13 @@
                 <div class="sidebar-placeholder-group"><span class="mia-placeholder" style="width:42%"></span><span class="mia-placeholder" style="width:70%"></span><span class="mia-placeholder" style="width:60%"></span></div>
               </div>
             </div>
-            <button type="button" class="ai-mode-entry" id="aiModeEntry" data-ai-mode-enter data-tip-keyboard="The ultimate interface, where the human intent becomes AI execution" aria-label="Flow mode. The ultimate interface, where the human intent becomes AI execution">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2"/></svg>
-              <span class="ai-mode-entry-text">Flow mode</span><span class="ai-mode-entry-what" data-tip="The ultimate interface, where the human intent becomes AI execution" aria-hidden="true">?</span><span class="ai-mode-entry-tag">Preview</span>
-            </button>
-            <button type="button" class="ai-mode-entry" id="flowTandemEntry" data-flow-tandem-start data-tip-keyboard="Keep working in the app while you and Mia talk it through" aria-label="Flow Tandem. Keep working in the app while you and Mia talk it through">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 9.4V8a5.4 5.4 0 0 1 10.8 0v1.4"/><rect x="1.8" y="9.2" width="3" height="4.4" rx="1.2"/><rect x="11.2" y="9.2" width="3" height="4.4" rx="1.2"/></svg>
-              <span class="ai-mode-entry-text">Flow Tandem</span><span class="ai-mode-entry-what" data-tip="Keep working in the app while you and Mia talk it through" aria-hidden="true">?</span><span class="ai-mode-entry-tag">Preview</span>
-            </button>
             <button type="button" class="update-cue" id="miaUpdateCue" hidden>
               <span class="update-cue-bar" data-update-bar></span>
               <svg class="update-cue-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v7.5M5 7.5l3 3 3-3M3 13h10"/></svg>
               <span class="update-cue-text" data-update-text></span><span class="update-cue-detail" data-update-detail></span>
             </button>
             <div class="chat-sidebar-footer" data-rail-hide>
-              <span class="csf-dot" id="chatSyncDot"></span><span id="chatSyncFooter">Connecting&hellip;</span>
+              <span class="csf-dot connecting" id="chatSyncDot"></span><span id="chatSyncFooter">Connecting&hellip;</span>
             </div>
             <div class="chat-sidebar-resize" data-chat-sidebar-resize title="Drag to resize sidebar" aria-hidden="true"></div>
           </aside>
@@ -1391,7 +1391,7 @@
 <script src="dictation.js?v=20261114-recorder-1"></script>
 <script src="agent-activity.js?v=20261111-working-line-1"></script>
 <script src="chat-steps.js?v=20261113-steps-2"></script>
-<script src="site-notices.js?v=20261118-site-notices"></script>
+<script src="site-notices.js?v=20261119-notice-messages"></script>
 <script src="update-cue.js?v=20261113-update-cue-1"></script>
 <script src="clerk-desktop-ui.js"></script>
 <script src="account-switcher.js"></script>
@@ -1415,24 +1415,26 @@
     <script src="bot-folder-sync.js?v=20261114-bot-memory"></script>
     <script src="team-files-ui.js?v=20261102-team-files-1"></script>
     <script src="step-report.js?v=20261102-step-report-1"></script>
-    <script src="team-workflows.js?v=20261102-team-workflows-2"></script>
-    <script src="team-workflows-ui.js?v=20261118-team-workflows-demo"></script>
+    <script src="team-workflows.js?v=20261120-step-models"></script>
+    <script src="team-workflows-ui.js?v=20261120-step-models"></script>
     <script src="private-agents-ui.js?v=20261102-agents-1"></script>
     <div class="workspace-demo-view" id="workspaceDemoView" hidden></div>
     <script src="interrupted-work.js?v=20261117-interrupted-2"></script>
     <script src="sidebar-bot-order.js?v=20261111-bot-order-1"></script>
     <script src="bot-files-tidy.js?v=20261106-tidy-1"></script>
+    <script src="automation-app-review.js?v=20261123-app-review-1"></script>
     <script src="bot-memory-intro.js?v=20261114-memory-intro-2"></script>
     <script src="bot-marketplace.js?v=20261109-market-1"></script>
     <script src="mcp-apps-ui.js?v=20261112-oauth-client-1"></script>
     <script src="emoji-picker.js?v=20261106-emoji-all"></script>
     <script src="provider-marks.js?v=20261106-1"></script>
-    <script src="app.js?v=20261118-site-notices"></script>
+    <script src="bot-mcp-suggestion.js?v=20261123-mcp-suggestion"></script>
+    <script src="app.js?v=20261123-mcp-suggestion"></script>
     <script src="remote-link-core.js?v=20261114-phone-1"></script>
     <script src="remote-link-host.js?v=20261116-phone-2"></script>
     <script src="ai-mode-intro.js?v=20261114-ai-mode-intro-4"></script>
     <script src="ai-mode.js?v=20261117-ai-mode-39"></script>
-    <script src="flow-tandem.js?v=20261116-flow-tandem-3"></script>
+    <script src="flow-tandem.js?v=20261119-rail-previews"></script>
     <script src="shared-space-live.js?v=20261112-ideas-1"></script>
     <script src="shared-space-talk.js?v=20261112-ideas-1"></script>
     <script src="shared-space-ui.js?v=20261112-ideas-1"></script>

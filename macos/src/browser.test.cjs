@@ -2687,6 +2687,39 @@ test("picture in picture: a tab docks below the chat, the group's next tab comes
   h.window.emit("closed");
 });
 
+test("a docked tab is captured from its own surface, shown or off screen, never through the dock's debugger", async () => {
+  const h = harness();
+  const page = async () => { h.command("navigate", { value: `https://${h.command("state").activeId}.example/` }); await new Promise(resolve => setImmediate(resolve)); };
+  const one = h.command("new").activeId;
+  await page();
+  h.command("groupCreate", { id: one });
+  const two = h.command("new").activeId;
+  await page();
+  const wc = h.views[two - 1].webContents;
+  const sent = [];
+  wc.debugger = { attached: false, isAttached() { return this.attached; }, attach() { this.attached = true; }, detach() { this.attached = false; },
+    sendCommand: (method, params) => { sent.push(method); return method === "Page.captureScreenshot" ? new Promise(() => {}) : Promise.resolve({}); } };
+  const run = wc.executeJavaScript.bind(wc);
+  wc.executeJavaScript = script => script.includes("data-mia-pip', ''") ? Promise.resolve(false) : run(script);
+  const captures = [];
+  wc.capturePage = (_rect, options) => { captures.push(options); return Promise.resolve({ isEmpty: () => false, toPNG: () => Buffer.from("docked"), getSize: () => ({ width: 800, height: 500 }) }); };
+  h.command("layout", { visible: true, bounds: { x: 0, y: 80, width: 800, height: 500 } });
+  h.command("dock");
+  await new Promise(resolve => setImmediate(resolve));
+  const dock = { x: 820, y: 560, width: 160, height: 100 };
+  for (const dockVisible of [true, false]) {
+    h.command("layout", { visible: false, bounds: { x: 0, y: 80, width: 800, height: 500 }, dock, dockVisible });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.views[two - 1].visible, dockVisible);
+    const shot = await h.controller.protocol("screenshot", { actor_session: "s-mia", tab_id: two });
+    assert.equal(shot.data_url, "data:image/png;base64," + Buffer.from("docked").toString("base64"));
+  }
+  assert.equal(JSON.stringify(captures), JSON.stringify([{ stayHidden: true, stayAwake: true }, { stayHidden: true, stayAwake: true }]));
+  assert.equal(sent.includes("Page.captureScreenshot"), false, "the dock's emulated page gets no frame for a DevTools capture while it is off screen");
+  assert.ok(sent.includes("Emulation.setDeviceMetricsOverride"), "the dock still shrinks the page through its debugger");
+  h.window.emit("closed");
+});
+
 test("picture in picture: a playing video docks alone, and closing the docked tab empties the dock", async () => {
   const h = harness();
   const one = h.command("new").activeId;

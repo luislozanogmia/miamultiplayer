@@ -782,7 +782,7 @@ test('Solo Retry, delete and composer hand-off cover undelivered messages',()=>{
 });
 test('a company bot shows once, by name, with every channel it is in',()=>{
   const start=source.indexOf('  function companyBotsFromChannels(');
-  const merge=new Function('normalizeAgentAvatarColor',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null);
+  const merge=new Function('normalizeAgentAvatarColor','marketBotRecords',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null,()=>[]);
   const ux={id:'a',name:'ux-test'}, gtm={id:'b',name:'GTM'};
   const list=merge([
     {channel:ux,bots:[{id:'1',name:'Web Research Agent',published:true},{id:'2',name:'Draft',published:false}]},
@@ -790,6 +790,13 @@ test('a company bot shows once, by name, with every channel it is in',()=>{
   ]);
   assert.deepEqual(list.map(bot=>bot.name),['AI News Tracker','Web Research Agent']);
   assert.deepEqual(list[1].channels,[ux,gtm]);
+});
+test('a renamed company bot shows its new name and color in the sidebar',()=>{
+  // The per-channel list keeps the name a bot was first added under.
+  const start=source.indexOf('  function companyBotsFromChannels(');
+  const merge=new Function('normalizeAgentAvatarColor','marketBotRecords',source.slice(start,source.indexOf('  function loadCompanyBots(')) + 'return companyBotsFromChannels;')(color=>color||null,()=>[{id:'7',name:'GTM',avatarColor:'#bac8de'}]);
+  const list=merge([{channel:{id:'a',name:'gtm'},bots:[{id:'7',name:'GTM 2',published:true}]}]);
+  assert.deepEqual(list.map(bot=>[bot.name,bot.avatarColor]),[['GTM','#bac8de']]);
 });
 test('bot pins live with every other pinned chat, per workspace, and old bot pins move over once',()=>{
   const store={'miaPinnedTeamBots':JSON.stringify({hub_a:['company:web'],hub_b:['mine:9']})};
@@ -1027,23 +1034,26 @@ test('a company bot reply shows the provider as a chip with its mark, or plain t
   assert.equal(marks.markFor('Mia Router'),null);
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../styles.css'),'utf8').match(/\.chat-msg-run\{[^}]*\}/)[0],/animation/,'no pop-in animation in the app');
 });
-test('connection trouble shows the Offline pill and leaves the status line quiet; a refusal still says why',()=>{
-  const footer={style:{},textContent:'',classList:{on:{},toggle(name,value){this.on[name]=!!value;}},setAttribute(){}};
-  const pills=[];
-  const env={el:sel=>sel==='#chatSyncFooter'?footer:null,hubChat:{typing:[],feedStatus:'live',error:'',errorIsConnection:false},chatWs:{activeRoomId:'room',configured:true},
-    displayNameForEmail:e=>e,hubWorkspace:()=>true,renderOfflinePill:()=>pills.push(1)};
+test('the sidebar line says Online with a green dot, Offline with a red one, and a refusal says why',()=>{
+  const cls=()=>({on:{},toggle(name,value){this.on[name]=!!value;},remove(name){this.on[name]=false;}});
+  const footer={style:{},textContent:'',classList:cls(),setAttribute(){}}, dot={classList:cls()};
+  const env={el:sel=>sel==='#chatSyncFooter'?footer:sel==='#chatSyncDot'?dot:null,hubChat:{typing:[{channel_id:'room',email:'a@example.test'}],feedStatus:'live',error:'',errorIsConnection:false},chatWs:{activeRoomId:'room',configured:true},
+    hubWorkspace:()=>true,browserOffline:()=>false};
   env.hubConnectionTrouble=appFunction('hubConnectionTrouble',env);
   const render=appFunction('renderHubStatus',env);
+  render();
+  assert.equal(footer.textContent,'Online','no typing text in the line');assert.equal(dot.classList.on.offline,false);assert.equal(footer.classList.on['chat-sync-fail'],false);
   env.hubChat.error='Sign-in could not be completed. Check your connection and system keyring, then try again.';env.hubChat.errorIsConnection=true;
   render();
-  assert.equal(footer.textContent,'','no red sign-in text for a lost connection');assert.equal(footer.classList.on['chat-sync-fail'],false);
-  assert.equal(env.hubConnectionTrouble(),true,'the pill shows instead');
+  assert.equal(footer.textContent,'Offline','a lost connection is just Offline');assert.equal(dot.classList.on.offline,true);
   env.hubChat.error='This team, channel or item is no longer available to you.';env.hubChat.errorIsConnection=false;
   render();
   assert.match(footer.textContent,/no longer available/);assert.equal(footer.classList.on['chat-sync-fail'],true);
   env.hubChat.error='';env.hubChat.feedStatus='offline';
-  render();assert.equal(footer.textContent,'');assert.equal(env.hubConnectionTrouble(),true,'a reconnecting feed is the pill too');
-  assert.ok(pills.length>=3,'every status render keeps the pill in step');
+  render();assert.equal(footer.textContent,'Offline','a reconnecting feed is Offline too');
+  env.hubChat.feedStatus='live';env.browserOffline=()=>true;
+  render();assert.equal(footer.textContent,'Offline','no network at all is Offline');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../app.js'),'utf8'),/miaOfflinePill/,'no Offline popup any more');
   const unreachable=appFunction('hubUnreachable',{});
   assert.equal(unreachable({message:'Check your connection'}),true,'no HTTP status: a connection problem');
   assert.equal(unreachable({status:403,message:'denied'}),false);

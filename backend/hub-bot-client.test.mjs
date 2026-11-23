@@ -75,6 +75,17 @@ test('a name the company already uses is reported as that',async t=>{
   await assert.rejects(f.client.share(owner,f.input,'fixture.token'),{status:409,code:'bot_name_taken'});
 });
 
+test('a color-only edit inside the company reaches the company copy',async t=>{
+  const skill={name:'Review',description:'',body:'Use the scorer.'};
+  const f=fixture(t,owner,()=>[skill]);
+  const versions=()=>posts(f).filter(r=>r.url.endsWith('/versions'));
+  const shared=await f.client.share(owner,f.input,'fixture.token');
+  f.setDefinition({version:1,name:'Helper',avatar_color:'#123456',instructions:f.bot.instructions,skills:[skill],tags:['ops']});
+  f.bot.avatarColor='#bac8de';
+  assert.deepEqual(await f.client.update(owner,{teamId,localBotId:f.bot.id},'fixture.token'),{updated:[{botId:shared.bot.id,version:2}]});
+  assert.equal(versions()[0].body.avatar_color,'#bac8de');
+});
+
 test('an edit made inside the company is live for everyone at once, and only when something changed',async t=>{
   const skill={name:'Review',description:'',body:'Use the scorer.'};
   const f=fixture(t,owner,()=>[skill]);

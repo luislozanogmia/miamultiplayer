@@ -6,10 +6,10 @@ const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const slice = (from, to) => { const at = source.indexOf(from); assert.ok(at >= 0, from); return source.slice(at, source.indexOf(to, at)); };
 
 function load(records) {
-  const code = slice('function messageBotRecords(){', 'function currentAgentDisplayNameForMessage(name){')
+  const code = slice('function marketBotRecords(){', 'function currentAgentDisplayNameForMessage(name){')
     + slice('function agentAvatarColorFor(name, agentId){', '\n  }\n') + '\n  }\n return {messageBotIdentity, agentAvatarColorFor};';
   const normalizeAgentAvatarColor = value => value || null;
-  return new Function('chatWs', 'benchAgents', 'hubChat', 'normalizeAgentAvatarColor', code)(records, [], { companyBots: records.companyBots }, normalizeAgentAvatarColor);
+  return new Function('chatWs', 'benchAgents', 'hubChat', 'normalizeAgentAvatarColor', code)(records, [], { companyBots: records.companyBots, marketBots: records.marketBots }, normalizeAgentAvatarColor);
 }
 
 test('after a rename, old and new messages show the same bot', () => {
@@ -42,4 +42,11 @@ test('every place that names a bot from a message uses the one resolver', () => 
   const uses = source.split('\n').filter(line => /\.nativeAgentName/.test(line));
   assert.deepEqual(uses.map(line => line.trim()), ["var saved = (m && m.nativeAgentName) || null;"]);
   assert.match(source, /agentAvatarHtml\(name, name === 'Mia' \? 'gateway' : bot\.id, 28, null, bot\.color, true\)/);
+});
+
+test('a renamed company bot shows its current name on its older messages', () => {
+  // The channel list still has the name the bot was added under; the company list has the new one.
+  const { messageBotIdentity } = load({ allAgents: [], companyBots: [{ key: 'gtm 2', name: 'GTM 2', avatarColor: null, botIds: ['bot_7'] }],
+    marketBots: [{ id: 'bot_7', name: 'GTM', avatar_color: '#bac8de' }] });
+  assert.deepEqual(messageBotIdentity({ sender: 'hub-bot:bot_7', nativeAgentName: 'GTM 2' }), { name: 'GTM', id: 'bot_7', color: '#bac8de' });
 });

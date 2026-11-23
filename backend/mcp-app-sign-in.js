@@ -38,7 +38,26 @@ function forgetSignIn(hermesHome, profile, server) {
 // first's, so a vendor's renewed sign-in is never held by one and stale in
 // the other. Files already in a real second folder move over first.
 function shareSignIns(hermesHome, profile, otherProfile) {
-  const main = tokensDir(hermesHome, profile), other = tokensDir(hermesHome, otherProfile);
+  linkTokensDir(tokensDir(hermesHome, profile), tokensDir(hermesHome, otherProfile));
+}
+// Scheduled runs read sign-ins from the Hermes home itself (cron-sync.js), so
+// its mcp-tokens folder is the same kind of link.
+function shareSignInsWithHome(hermesHome, profile) {
+  linkTokensDir(tokensDir(hermesHome, profile), path.join(String(hermesHome || ''), 'mcp-tokens'));
+}
+// Older 0.3.13 candidates linked owner OAuth tokens into the shared Hermes
+// home for cron. Profile-scoped jobs no longer need that link.
+function removeHomeSignInLink(hermesHome, profile) {
+  const link = path.join(String(hermesHome || ''), 'mcp-tokens');
+  let stat;
+  try { stat = fs.lstatSync(link); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (!stat.isSymbolicLink()) return false;
+  try { if (fs.realpathSync(link) !== fs.realpathSync(tokensDir(hermesHome, profile))) return false; }
+  catch (_) { return false; }
+  fs.unlinkSync(link);
+  return true;
+}
+function linkTokensDir(main, other) {
   fs.mkdirSync(main, { recursive: true, mode: 0o700 });
   let found = null;
   try { found = fs.lstatSync(other); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -150,5 +169,5 @@ function createMcpAppSignIn({ spawnLogin, signedIn, onSignedIn, env = process.en
 }
 
 module.exports = {
-  createMcpAppSignIn, parseAuthorizationUrl, authorizationProof, hasSignIn, forgetSignIn, shareSignIns, tokenFileName, tokensDir,
+  createMcpAppSignIn, parseAuthorizationUrl, authorizationProof, hasSignIn, forgetSignIn, shareSignIns, shareSignInsWithHome, removeHomeSignInLink, tokenFileName, tokensDir,
 };

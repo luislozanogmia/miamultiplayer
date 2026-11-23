@@ -1,0 +1,51 @@
+diff --git a/hermes_cli/web_routers/mcp.py b/hermes_cli/web_routers/mcp.py
+index 4eab73b..cf79656 100644
+--- a/hermes_cli/web_routers/mcp.py
++++ b/hermes_cli/web_routers/mcp.py
+@@ -306,7 +306,7 @@ async def mcp_oauth_callback(
+         None,
+     )
+     if flow is None:
+-        return HTMLResponse("<h1>OAuth flow expired</h1><p>Return to Hermes and try again.</p>", status_code=404)
++        return HTMLResponse("<h1>OAuth flow expired</h1><p>Return to Mia and try again.</p>", status_code=404)
+     try:
+         flow.deliver_callback(code=code, state=state, error=error, iss=iss)
+     except ValueError as exc:
+@@ -315,5 +315,5 @@ async def mcp_oauth_callback(
+             status_code=409 if "already received" in str(exc) else 400,
+         )
+     if error:
+-        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Hermes for details.</p>", status_code=400)
+-    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Hermes.</p>")
++        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Mia for details.</p>", status_code=400)
++    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Mia.</p>")
+diff --git a/tools/connectors/mcp_oauth.py b/tools/connectors/mcp_oauth.py
+index 79ea23f..5c37d08 100644
+--- a/tools/connectors/mcp_oauth.py
++++ b/tools/connectors/mcp_oauth.py
+@@ -215,7 +215,7 @@ def _start_loopback_receiver(flow) -> "http.server.HTTPServer":
+                 self.send_response(404)
+                 self.end_headers()
+                 return
+-            body = b"<h1>Authorization received</h1><p>You can close this tab and return to Hermes.</p>"
++            body = b"<h1>Authorization received</h1><p>You can close this tab and return to Mia.</p>"
+             status = 200
+             try:
+                 flow.deliver_callback(**_parse_redirect_query(parsed.query))
+diff --git a/tools/mcp_oauth.py b/tools/mcp_oauth.py
+index 923848d..12a92d5 100644
+--- a/tools/mcp_oauth.py
++++ b/tools/mcp_oauth.py
+@@ -684,10 +684,10 @@ def _make_callback_handler() -> tuple[type, dict]:
+                 status, body = 404, "<h2>Not Found</h2>"
+             elif _result_taken(result):
+                 # First terminal result (HTTP or paste) wins; a duplicate or refreshed callback never replaces it.
+-                body = "<h2>Authorization already received</h2><p>You can close this tab and return to Hermes.</p>"
++                body = "<h2>Authorization already received</h2><p>You can close this tab and return to Mia.</p>"
+             else:
+                 result.update(auth_code=parsed["code"], state=parsed["state"], error=parsed["error"], iss=parsed["iss"])
+-                body = ("<h2>Authorization Successful</h2><p>You can close this tab and return to Hermes.</p>" if parsed["code"]
++                body = ("<h2>Authorization Successful</h2><p>You can close this tab and return to Mia.</p>" if parsed["code"]
+                         else f"<h2>Authorization Failed</h2><p>Error: {html.escape(parsed['error'] or 'unknown')}</p>")
+             self.send_response(status)
+             self.send_header("Content-Type", "text/html; charset=utf-8")

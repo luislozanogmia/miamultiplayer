@@ -28,6 +28,12 @@ fs.writeFileSync(
 const fs = require('fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(commandLog)}, JSON.stringify(args) + '\\n');
+if (args.includes('pause') && args.includes('old-shared-job')) {
+  const file = ${JSON.stringify(jobsFile)};
+  const registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const job = registry.jobs.find((item) => item.id === 'old-shared-job');
+  if (job) { job.enabled = false; fs.writeFileSync(file, JSON.stringify(registry)); }
+}
 if (args.includes('create')) console.log('Created job: replacement-id');
 // A real run lasts as long as the job does; Run now must not wait for it.
 if (args.includes('run') && args.includes('job-slow-run')) setTimeout(() => {}, 8000);
@@ -60,6 +66,14 @@ process.env.FAKE_HERMES_PYTHON_LOG = pythonLog;
 process.env.MIA_AUTOMATION_UTC_OFFSET_MIN = '360';
 
 const cronSync = require('./cron-sync.js');
+const baseAppPolicy = {
+  approvalStatus: () => 'valid',
+  approvalStatusForJob: () => 'valid',
+  approvedServers: () => [],
+  servers: () => ({}),
+  serverPrefix: 'u_',
+};
+cronSync.setScheduledMcpAppsPolicy(baseAppPolicy);
 const { createBotPackageStore } = require('./bot-packages.js');
 const botPackageStore = createBotPackageStore(botPackageRoot);
 
@@ -97,7 +111,11 @@ function readCommands() {
     .trim()
     .split('\n')
     .filter(Boolean)
-    .map((line) => JSON.parse(line));
+    .map((line) => {
+      const args = JSON.parse(line);
+      const profile = args.indexOf('--profile');
+      return profile < 0 ? args : args.filter((_, index) => index !== profile && index !== profile + 1);
+    });
 }
 
 function resetCommands() {
@@ -171,9 +189,10 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 test('every cron subprocess receives the strict Hermes environment allowlist', () => {
   const source = fs.readFileSync(new URL('./cron-sync.js', import.meta.url), 'utf8');
-  assert.equal([...source.matchAll(/env:\s*hermesProcessEnv\(\)/g)].length, 5);
+  assert.match(source, /function cronProcessEnv\(profile = 'default'\)[\s\S]*?const env = hermesProcessEnv\(\)/);
+  assert.match(source, /function cronPythonEnv\(profile = 'default'\)[\s\S]*?cronProcessEnv\(profile\)/);
   // Run now starts its run detached, with the same allowlisted environment.
-  assert.match(source, /spawn\(launch\.command, \[\.\.\.launch\.prefixArgs, 'cron', '--accept-hooks', 'run', jobId\],\s*\{ detached: true, stdio: 'ignore', env: hermesProcessEnv\(\) \}\)/);
+  assert.match(source, /spawn\(launch\.command, \[\.\.\.launch\.prefixArgs, '--profile', profile, 'cron', '--accept-hooks', 'run', jobId\],\s*\{ detached: true, stdio: 'ignore', env: cronProcessEnv\(profile\) \}\)/);
 });
 
 test('briefing schedules preserve selected UTC offset and weekday across midnight', () => {
@@ -272,8 +291,10 @@ test('a slash-namespaced provider model id schedules a job', async () => {
   assert.ok(allCommands.some((args) => args.join(' ') === 'plugins enable mia-provider-limits'));
   assert.ok(fs.existsSync(path.join(hermesHome, 'plugins', 'mia-provider-limits', '__init__.py')));
   const commands = allCommands.filter((args) => args[0] !== 'plugins');
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
   assert.equal(commands[0][2], 'create');
+  assert.ok(commands[0].includes('--paused'));
+  assert.deepEqual(commands[1].slice(2), ['resume', 'replacement-id']);
   assert.deepEqual(commands[0].slice(commands[0].indexOf('--workdir'), commands[0].indexOf('--workdir') + 2), [
     '--workdir', cronSync.botPackageDirectoryFor(agent),
   ]);
@@ -310,7 +331,8 @@ test('the Claude subscription extended-context model id schedules a job', async 
   await cronSync.syncBotAutomation(agent, null);
 
   const commands = readCommands();
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
+  assert.deepEqual(commands[1].slice(2), ['resume', 'replacement-id']);
   assert.deepEqual(commands[0].slice(-4), [
     '--model', 'claude-sonnet-5-5[1m]',
     '--provider', 'claude-subscription-directsdk-experimental',
@@ -365,15 +387,17 @@ test('a stale Hermes job id is replaced by a newly created job', async () => {
   await cronSync.syncBotAutomation(agent, null);
 
   const commands = readCommands();
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
   assert.equal(commands[0][2], 'create');
+  assert.ok(commands[0].includes('--paused'));
+  assert.deepEqual(commands[1].slice(2), ['resume', 'replacement-id']);
   assert.deepEqual(commands[0].slice(-4), ['--model', 'deepseek-v4-pro', '--provider', 'deepseek']);
   assert.equal(commands.some((args) => args.includes('edit')), false);
   assert.equal(agent.hermesCronJobIds['automation-1'], 'replacement-id');
   const restrictions = readPythonCommands();
   assert.equal(restrictions.length, 1);
   assert.equal(restrictions[0][2], 'replacement-id');
-  assert.deepEqual(JSON.parse(restrictions[0][3]), cronSync.scheduledBotToolsets());
+  assert.deepEqual(JSON.parse(restrictions[0][3]), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
   assert.equal(restrictions[0][4], cronSync.botPackageDirectoryFor(agent));
   assert.equal(restrictions[0][5], cronSync.artifactWorkspaceForBot(agent));
   assert.equal(fs.statSync(restrictions[0][5]).mode & 0o777, 0o700);
@@ -475,7 +499,8 @@ test('a package rename edits the owned job to the new workdir without creating a
   const commands = readCommands();
   assert.equal(commands.filter((args) => args[2] === 'edit').length, 1);
   assert.equal(commands.some((args) => args[2] === 'create'), false);
-  assert.ok(commands[0].includes(newDirectory));
+  assert.ok(commands.find((args) => args[2] === 'edit').includes(newDirectory));
+  assert.deepEqual(commands.map((args) => args[2]), ['pause', 'edit', 'resume']);
 });
 
 test('a client-supplied foreign job id can never mutate another agent job', async () => {
@@ -495,8 +520,9 @@ test('a client-supplied foreign job id can never mutate another agent job', asyn
   await cronSync.syncBotAutomation(agent);
 
   const commands = readCommands();
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
   assert.equal(commands[0][2], 'create');
+  assert.deepEqual(commands[1].slice(2), ['resume', 'replacement-id']);
   assert.equal(commands.flat().includes('victim-job'), false);
   assert.equal(agent.hermesCronJobIds['automation-1'], 'replacement-id');
 });
@@ -535,9 +561,8 @@ test('a renamed existing job is adopted by agent id before creating a replacemen
   await cronSync.syncBotAutomation(agent);
 
   const commands = readCommands();
-  assert.equal(commands.length, 1);
-  assert.equal(commands[0][2], 'edit');
-  assert.equal(commands[0][3], 'existing-job');
+  assert.deepEqual(commands.map((args) => args[2]), ['pause', 'edit', 'resume']);
+  assert.equal(commands[1][3], 'existing-job');
   assert.equal(commands.some((args) => args.includes('create')), false);
   assert.equal(agent.hermesCronJobIds['automation-1'], 'existing-job');
 });
@@ -563,8 +588,9 @@ test('a brand-new Hermes profile creates its first automation when jobs.json is 
   await cronSync.syncBotAutomation(agent);
 
   const commands = readCommands();
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
   assert.equal(commands[0][2], 'create');
+  assert.deepEqual(commands[1].slice(2), ['resume', 'replacement-id']);
   assert.equal(agent.hermesCronJobIds['automation-1'], 'replacement-id');
   setJobs([]);
 });
@@ -1173,7 +1199,7 @@ test('a new job for an automation with steps stores its step-report context, the
   await cronSync.syncBotAutomation(bot);
 
   const restriction = readPythonCommands()[0];
-  assert.deepEqual(JSON.parse(restriction[3]), cronSync.scheduledBotToolsets());
+  assert.deepEqual(JSON.parse(restriction[3]), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
   assert.deepEqual(JSON.parse(restriction[6]), { automationId: 'roundup', steps: 3 });
   // The first job with steps also installs and enables the tool where jobs run.
   assert.ok(readCommands().some((args) => args.join(' ') === 'plugins enable mia-run-report'));
@@ -1203,7 +1229,7 @@ test('an existing job without the step-report context is edited to get it', asyn
     schedule: { expr: cronSync.automationToCronExpr(automation, 360) },
     prompt: cronSync.jobPromptFor(bot, automation), deliver: 'local',
     model: bot.model, provider: bot.modelProvider,
-    enabled_toolsets: cronSync.scheduledBotToolsets(), workdir: directory,
+    enabled_toolsets: [...cronSync.scheduledBotToolsets(), 'no_mcp'], workdir: directory,
     artifact_workspace: cronSync.artifactWorkspaceForBot(bot),
   };
   setJobs([base]);
@@ -1248,7 +1274,7 @@ test('a scheduled job keeps the bot\'s tools across a resync, and an old narrow 
   await cronSync.syncBotAutomation(bot);
   const restriction = readPythonCommands()[0];
   const tools = JSON.parse(restriction[3]);
-  assert.deepEqual(tools, cronSync.scheduledBotToolsets());
+  assert.deepEqual(tools, [...cronSync.scheduledBotToolsets(), 'no_mcp']);
   const automation = bot.automations[0];
   const job = {
     id: bot.hermesCronJobIds[automation.id], name: cronSync.jobNameFor(bot, automation), enabled: true,
@@ -1269,7 +1295,7 @@ test('a scheduled job keeps the bot\'s tools across a resync, and an old narrow 
   setJobs([{ ...job, enabled_toolsets: ['web', 'todo', 'clarify', 'artifacts', 'mia_run_report'] }]);
   await cronSync.syncBotAutomation(bot);
   assert.equal(readCommands().filter((args) => args[2] === 'edit').length, 1, 'a job from before is brought up to the bot\'s tools');
-  assert.deepEqual(JSON.parse(readPythonCommands()[0][3]), cronSync.scheduledBotToolsets());
+  assert.deepEqual(JSON.parse(readPythonCommands()[0][3]), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
 });
 
 test('the first scheduled job sets the bot\'s guards where jobs run, once', async () => {
@@ -1354,10 +1380,97 @@ test('Run now starts a long run and answers at once instead of waiting for it to
     assert.deepEqual(result, { status: 'started', jobId: 'job-slow-run' });
     assert.ok(Date.now() - started < 6000, 'answered before the 8 second run ended');
     const ran = fs.readFileSync(commandLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    assert.ok(ran.some((args) => args.join(' ') === 'cron --accept-hooks run job-slow-run'));
+    assert.ok(ran.some((args) => args.join(' ') === '--profile default cron --accept-hooks run job-slow-run'));
     // A run that fails straight away is still reported as not started.
     await assert.rejects(cronSync.runBotAutomationNow(bot, 'broken'), /exited/);
   } finally {
     fs.writeFileSync(jobsFile, before);
   }
+});
+
+// The exact approved server list is a job toolset, not an inheritance of all
+// apps in the shared home. Hermes adds every configured MCP server to a job
+// that names none, so an unapproved job must say no_mcp.
+test('only an approved automation gets its exact connected app server', async () => {
+  try {
+    cronSync.setScheduledMcpAppsPolicy({
+      approvalStatus: () => 'valid',
+      approvalStatusForJob: () => 'valid',
+      approvedServers: (bot, automation) => bot.owner === 'owner@example.com' && automation.id === 'daily' ? ['u_attio'] : [],
+      servers: () => ({ u_attio: { url: 'https://mcp.attio.com/mcp', auth: 'oauth' } }),
+      serverPrefix: 'u_',
+    });
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'owner@example.com' }, { id: 'daily' }), [...cronSync.scheduledBotToolsets(), 'u_attio']);
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'owner@example.com' }, { id: 'other' }), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'teammate@example.com' }, { id: 'daily' }), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
+    // The guard can remove pre-release app entries from the shared home.
+    const lines = cronSync.CRON_GUARD_SCRIPT.split('\n');
+    const start = lines.findIndex((line) => line.startsWith('ap='));
+    const snippet = ['import json,sys', 'cfg={}', 'm={"google":{"command":"g"},"u_asana":{"url":"https://old"}}',
+      ...lines.slice(start, lines.findIndex((line, index) => index > start && line === 'save_config(cfg)')), 'print(json.dumps(cfg["mcp_servers"],sort_keys=True))'].join('\n');
+    const { spawnSync } = await import('node:child_process');
+    const run = spawnSync('python3', ['-I', '-c', snippet, '', '', '', JSON.stringify({ u_attio: { url: 'https://mcp.attio.com/mcp' } }), 'u_'], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout), { google: { command: 'g' }, u_attio: { url: 'https://mcp.attio.com/mcp' } });
+    // No prefix (no policy yet): the apps are left as they are.
+    const untouched = spawnSync('python3', ['-I', '-c', snippet, '', '', '', '', ''], { encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(untouched.stdout), { google: { command: 'g' }, u_asana: { url: 'https://old' } });
+  } finally {
+    cronSync.setScheduledMcpAppsPolicy(baseAppPolicy);
+  }
+  assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'teammate@example.com' }), [...cronSync.scheduledBotToolsets(), 'no_mcp']);
+});
+
+test('moving an approved automation to its app profile pauses the old shared job first', async () => {
+  resetCommands();
+  const bot = stepBot(['Read tasks', 'Summarize']);
+  bot.owner = 'owner@example.com';
+  const automation = bot.automations[0];
+  const old = { id: 'old-shared-job', name: cronSync.jobNameFor(bot, automation), enabled: true };
+  setJobs([old]);
+  const profile = require('./hermes-bot-profile').MIAOS_BOT_APPS_HERMES_PROFILE;
+  fs.mkdirSync(path.join(hermesHome, 'profiles', profile), { recursive: true });
+  try {
+    cronSync.setScheduledMcpAppsPolicy({
+      approvalStatus: () => 'valid',
+      approvalStatusForJob: () => 'valid',
+      approvedServers: (candidate, item) => candidate.id === bot.id && item.id === automation.id ? ['u_asana'] : [],
+      servers: () => ({ u_asana: { url: 'https://mcp.example.test/asana' } }),
+      serverPrefix: 'u_',
+    });
+    await cronSync.syncBotAutomation(bot);
+    const raw = fs.readFileSync(commandLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const cron = raw.filter((args) => args.includes('cron'));
+    const pause = cron.findIndex((args) => args.includes('pause') && args.includes('old-shared-job'));
+    const create = cron.findIndex((args) => args.includes('create') && args.includes(profile));
+    const remove = cron.findIndex((args) => args.includes('remove') && args.includes('old-shared-job'));
+    assert.ok(pause >= 0 && create > pause && remove > create, 'old job is paused before new one is created, then removed');
+    assert.ok(cron[pause].includes('default'));
+    assert.ok(cron[create].includes(profile));
+    const restriction = readPythonCommands().find((args) => args[2] === 'replacement-id');
+    assert.ok(restriction);
+    assert.ok(JSON.parse(restriction[3]).includes('u_asana'));
+  } finally {
+    cronSync.setScheduledMcpAppsPolicy(baseAppPolicy);
+    setJobs([]);
+  }
+});
+
+test('Google and an approved app remain available together; teammate jobs stay app-free', () => {
+  try {
+    cronSync.setScheduledMcpAppsPolicy({
+      approvalStatus: (bot) => bot.owner === 'teammate@example.com' ? 'valid' : 'missing',
+      approvalStatusForJob: () => 'valid',
+      approvedServers: (bot, automation) => bot.owner === 'owner@example.com'
+        ? automation.id === 'google-only' ? ['google'] : ['google', 'u_asana'] : [],
+      servers: () => ({ google: true, u_asana: { url: 'https://mcp.example.test/asana' } }),
+      serverPrefix: 'u_',
+    });
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'owner@example.com' }, { id: 'daily' }),
+      [...cronSync.scheduledBotToolsets(), 'google', 'u_asana']);
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'owner@example.com' }, { id: 'google-only' }),
+      [...cronSync.scheduledBotToolsets(), 'google']);
+    assert.deepEqual(cronSync.scheduledJobToolsets({ owner: 'teammate@example.com' }, { id: 'daily' }),
+      [...cronSync.scheduledBotToolsets(), 'no_mcp']);
+  } finally { cronSync.setScheduledMcpAppsPolicy(baseAppPolicy); }
 });

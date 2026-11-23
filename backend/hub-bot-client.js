@@ -497,9 +497,12 @@ function createHubBotClient({db,dataDirectory,getBot,listBots,bundleSkills=()=>[
       if(!current || !current.bot || !current.bot.can_publish || !current.definition) return {updated:[]};
       const instructions=bot.instructions || bot.role || bot.output || '',skills=sharedSkills(bundleSkills(bot));
       const was=current.definition;
-      if(was.name===bot.name && was.instructions===instructions && JSON.stringify(sharedSkills(was.skills))===JSON.stringify(skills)) return {updated:[]};
+      // A color-only change counts too: the company copy shows the same mote.
+      const color=bot.avatarColor||was.avatar_color||'';
+      if(was.name===bot.name && was.instructions===instructions && String(was.avatar_color||'')===color
+        && JSON.stringify(sharedSkills(was.skills))===JSON.stringify(skills)) return {updated:[]};
       const published=await requestHub(scope.origin,token,'POST',path+'/versions',
-        {name:bot.name,avatar_color:bot.avatarColor||was.avatar_color||'',instructions,skills,tags:Array.isArray(was.tags)?was.tags:[]},fetcher);
+        {name:bot.name,avatar_color:color,instructions,skills,tags:Array.isArray(was.tags)?was.tags:[]},fetcher);
       return {updated:[{botId,version:published.version}]};
     },
     // The person asked a marketplace bot in a channel: their own Mia answers.

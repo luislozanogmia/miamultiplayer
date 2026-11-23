@@ -258,3 +258,23 @@ test('a channel picture (up to 64 KB as base64) fits through the proxy; other ch
  assert.equal(hubRouteLimits('PATCH',channel).request,8192);
  assert.equal(hubRouteLimits('PUT',channel+'/pin').request,8192);
 });
+
+test('channel edits leave one log line with the result, never the token or picture',async()=>{
+ const previous=process.env.MIA_HUB_URL;process.env.MIA_HUB_URL='http://127.0.0.1:9876';
+ try{
+  const route='/v1/teams/'+'a'.repeat(32)+'/channels/'+'c'.repeat(32)+'/picture',lines=[];
+  const logger={log:(line)=>lines.push(line)};
+  const reply=()=>({status(code){this.code=code;return this;},json(data){this.data=data;return this;}});
+  const ok=createHubClient({logger,fetcher:async()=>({status:200,body:[Buffer.from('{"ok":true}')]})});
+  await ok({url:route,method:'PUT',headers:{authorization:'Bearer secret-token'},body:{mime:'image/png',data:'QUJD'.repeat(2000)}},reply());
+  const down=createHubClient({logger,fetcher:async()=>{throw new Error('connect ECONNREFUSED http://127.0.0.1:9876/x');}});
+  await down({url:route,method:'DELETE',headers:{authorization:'Bearer secret-token'}},reply());
+  await ok({url:route,method:'GET',headers:{authorization:'Bearer secret-token'}},reply());
+  await ok({url:route.replace('/picture',''),method:'GET',headers:{authorization:'Bearer secret-token'}},reply());
+  assert.equal(lines.length,3,'reading the picture back is logged, reading the channel is not');
+  assert.match(lines[2],/^hub channel edit: GET picture channel cccccccc -> 200$/);
+  assert.match(lines[0],/^hub channel edit: PUT picture channel cccccccc \(8 KB sent\) -> 200$/);
+  assert.match(lines[1],/^hub channel edit: DELETE picture channel cccccccc \(1 KB sent\) -> 503$/);
+  for(const line of lines){assert.doesNotMatch(line,/secret-token|QUJD|9876/);}
+ }finally{if(previous===undefined)delete process.env.MIA_HUB_URL;else process.env.MIA_HUB_URL=previous;}
+});

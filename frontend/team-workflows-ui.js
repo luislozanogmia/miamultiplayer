@@ -56,13 +56,27 @@
     if(!art || !art.src) return '<span class="twf-mote twf-mote-blank" aria-hidden="true"></span>';
     return '<img class="twf-mote" src="' + esc(art.src) + '" alt="" aria-hidden="true"' + (art.filter ? ' style="filter:' + esc(art.filter) + '"' : '') + '>';
   }
-  function whoHtml(botName, subject, people){
+  // The step's model: a chip icon beside the bot and its owner. No model means the
+  // owner's default, which their own Mia picks.
+  function modelLabel(model){
+    if(!model) return 'Owner\u2019s default model';
+    var named = null;
+    try { named = ctx && typeof ctx.modelLabel === 'function' ? ctx.modelLabel(model.provider, model.model) : null; } catch(_){ named = null; }
+    return String(named || model.model);
+  }
+  function modelChipHtml(model){
+    var label = modelLabel(model);
+    return '<span class="twf-model" data-set="' + (model ? 'yes' : 'no') + '" title="Model: ' + esc(label) + '" aria-label="Model: ' + esc(label) + '">'
+      + '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></span>';
+  }
+  function whoHtml(botName, subject, people, model){
     var name = wf.shortName(people, subject), member = people && people[subject];
     var department = member && String(member.department || '').trim();
     return '<span class="twf-who">' + moteHtml(botName) + '<span class="twf-who-names">'
       + (botName ? '<b>' + esc(botName) + '</b>' : '')
       + '<span class="twf-who-owner"><span class="human-avatar-initials human-avatar-tone-' + toneOf(subject) + '">' + esc(initialsOf(name)) + '</span>'
-      + esc(department ? name + ' \u00b7 ' + department : name) + '</span></span></span>';
+      + esc(department ? name + ' \u00b7 ' + department : name) + '</span></span>'
+      + (model === undefined ? '' : modelChipHtml(model)) + '</span>';
   }
   function triggerRowHtml(trigger, fired){
     if(!trigger) return '';
@@ -299,7 +313,7 @@
     return '<ol class="automations-steps">' + ((definition && definition.steps) || []).map(function(step, index){
       return '<li class="automations-step twf-step" data-state="pending"><span class="automations-step-n">' + (index + 1) + '</span><span><div>' + esc(step.text) + '</div>'
         + (step.approverMemberId ? '<div class="automations-step-note">Approved by ' + esc(wf.displayName(people, step.approverMemberId)) + '</div>' : '') + '</span>'
-        + whoHtml(step.botName, step.ownerMemberId, people) + '</li>';
+        + whoHtml(step.botName, step.ownerMemberId, people, wf.stepModel(step.model)) + '</li>';
     }).join('') + '</ol>';
   }
   function workflowHtml(view){
@@ -373,7 +387,9 @@
       + '<label class="twf-label">What the bot should do<textarea class="twf-input" rows="2" maxlength="' + wf.STEP_MAX + '" ' + i + ' data-wf-step-field="text">' + esc(step.text) + '</textarea></label>'
       + '<label class="twf-label">Who owns it. It runs on their computer.' + selectHtml(i + ' data-wf-step-field="ownerMemberId" aria-label="Owner"', members, step.ownerMemberId, 'Choose a person') + '</label>'
       + '<label class="twf-label">Which bot' + selectHtml(i + ' data-wf-step-field="botId" aria-label="Bot"', botChoices(view.bots), step.botId, 'Choose a bot') + '</label>'
-      + '<label class="twf-label">Who approves it (optional)' + selectHtml(i + ' data-wf-step-field="approverMemberId" aria-label="Approver"', members, step.approverMemberId, 'No approval needed') + '</label></div>';
+      + '<label class="twf-label">Who approves it (optional)' + selectHtml(i + ' data-wf-step-field="approverMemberId" aria-label="Approver"', members, step.approverMemberId, 'No approval needed') + '</label>'
+      + '<div class="twf-label">Model. If the owner has not connected it, their default runs.<span class="twf-model-row">' + modelChipHtml(wf.stepModel(step.model))
+      + '<span class="twf-model-slot" data-wf-step-model="' + index + '">' + (ctx && ctx.mountModelPicker ? '' : esc(modelLabel(wf.stepModel(step.model)))) + '</span></span></div></div>';
   }
   function editorHtml(view){
     var draft = view.draft, steps = draft.steps;
@@ -466,9 +482,26 @@
     if(scroller) scroller.scrollTop = top;
     boxes().forEach(function(box){ var place = kept[box.getAttribute('data-wf-keep-scroll')]; if(place) box.scrollTop = place; });
     opened().forEach(function(box){ if(wasOpen[box.getAttribute('data-wf-keep-open')]) box.open = true; });
+    mountStepModelPickers();
     // On a detail screen the rest of the page steps aside.
     var board = mount.parentNode && mount.parentNode.querySelector('[data-wf-board]');
     if(board) board.hidden = view.screen !== 'home';
+  }
+  // Each editor step gets the composer's model picker from the app; a choice is
+  // kept on the draft and saved with the next version.
+  function mountStepModelPickers(){
+    if(view.screen !== 'edit' || !view.draft || !ctx || typeof ctx.mountModelPicker !== 'function' || !mount.querySelectorAll) return;
+    Array.prototype.slice.call(mount.querySelectorAll('[data-wf-step-model]')).forEach(function(slot){
+      var index = Number(slot.getAttribute('data-wf-step-model')), step = view.draft.steps[index];
+      if(!step) return;
+      try {
+        ctx.mountModelPicker(slot, wf.stepModel(step.model), function(choice){
+          step.model = wf.stepModel(choice);
+          var chip = slot.parentNode && slot.parentNode.querySelector('.twf-model');
+          if(chip) chip.outerHTML = modelChipHtml(step.model);
+        });
+      } catch(_){ slot.textContent = modelLabel(wf.stepModel(step.model)); }
+    });
   }
   // The Automations page redraws its whole body, so it hands over a new element.
   function mountInto(element){
@@ -732,6 +765,6 @@
   return {
     attach: attach, detach: detach, setTeams: setTeams, mountInto: mountInto, fullScreen: fullScreen, pageOpened: pageOpened, handles: handles, onEvent: onEvent, onReset: onReset, openRun: openRun,
     channelCardHtml: channelCardHtml, onDocumentClick: onDocumentClick,
-    approvalCardHtml: approvalCardHtml, homeHtml: homeHtml, runHtml: runHtml, workflowHtml: workflowHtml, startHtml: startHtml, editorHtml: editorHtml, fixCardHtml: fixCardHtml, needsYouHtml: needsYouHtml
+    approvalCardHtml: approvalCardHtml, homeHtml: homeHtml, runHtml: runHtml, workflowHtml: workflowHtml, startHtml: startHtml, editorHtml: editorHtml, modelChipHtml: modelChipHtml, fixCardHtml: fixCardHtml, needsYouHtml: needsYouHtml
   };
 });
