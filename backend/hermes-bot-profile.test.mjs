@@ -129,6 +129,39 @@ test('Hermes may reserialize a Mia-owned apps profile without making it unsafe t
   }
 });
 
+test('Hermes profile-local shell guard copy remains trusted only while its contents match Mia', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-local-guard-'));
+  const profilesRoot = path.join(root, 'profiles');
+  const workspaceDir = path.join(root, 'workspace');
+  const profileDir = path.join(profilesRoot, MIAOS_BOT_APPS_HERMES_PROFILE);
+  const configPath = path.join(profileDir, 'config.yaml');
+  const localGuard = path.join(profileDir, 'miaos-shell-guard.sh');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.copyFileSync(config.terminal.shell_init_files[0], localGuard);
+    config.terminal.shell_init_files = [localGuard];
+    fs.writeFileSync(configPath, YAML.stringify(config));
+    assert.doesNotThrow(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }));
+    const restored = YAML.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(restored.terminal.shell_init_files[0], path.join(root, 'miaos-shell-guard.sh'));
+
+    restored.terminal.shell_init_files = [localGuard];
+    fs.writeFileSync(configPath, YAML.stringify(restored));
+    fs.writeFileSync(localGuard, '# changed guard\n');
+    assert.throws(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }),
+      /refusing to overwrite unmanaged Hermes profile/);
+
+    fs.copyFileSync(path.join(root, 'miaos-shell-guard.sh'), localGuard);
+    restored.terminal.shell_init_files = [localGuard, path.join(profileDir, 'extra.sh')];
+    fs.writeFileSync(configPath, YAML.stringify(restored));
+    assert.throws(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }),
+      /refusing to overwrite unmanaged Hermes profile/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Hermes gives every profile its full default tools, so bots lose only
 // delegation: they don't hand work to background subagents. Mia keeps it.
 test('bots cannot delegate to background subagents; Mia can', () => {

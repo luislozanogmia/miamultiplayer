@@ -21,7 +21,7 @@ automatically through the in-app updater.
 - Replies to site notifications reach bots as site data. Renamed company bots show their current name and color on older messages and in the sidebar.
 
 ### Fixed
-- Scheduled-run plugin setup keeps Mia's bot profile ownership record when Hermes rewrites its config, so the next app launch can safely refresh that profile without blocking startup.
+- Scheduled-run plugin setup keeps Mia's bot profile ownership record when Hermes rewrites its config, so the next app launch can safely refresh that profile without blocking startup. Mia also recognizes Hermes' copied shell guard only when its contents still match Mia's guard.
 - Existing scheduled automations pause for a one-time connected-app review. Mia can suggest app access, and the owner selects and approves each automation's tools before it resumes. Changes to the bot, its skills, or an app require a fresh review; teammate-owned automations keep running without the installation owner's apps.
 - A bot can take a screenshot of its page while that page is docked and the browser is closed; the capture no longer times out.
 - A bot's request for a connected app appears as a suggestion in Mia's chat. Mia acts only after the owner chooses to ask her to review it.
