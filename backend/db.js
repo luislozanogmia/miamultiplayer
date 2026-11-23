@@ -72,6 +72,19 @@ CREATE TABLE IF NOT EXISTS settings         (id TEXT PRIMARY KEY, json TEXT NOT 
 CREATE TABLE IF NOT EXISTS bots             (id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agents           (id TEXT PRIMARY KEY, json TEXT NOT NULL);
 
+-- A scheduled bot's connected-app permission is separate from its editable
+-- document. Only the interactive owner approval route writes this table;
+-- bot proposals and ordinary bot PUTs cannot grant themselves app access.
+CREATE TABLE IF NOT EXISTS automation_app_grants (
+  owner_email TEXT NOT NULL,
+  bot_id TEXT NOT NULL,
+  automation_id TEXT NOT NULL,
+  automation_digest TEXT NOT NULL,
+  apps_json TEXT NOT NULL,
+  approved_at TEXT NOT NULL,
+  PRIMARY KEY (owner_email, bot_id, automation_id)
+);
+
 -- A bot setup request is durable across lost HTTP responses and backend
 -- restarts. Owner/workspace scope prevents a replay from resolving to another
 -- user's or workspace's bot; the request id and payload are stored only as

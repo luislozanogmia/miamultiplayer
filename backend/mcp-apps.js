@@ -369,11 +369,29 @@ function copyMissingProfileSecrets(sourceEnv, targetEnvs, apps) {
   return changed;
 }
 
+// Upgrade cleanup for a pre-release implementation that copied connected-app
+// keys and OAuth client details into the shared Hermes home. Keep unrelated
+// provider settings untouched; never return or log the removed values.
+function removeSharedHomeSecrets(envPath) {
+  let stat;
+  try { stat = fs.lstatSync(envPath); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Shared Hermes environment needs manual review.');
+  const current = fs.readFileSync(envPath, 'utf8');
+  const clean = current.split('\n').filter((line) => !/^\s*(?:export\s+)?MIA_MCP_[A-Z0-9_]+\s*=/.test(line)).join('\n');
+  if (clean === current) return false;
+  const temporary = `${envPath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, clean, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, envPath);
+  } finally { try { fs.unlinkSync(temporary); } catch (_) {} }
+  return true;
+}
+
 const defaultStore = createMcpAppsStore();
 
 module.exports = {
   McpAppError, cleanMcpApp, createMcpAppsStore, defaultMcpAppsFile, defaultStore,
   hermesMcpServerLines, hermesMcpServerObjects, SERVER_PREFIX, keyEnvName, publicMcpApp, serverName, setProfileKey, hasProfileKey, readProfileKey,
   builtInMcpApps, builtInMcpApp, MAX_LOGO_BYTES,
-  requiresOAuthClient, oauthClientEnvNames, hasProfileOAuthClient, copyMissingProfileSecrets, setProfileOAuthClient, validateOAuthClientCredentials,
+  requiresOAuthClient, oauthClientEnvNames, hasProfileOAuthClient, copyMissingProfileSecrets, removeSharedHomeSecrets, setProfileOAuthClient, validateOAuthClientCredentials,
 };

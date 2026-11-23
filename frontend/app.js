@@ -13394,6 +13394,30 @@
     });
   }
 
+  function reviewAutomationAppsWithMia(count){
+    if(hubWorkspace()){
+      Promise.resolve(openTeamMiaChat()).then(function(){
+        var roomId = chatWs.activeRoomId;
+        if(!roomId || chatWs.activeKind !== 'agent') return showBenchToast('Open your chat with Mia to review scheduled automations.');
+        sendNativeConversationEvent('Review connected-app access for my ' + count + ' paused scheduled '
+          + (count === 1 ? 'automation' : 'automations') + ' in this workspace and suggest which apps each needs. '
+          + 'I will choose and approve them.', null, null, roomId, {automationAppReview: true});
+      });
+      return;
+    }
+    var mia = chatWs.gatewayAgent || {id:'gateway', name:'Mia'};
+    clearChatBack();
+    chatRoster.open = null;
+    clearChatActive();
+    Promise.resolve(selectAgentRoom(mia)).then(function(){
+      var roomId = chatWs.activeRoomId;
+      if(!roomId || chatWs.activeKind !== 'agent') return showBenchToast('Open your chat with Mia to review scheduled automations.');
+      sendNativeConversationEvent('Review connected-app access for my ' + count + ' paused scheduled '
+        + (count === 1 ? 'automation' : 'automations') + ' and suggest which apps each needs. '
+        + 'I will choose and approve them.', null, null, roomId, {automationAppReview: true});
+    });
+  }
+
   function latestTidyPlanEventId(){
     var messages = chatRoomState(chatWs.activeRoomId).messages || [];
     for(var i = messages.length - 1; i >= 0; i--){
@@ -16269,10 +16293,36 @@
         '<div class="cip-field"><span class="cip-field-label">Model</span><input type="hidden" id="automationEditModel" value="' + esc(currentModel) + '"><div id="automationEditModelPicker"></div></div>' +
         '<div class="cip-field"><span class="cip-field-label">Steps · done in order</span><ol class="cip-automation-steps" id="automationEditSteps">' + automationStepRowsHtml(Array.isArray(automation.steps) ? automation.steps : []) + '</ol></div>' +
         '<label class="cip-field"><span class="cip-field-label">Prompt</span><textarea id="automationEditPrompt" rows="6">' + esc(automation.prompt || '') + '</textarea></label>' +
+        '<div class="cip-field" id="automationAppGrant"><span class="cip-field-label">Connected apps for this automation</span><div id="automationAppGrantChoices" role="group" aria-label="Connected apps">Loading connected apps…</div><small>Saving approves the selected apps for this automation. Other apps stay unavailable.</small></div>' +
         '<div class="cip-automation-form-error" id="automationDetailError" role="alert"></div>' +
         '<div class="cip-editor-actions">' + (!isNew ? '<button type="button" class="styled-btn-secondary danger" id="automationDetailDelete">Delete</button>' : '') + '<button type="button" class="styled-btn-secondary" id="automationDetailCancel">Cancel</button><button type="submit" class="styled-btn-primary" id="automationDetailSave">' + (isNew ? 'Add automation' : 'Save') + '</button></div>' +
       '</form>' + metadata + '</div>';
     var form = el('#automationDetailForm', pane);
+    var grantChoices = el('#automationAppGrantChoices', pane);
+    var grantLoaded = false;
+    (isNew ? api('/api/automation-app-review/available')
+      : api('/api/bots/' + encodeURIComponent(bot.id) + '/automations/' + encodeURIComponent(automation.id) + '/app-grant'))
+    .then(function(result){
+      if(result.status === 404){
+        el('#automationAppGrant', pane).hidden = true;
+        return;
+      }
+      if(result.status !== 200) throw new Error('Could not load connected apps.');
+      var ready = (result.data && result.data.availableApps) || [];
+      var selected = new Set((result.data && result.data.appIds) || []);
+      var grantStatus = result.data && result.data.status;
+      grantChoices.innerHTML = ready.length ? ready.map(function(app){
+        return '<label class="cip-automation-app-choice"><input type="checkbox" value="' + esc(app.id) + '"' +
+          (selected.has(app.id) ? ' checked' : '') + '> ' + esc(app.name) + '</label>';
+      }).join('') : 'No connected apps are ready.';
+      if(!isNew && automation.enabled === true && grantStatus !== 'valid'){
+        grantChoices.insertAdjacentHTML('afterbegin', '<p class="cip-automation-prompt-warning" role="status">'
+          + 'This scheduled run is paused until you review its app access and save. You can choose no apps.</p>');
+      }
+      grantLoaded = true;
+    }).catch(function(){
+      grantChoices.textContent = 'Could not load connected apps. Close and try again before approving app access.';
+    });
     mountAutomationModelPicker(el('#automationEditModelPicker', pane), el('#automationEditModel', pane), bot, automation);
     wireAutomationStepRows(el('#automationEditSteps', pane));
     var enabledInput = el('#automationEditEnabled', pane);
@@ -16298,6 +16348,11 @@
       var errorNode = el('#automationDetailError', pane);
       var save = el('#automationDetailSave', pane);
       errorNode.textContent = '';
+      if(!el('#automationAppGrant', pane).hidden && !grantLoaded){
+        errorNode.textContent = 'Wait for connected apps to load before saving.';
+        return;
+      }
+      var approvedAppIds = els('input:checked', grantChoices).map(function(input){ return input.value; });
       var payload;
       try {
         payload = normalizedAutomationEditorPayload(bot, isNew ? null : automation.id, {
@@ -16321,10 +16376,21 @@
       api('/api/bots/' + encodeURIComponent(bot.id), {method:'PUT', body:payload}).then(function(res){
         if(res.status !== 200 || !res.data || !res.data.bot) throw new Error((res.data && res.data.error) || 'Could not save automation.');
         var saved = res.data.bot;
-        chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
-        chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
         var savedAutomations = botAutomationList(saved);
         var savedAutomation = isNew ? savedAutomations[savedAutomations.length - 1] : savedAutomations.filter(function(item){ return String(item.id) === String(automation.id); })[0];
+        if(!el('#automationAppGrant', pane).hidden && savedAutomation){
+          return api('/api/bots/' + encodeURIComponent(saved.id) + '/automations/' + encodeURIComponent(savedAutomation.id) + '/app-grant',
+            {method:'PUT', body:{appIds: approvedAppIds}}).then(function(grant){
+            if(grant.status !== 200) throw new Error((grant.data && grant.data.message) || 'Automation saved, but app approval failed. Review its connected apps before it runs.');
+            return { saved: saved, savedAutomation: savedAutomation };
+          });
+        }
+        return { saved: saved, savedAutomation: savedAutomation };
+      }).then(function(result){
+        var saved = result.saved;
+        chatWs.botRecords = (chatWs.botRecords || []).map(function(record){ return String(record.id) === String(saved.id) ? saved : record; });
+        chatWs.allAgents = (chatWs.allAgents || []).map(function(record){ return String(record.id) === String(saved.id) ? Object.assign({}, record, saved) : record; });
+        var savedAutomation = result.savedAutomation;
         if(host){
           renderChatSidebar();
           host.done();
@@ -19810,6 +19876,11 @@
 
   function initChatWorkspace(){
     if(window.MiaInterruptedWork) window.MiaInterruptedWork.showOnce({api: api, toast: showBenchToast});
+    if(window.MiaAutomationAppReview) setTimeout(function(){
+      window.MiaAutomationAppReview.showOnce({api: api, workspaceKey: activeWorkspaceKey,
+        currentWorkspace: function(){ return activeWorkspaceKey; },
+        reviewWithMia: reviewAutomationAppsWithMia});
+    }, 2000);
     if(hubWorkspace()) return initHubChat().then(openPendingPerson);
     // TEMPORARY: the one-time bot files tidy-up card, reviewed in Mia's own chat. Remove in 0.3.6.
     if(window.MiaBotFilesTidy) window.MiaBotFilesTidy.showOnce({api: api, toast: showBenchToast, reviewWithMia: reviewBotFilesWithMia});

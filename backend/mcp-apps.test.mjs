@@ -13,6 +13,14 @@ const temp = () => {
   return directory;
 };
 test.after(() => { for (const directory of tempDirectories) fs.rmSync(directory, { recursive: true, force: true }); });
+
+test('upgrade removes only connected-app secrets from the shared Hermes environment', () => {
+  const file = path.join(temp(), '.env');
+  fs.writeFileSync(file, 'MODEL_TOKEN=keep-fixture\nMIA_MCP_ASANA_KEY=remove-fixture\nMIA_MCP_ASANA_CLIENT_SECRET=remove-fixture\n');
+  assert.equal(apps.removeSharedHomeSecrets(file), true);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'MODEL_TOKEN=keep-fixture\n');
+  assert.equal(apps.removeSharedHomeSecrets(file), false);
+});
 const PNG = 'data:image/png;base64,' + Buffer.from([137, 80, 78, 71]).toString('base64');
 
 test('an MCP app is a vendor server address or package, a sign-in type and a logo, with no key', () => {

@@ -5,7 +5,8 @@ const { MAX_BOT_SKILLS, MAX_SKILL_CHARS } = require('./skills-library');
 
 // Reading the library is open to any signed-in caller. Changing it needs a
 // person: a skill's text goes into the prompt of every bot that carries it.
-function createSkillsRouter({ library, requireAuth, requireInteractiveAuth, listBots, listAllBots, onSkillChanged = () => {} }) {
+function createSkillsRouter({ library, requireAuth, requireInteractiveAuth, listBots, listAllBots,
+  beforeSkillChanged = () => {}, onSkillChanged = () => {} }) {
   const router = express.Router();
   const carriers = (req, id) => listBots(req).filter((bot) => Array.isArray(bot.skills) && bot.skills.includes(id))
     .map((bot) => ({ id: bot.id, name: bot.name }));
@@ -27,6 +28,7 @@ function createSkillsRouter({ library, requireAuth, requireInteractiveAuth, list
   }));
   router.post('/', requireAuth, requireInteractiveAuth, handle((req) => ({ skill: library.create(req.body || {}) })));
   router.put('/:id', requireAuth, requireInteractiveAuth, handle(async (req) => {
+    await beforeSkillChanged(req.params.id);
     const skill = library.update(req.params.id, req.body || {});
     await onSkillChanged(skill.id);
     return { skill };

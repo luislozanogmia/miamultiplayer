@@ -26,6 +26,7 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   const context = {
     app: fakeApp, path,
     require: name => name === './mcp-apps' ? { ...apps, defaultStore: store }
+      : name === './automation-app-grants' ? { read: () => ({ status: 'missing', apps: [] }), revokeApp: () => 0 }
       : name === './mcp-app-sign-in' ? { ...signIns, createMcpAppSignIn: () => ({
         start: async (email, app, server) => { spawned.push({ email, id: app.id, server }); return { state: 'waiting', authorizationUrl: 'https://example.com/fixture-authorize' }; },
         stateOf: () => null, cancel: id => cancelled.push(id),
@@ -34,7 +35,10 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
     MIAOS_AGENT_HERMES_PROFILE: 'main', MIAOS_AGENT_GOOGLE_HERMES_PROFILE: 'google',
     MCP_APP_PROFILES: ['main', 'google', 'bots', 'bots-google'], MIAOS_AGENT_SEARCH_ONLY: false,
     sameOwner: (record, email) => String(record.owner || owner).toLowerCase() === String(email || '').toLowerCase(),
-    cronSync: { refreshScheduledMcpApps: () => { refreshed += 1; }, setScheduledMcpAppsPolicy: (policy) => { cronPolicy = policy; } },
+    cronSync: { refreshScheduledMcpApps: () => { refreshed += 1; }, setScheduledMcpAppsPolicy: (policy) => { cronPolicy = policy; }, pauseBotCron: async () => {} },
+    db: { loadAll: () => [], getMeta: () => '' }, conn: {}, GOOGLE_ACCOUNT_BINDING_META_KEY: 'fixture',
+    googleWorkspaceToolsConfigured: () => false, googleAccountOwnerBinding: { connectorFor: () => null },
+    syncOwnerBotsWithInstructions: async () => {},
     process: { env: { HERMES_HOME: root } }, requireAuth: interactive, requireInteractiveAuth: interactive,
     credentialOperations: require('./credential-operation-coordinator').createCredentialOperationCoordinator(),
     withStoppedHermesGateway: async fn => { await fn(); return { runtimeReady: true }; },
@@ -67,16 +71,17 @@ test('real MCP route handlers reject unauthorized requests, preflight credential
   const saved = await invoke('post', clientPath, { body: values });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.app.oauthClientConfigured, true);
-  // Bots' apps profiles and the Hermes home (scheduled runs) get it too.
+  // Owner profiles retain their existing sign-in; the shared scheduler home
+  // never receives an extra copy.
   for (const profile of ['main', 'google', 'bots', 'bots-google']) assert.equal(apps.hasProfileOAuthClient(path.join(root, 'profiles', profile, '.env'), asana.id), true);
-  assert.equal(apps.hasProfileOAuthClient(path.join(root, '.env'), asana.id), true);
+  assert.equal(apps.hasProfileOAuthClient(path.join(root, '.env'), asana.id), false);
   // One sign-in folder for all of them.
   for (const profile of ['google', 'bots', 'bots-google']) assert.equal(fs.realpathSync(path.join(root, 'profiles', profile, 'mcp-tokens')), fs.realpathSync(path.join(root, 'profiles', 'main', 'mcp-tokens')));
-  assert.equal(fs.realpathSync(path.join(root, 'mcp-tokens')), fs.realpathSync(path.join(root, 'profiles', 'main', 'mcp-tokens')));
+  assert.equal(fs.existsSync(path.join(root, 'mcp-tokens')), false);
   assert.ok(refreshed > 0);
   // Scheduled runs: only the owner's bots get the apps.
-  assert.equal(cronPolicy.ownerOwnsApps({ owner }), true);
-  assert.equal(cronPolicy.ownerOwnsApps({ owner: 'teammate@example.com' }), false);
+  assert.equal(cronPolicy.approvalStatus({ owner: 'teammate@example.com' }, {}), 'valid');
+  assert.deepEqual(Array.from(cronPolicy.approvedServers({ owner: 'teammate@example.com' }, {})), []);
   assert.ok(Object.keys(cronPolicy.servers()).every((name) => name.startsWith(cronPolicy.serverPrefix)));
   // A bot's chat turn: the owner gets the apps, a teammate does not.
   assert.equal(context.botMcpAppsFor({ owner }, owner).available, true);
