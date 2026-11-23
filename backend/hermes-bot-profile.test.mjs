@@ -85,6 +85,50 @@ test('MCP apps go to Mia and the bots\' apps profiles only, never the plain bot 
   }
 });
 
+test('Hermes may reserialize a Mia-owned apps profile without making it unsafe to reprovision', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'miaos-hermes-profile-provenance-'));
+  const profilesRoot = path.join(root, 'profiles');
+  const workspaceDir = path.join(root, 'workspace');
+  const profileDir = path.join(profilesRoot, MIAOS_BOT_APPS_HERMES_PROFILE);
+  const configPath = path.join(profileDir, 'config.yaml');
+  try {
+    provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir });
+    const marker = path.join(profileDir, 'MIAOS_PROFILE_PROVENANCE.json');
+    assert.equal(JSON.parse(fs.readFileSync(marker, 'utf8')).profile, MIAOS_BOT_APPS_HERMES_PROFILE);
+    assert.equal(setHermesProfileModel(MIAOS_BOT_APPS_HERMES_PROFILE,
+      { provider: 'openai-codex', model: 'gpt-5.6-luna' }, { profilesRoot }), true);
+    const hermesRewrite = () => fs.writeFileSync(configPath, YAML.stringify(YAML.parse(fs.readFileSync(configPath, 'utf8'))));
+    hermesRewrite();
+    assert.doesNotMatch(fs.readFileSync(configPath, 'utf8'), /^# Managed by Mia/);
+    assert.doesNotThrow(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }));
+    assert.equal(YAML.parse(fs.readFileSync(configPath, 'utf8')).model.default, 'gpt-5.6-luna');
+
+    hermesRewrite();
+    assert.equal(setHermesProfileModel(MIAOS_BOT_APPS_HERMES_PROFILE,
+      { provider: 'deepseek', model: 'deepseek-flash' }, { profilesRoot }), true);
+    assert.match(fs.readFileSync(configPath, 'utf8'), /^# Managed by Mia/);
+    assert.equal(YAML.parse(fs.readFileSync(configPath, 'utf8')).model.default, 'deepseek-flash');
+
+    fs.writeFileSync(configPath, 'model: mine\n');
+    assert.throws(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }), /refusing to overwrite unmanaged Hermes profile/);
+    assert.equal(setHermesProfileModel(MIAOS_BOT_APPS_HERMES_PROFILE,
+      { provider: 'deepseek', model: 'deepseek-flash' }, { profilesRoot }), false);
+    assert.equal(fs.readFileSync(configPath, 'utf8'), 'model: mine\n');
+
+    fs.writeFileSync(configPath, '# Managed by Mia. Runtime permissions are app-owned.\n');
+    const outside = path.join(root, 'outside-marker');
+    const markerContent = fs.readFileSync(marker, 'utf8');
+    fs.writeFileSync(outside, markerContent);
+    fs.unlinkSync(marker);
+    fs.symlinkSync(outside, marker);
+    assert.throws(() => provisionHermesRuntimeProfiles({ profilesRoot, workspaceDir }),
+      /refusing to replace unexpected Hermes profile provenance/);
+    assert.equal(fs.readFileSync(outside, 'utf8'), markerContent);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Hermes gives every profile its full default tools, so bots lose only
 // delegation: they don't hand work to background subagents. Mia keeps it.
 test('bots cannot delegate to background subagents; Mia can', () => {

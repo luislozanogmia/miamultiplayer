@@ -22,7 +22,7 @@ const {
   MIAOS_BOT_GOOGLE_HERMES_PROFILE,
   MIAOS_BOT_APPS_HERMES_PROFILE,
   MIAOS_BOT_GOOGLE_APPS_HERMES_PROFILE,
-  isManagedProfileConfig,
+  isManagedProfileDirectory,
 } = require('./hermes-bot-profile');
 
 const MANAGED_PROFILES = [
@@ -272,7 +272,7 @@ function removeProviderProfileCredentials(hermesHome, provider, { validateOnly =
         result.failures.push(`${configFile}: unavailable`);
         continue;
       }
-      if (!configStat.isFile() || !isManagedProfileConfig(fs.readFileSync(configFile, 'utf8'))) {
+      if (!configStat.isFile() || !isManagedProfileDirectory(profileDir, fs.readFileSync(configFile, 'utf8'))) {
         result.failures.push(`${configFile}: not a Mia-managed profile`);
         continue;
       }
