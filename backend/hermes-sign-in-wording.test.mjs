@@ -8,7 +8,7 @@ const scripts = path.join(path.dirname(fileURLToPath(import.meta.url)), '../scri
 
 test('the app sign-in pages tell people to return to Mia, not Hermes', () => {
   const patch = fs.readFileSync(path.join(scripts, 'hermes-mia-sign-in-wording.patch'), 'utf8');
-  const added = patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++'));
+  const added = patch.split('\n').filter(line => line.startsWith('+') && line !== '+' && !line.startsWith('+++'));
   assert.ok(added.length >= 5, 'every sign-in page line is replaced');
   for (const line of added) {
     assert.match(line, /return to Mia/i, line);
