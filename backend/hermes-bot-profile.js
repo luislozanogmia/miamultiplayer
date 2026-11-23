@@ -138,9 +138,20 @@ function retainsManagedProfilePosture(config, profileDir, { terminalRequired = f
   if (terminalRequired && !parsed.terminal) return false;
   if (parsed.terminal) {
     const guard = path.join(path.dirname(path.dirname(profileDir)), 'miaos-shell-guard.sh');
+    const profileGuard = path.join(profileDir, 'miaos-shell-guard.sh');
+    const configuredGuard = Array.isArray(parsed.terminal.shell_init_files)
+      ? parsed.terminal.shell_init_files : [];
+    let copiedGuardIsMia = false;
+    if (configuredGuard.includes(profileGuard)) {
+      try {
+        const stat = fs.lstatSync(profileGuard);
+        copiedGuardIsMia = stat.isFile() && stat.nlink === 1
+          && fs.readFileSync(profileGuard, 'utf8') === SHELL_GUARD;
+      } catch (_) { /* missing or changed guard is not trusted */ }
+    }
     if (parsed.terminal.auto_source_bashrc !== false
-      || !Array.isArray(parsed.terminal.shell_init_files)
-      || !parsed.terminal.shell_init_files.includes(guard)) return false;
+      || configuredGuard.length !== 1
+      || (configuredGuard[0] !== guard && !copiedGuardIsMia)) return false;
   }
   return true;
 }
