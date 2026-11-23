@@ -636,8 +636,8 @@ cronSync.syncBotAutomation = async (bot) => ({
 });
 
 // MCP apps: the owner's own bot turn runs in the bots' apps profile and is told
-// which apps it has; its request for a new app reaches Mia's chat as a message
-// from the owner, which Mia answers with her usual card.
+// which apps it has; its request reaches Mia's chat as a suggestion. Mia does
+// not act until the owner sends a separate message asking for the app.
 test('the owner\'s bot gets the owner\'s MCP apps and can ask Mia for a new one', async () => {
   const appsRoot = await mkdtemp(path.join(os.tmpdir(), 'miaos-bot-mcp-'));
   const appsFile = path.join(appsRoot, 'mcp-apps.json');
@@ -691,9 +691,15 @@ inference.runInferenceViaHermesGateway = async (input) => {
     assert.equal(/MIA_MCP_REQUEST/.test(JSON.stringify(reply.content)), false, 'the block never shows');
     const asked = await waitFor(miaChat.id, (event) => event.metadata && event.metadata.requestedByBot);
     assert.ok(asked, 'the request reached Mia\'s chat');
-    assert.equal(asked.senderType, 'user');
+    assert.equal(asked.senderType, 'agent');
     assert.equal(asked.metadata.requestedByBot.id, bot.id);
-    assert.match(asked.content.text, /CRM Fixture asks you to add an MCP app: Attio CRM\./);
+    assert.equal(asked.metadata.mcpAppSuggestion.app, 'Attio CRM');
+    assert.match(asked.content.text, /CRM Fixture suggested an MCP app: Attio CRM\./);
+    assert.equal(fs.readFileSync(turnsLog, 'utf8').trim().split('\n').filter((line) => !JSON.parse(line).bot).length, 0,
+      'the bot suggestion alone cannot start a Mia turn');
+    const ownerAsked = await fetch(`${server.origin}/api/conversations/${miaChat.id}/events?workspace=solo`, { method: 'POST', headers: solo,
+      body: JSON.stringify({ content: { text: 'Please find the official MCP server for Attio CRM and show me a card to review.' }, clientIdempotencyKey: 'owner-mcp-ask' }) });
+    assert.equal(ownerAsked.status, 201);
     const miaReply = await waitFor(miaChat.id, (event) => event.senderType === 'agent' && /app to review/.test(JSON.stringify(event.content)));
     assert.ok(miaReply, 'Mia answered the request');
     const turns = fs.readFileSync(turnsLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
@@ -704,6 +710,24 @@ inference.runInferenceViaHermesGateway = async (input) => {
   } finally {
     await stopServer(server);
     fs.rmSync(appsRoot, { recursive: true, force: true });
+  }
+});
+
+test('only the installation owner can read or stop local bot copies', async () => {
+  const server = await startServer({ seedRows: [{ email: 'plain-member@example.com', password: 'another-horse-battery', role: 'member' }] });
+  try {
+    const ownerCookie = await loginAsBootAdmin(server);
+    const member = await login(server.origin, 'plain-member@example.com', 'another-horse-battery');
+    assert.equal(member.response.status, 200);
+    const copy = require('./bot-copies').startCopy(path.dirname(server.dbPath), { bot: 'Owner bot', title: 'Private work' });
+    const list = `${server.origin}/api/bot-copies?bot=Owner%20bot`;
+    const stop = `${server.origin}/api/bot-copies/${copy.id}/stop`;
+    assert.equal((await fetch(list, { headers: { cookie: member.cookie } })).status, 403);
+    assert.equal((await fetch(stop, { method: 'POST', headers: { cookie: member.cookie } })).status, 403);
+    assert.equal((await fetch(list, { headers: { cookie: ownerCookie } })).status, 200);
+    assert.equal((await fetch(stop, { method: 'POST', headers: { cookie: ownerCookie } })).status, 200);
+  } finally {
+    await stopServer(server);
   }
 });
 

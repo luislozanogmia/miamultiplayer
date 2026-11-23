@@ -138,9 +138,9 @@ function channelEditNote(method, route, logger) {
   const part = edit[2] ? 'picture' : 'details';
   return (code, data, detail, bytes) => {
     const sent = bytes ? ` (${Math.ceil(bytes / 1024)} KB sent)` : '';
-    const reason = data && data.error ? ` ${String(data.error).slice(0, 60)}` : '';
-    const why = detail ? ` (${String(detail).replace(/https?:\/\/\S+/g, '<hub>').slice(0, 160)})` : '';
-    logger.log(`hub channel edit: ${method} ${part} channel ${edit[1].slice(0, 8)}${sent} -> ${code}${reason}${why}`);
+    // Hub error fields and transport details can contain credentials or
+    // private data. The status code is enough to diagnose this edit path.
+    logger.log(`hub channel edit: ${method} ${part} channel ${edit[1].slice(0, 8)}${sent} -> ${code}`);
   };
 }
 function createHubClient({ dataDirectory, fetcher = fetch, logger = console }) {

@@ -274,7 +274,7 @@ test('channel edits leave one log line with the result, never the token or pictu
   assert.equal(lines.length,3,'reading the picture back is logged, reading the channel is not');
   assert.match(lines[2],/^hub channel edit: GET picture channel cccccccc -> 200$/);
   assert.match(lines[0],/^hub channel edit: PUT picture channel cccccccc \(8 KB sent\) -> 200$/);
-  assert.match(lines[1],/DELETE picture channel cccccccc .*-> 503 hub_unavailable \(connect ECONNREFUSED <hub>\)$/);
+  assert.match(lines[1],/^hub channel edit: DELETE picture channel cccccccc \(1 KB sent\) -> 503$/);
   for(const line of lines){assert.doesNotMatch(line,/secret-token|QUJD|9876/);}
  }finally{if(previous===undefined)delete process.env.MIA_HUB_URL;else process.env.MIA_HUB_URL=previous;}
 });

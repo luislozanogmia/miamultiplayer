@@ -9,14 +9,21 @@ automatically through the in-app updater.
 
 ## [Unreleased]
 
+## [0.3.13] — 2026-11-23
+
 ### Added
 - Each step of a team workflow can name the model its bot runs on. A model icon sits beside the step's bot and owner, and the step editor uses the composer's model picker. When the owner has not connected that model, their default model runs the step. Needs the matching Hub update.
+- A Bot copies panel shows a bot's working copies, progress, and Stop action.
 
 ### Changed
 - An automation's model is chosen with the same picker as the chat composer, in the bot's automation editor and under the schedule on the Automations page, where a pick saves at once. Its "Bot's model" row returns the automation to the bot's model.
+- Flow previews live in the rail, the sidebar shows Online or Offline, and composer buttons have a quieter hover state.
+- Replies to site notifications reach bots as site data. Renamed company bots show their current name and color on older messages and in the sidebar.
 
 ### Fixed
 - A bot can take a screenshot of its page while that page is docked and the browser is closed; the capture no longer times out.
+- A bot's request for a connected app appears as a suggestion in Mia's chat. Mia acts only after the owner chooses to ask her to review it.
+- Only the installation owner can view or stop local bot copies; Hub channel edit logs omit response text and transport details.
 
 ## [0.3.12] — 2026-11-19
 

@@ -7400,6 +7400,8 @@
       nativeWorking: !!(event.metadata && event.metadata.progress === true && event.metadata.status === 'working'),
       nativeDiagnostic: !!(event.metadata && event.metadata.diagnostic === true),
       askBeforeDo: event.metadata && event.metadata.askBeforeDo && typeof event.metadata.askBeforeDo === 'object' ? event.metadata.askBeforeDo : null,
+      botMcpSuggestion: event.senderType === 'agent' && event.senderId === 'gateway' && event.metadata
+        && event.metadata.mcpAppSuggestion && typeof event.metadata.mcpAppSuggestion === 'object' ? event.metadata.mcpAppSuggestion : null,
       reactions: event.metadata && event.metadata.reactions && typeof event.metadata.reactions === 'object' ? event.metadata.reactions : null,
       nativeEvent: event
     };
@@ -15079,6 +15081,10 @@
       var grouped = key !== null && key === prevHumanKey;
       prevHumanKey = key;
       var footerHtml = m.system && !(window.MiaSiteNotices && window.MiaSiteNotices.isNotice(m)) ? '' : chatThreadFooterHtml(state, m.id);
+      if(m.botMcpSuggestion && !m.deleted && window.MiaBotMcpSuggestion
+          && window.MiaBotMcpSuggestion.requestText(m.botMcpSuggestion.app)){
+        footerHtml = '<div class="chat-msg-retry-row"><button type="button" class="chat-msg-retry" data-bot-mcp-suggestion="' + esc(m.id) + '">Ask Mia to review this app</button></div>' + footerHtml;
+      }
       footerHtml = miaOnboardingChoicesHtml(m, state) + footerHtml;
       return chatMsgHtml(m, grouped, {footerHtml: footerHtml});
     }).join('');
@@ -15110,6 +15116,16 @@
         else if(label === 'Set up my news briefing') sendMiaOnboardingAction({action:'start-news'});
         else if(miaOnboardingChat.phase === 'name') sendMiaOnboardingAnswer(label);
         else sendActiveRoomMessage(label);
+      });
+    });
+    els('[data-bot-mcp-suggestion]', thread).forEach(function(button){
+      button.addEventListener('click', function(){
+        var message = state.messages.find(function(item){ return item.id === button.getAttribute('data-bot-mcp-suggestion'); });
+        var app = message && message.botMcpSuggestion && message.botMcpSuggestion.app;
+        var text = window.MiaBotMcpSuggestion && window.MiaBotMcpSuggestion.requestText(app);
+        if(!text) return;
+        button.disabled = true;
+        sendActiveRoomMessage(text, null, null, roomId);
       });
     });
     wireNewsOnboarding(thread);

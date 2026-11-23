@@ -6642,7 +6642,8 @@ function privateGatewayAgent(req) {
 }
 
 // Bot copies: the status files copies write, read for the side panel.
-app.use('/api/bot-copies', requireAuth, require('./bot-copies').createBotCopiesRouter({ dataDirectory: path.dirname(path.resolve(DB_PATH)), express }));
+app.use('/api/bot-copies', requireInteractiveAuth, requireMcpAppOwner,
+  require('./bot-copies').createBotCopiesRouter({ dataDirectory: path.dirname(path.resolve(DB_PATH)), express }));
 
 app.get('/api/agents', requireAuth, (req, res) => {
   const agent = privateGatewayAgent(req);
@@ -8616,10 +8617,8 @@ function stripAgentActionBlocks(text) {
   return botMcpRequests.stripMcpRequestBlocks(botFilesTidy.stripTidyPlanBlocks(botInstructionActions.stripInstructionBlocks(miaBotSetupActions.stripBotSetupBlocks(botAutomationActions.stripAutomationBlocks(text)))));
 }
 
-// Reads a bot's <MIA_MCP_REQUEST> block in its owner's own chat: the request
-// becomes a message from the owner in Mia's chat in the same workspace, and
-// Mia proposes the app there with her usual card. Nothing is added until the
-// owner accepts that card. Only the apps' owner can ask through a bot.
+// A bot's request is shown in Mia's chat as a suggestion from Mia. It must not
+// become an owner message until the owner explicitly asks Mia to act on it.
 async function nativeBotMcpRequest(agent, replyText, trigger, conversation) {
   const extracted = botMcpRequests.extractMcpRequest(replyText);
   if (!extracted.request && !extracted.error) return { text: extracted.text, metadata: null };
@@ -8638,13 +8637,14 @@ async function nativeBotMcpRequest(agent, replyText, trigger, conversation) {
     const created = await nativeConversationService.createEvent({
       companyId: miaChat.companyId,
       conversationId: miaChat.id,
-      principal: { companyId: miaChat.companyId, principalId: asker, principalType: 'user' },
-      type: 'message',
-      content: { text: botMcpRequests.miaRequestText(agent.name || 'A bot', extracted.request) },
+      principal: { companyId: miaChat.companyId, principalId: GATEWAY_AGENT_ID, principalType: 'agent' },
+      type: 'agent_message',
+      content: { text: botMcpRequests.miaSuggestionText(agent.name || 'A bot', extracted.request) },
       clientIdempotencyKey: `bot-mcp-request-${trigger.id}`,
-      metadata: { requestedByBot: { id: agent.id, name: agent.name || agent.id, conversationId: trigger.conversationId } },
+      metadata: { requestedByBot: { id: agent.id, name: agent.name || agent.id, conversationId: trigger.conversationId },
+        mcpAppSuggestion: { app: extracted.request.app } },
     });
-    return { text: extracted.text || `I asked Mia to add ${extracted.request.app}. Her card is in her chat for you to accept.`,
+    return { text: extracted.text || `I sent Mia a suggestion for ${extracted.request.app}. You can choose whether to ask her to review it.`,
       metadata: { mcpAppRequest: { status: 'sent', app: extracted.request.app, miaConversationId: miaChat.id,
         eventId: created && created.event && created.event.id } } };
   } catch (error) {
