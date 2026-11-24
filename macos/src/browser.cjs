@@ -2001,6 +2001,16 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
       let timer, attached = false;
       try {
         wc.debugger.attach("1.3"); attached = true;
+        // On Linux a hidden view has a 0x0 viewport, so it never draws a frame
+        // and the capture times out. For this capture only, give the page the
+        // size it has when shown; the override is cleared before detaching.
+        if (process.platform === "linux") {
+          const size = tab.captureBounds && tab.captureBounds.width > 0 && tab.captureBounds.height > 0
+            ? tab.captureBounds : { width: 1280, height: 800 };
+          await wc.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+            width: Math.round(size.width), height: Math.round(size.height), deviceScaleFactor: 1, mobile: false,
+          });
+        }
         const result = await Promise.race([
           wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, fromSurface: true }),
           new Promise((_, reject) => { timer = setTimeout(() => reject(protocolError("BROWSER_TIMEOUT", "Assigned page capture timed out.")), PROTOCOL_SCRIPT_TIMEOUT_MS); }),
@@ -2012,6 +2022,9 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
         throw protocolError("CAPTURE_UNAVAILABLE", "Assigned page could not render capture pixels.");
       } finally {
         clearTimeout(timer);
+        if (attached && process.platform === "linux" && !wc.isDestroyed() && wc.debugger.isAttached()) {
+          await wc.debugger.sendCommand("Emulation.clearDeviceMetricsOverride").catch(() => {});
+        }
         // Never detach a debugger that was attached by another owner.
         if (attached && !wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach();
       }
