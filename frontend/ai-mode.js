@@ -1250,11 +1250,16 @@ function closeBots(){Object.keys(botSocks).forEach(function(k){try{if(botSocks[k
 function openChat(fresh){
   if(conv)return Promise.resolve(conv);
   var company=team(),more=fresh?{fresh:true}:{};
-  function plain(){return call('/api/conversations/ai-mode',more);}
-  // A company that cannot be confirmed right now still gets AI mode, working as in Solo.
-  if(!opening)opening=(company?window.MiaHubChat.sessionToken().then(function(token){return call('/api/conversations/ai-mode',Object.assign({teamWorkspace:company},more),token);})
-    .then(function(r){return r.status===403?plain():r;},plain)
-    :plain()).then(function(r){
+  async function requestChat(){
+    if(!company)return call('/api/conversations/ai-mode',more);
+    try{
+      var token=await window.MiaHubChat.sessionToken();
+      var result=await call('/api/conversations/ai-mode',Object.assign({teamWorkspace:company},more),token);
+      if(result.status<400)return result;
+    }catch(e){ /* Company sign-in or transport unavailable. */ }
+    throw new Error('company');
+  }
+  if(!opening)opening=requestChat().then(function(r){
     var id=r.data.conversation&&r.data.conversation.id;
     if(!id)throw new Error(r.status===401?'signin':'closed');
     conv=id;seq=0;seqKnown=false;
@@ -1271,7 +1276,7 @@ function openChat(fresh){
       if(open)draw();
       return id;
     });
-  },function(e){opening=null;throw e;});
+  }).catch(function(e){opening=null;throw e;});
   return opening;
 }
 function restore(events){
@@ -1315,7 +1320,7 @@ function shelve(r){
 }
 function fail(my,e){
   if(my!==R)return;
-  R.running=false;R.note=e&&e.message==='signin'?'Sign in to Mia first, then say it again.':'That did not go through. Say it again.';settle();draw();
+  R.running=false;R.note=e&&e.message==='company'?'Mia could not verify access to this company. Check your sign-in and try again.':e&&e.message==='signin'?'Sign in to Mia first, then say it again.':'That did not go through. Say it again.';settle();draw();
 }
 // The person's words go to Mia as a direction. Said while she is working, they steer the same run.
 // The pen: the person draws on the stage, and each mark tells Mia the words it was drawn on.

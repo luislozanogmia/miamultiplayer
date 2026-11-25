@@ -301,3 +301,47 @@ test('Mia makes a new bot from Flow and Flow Tandem with the app\'s own draft an
   api.asked({ id: 'ev2' });
   assert.deepEqual(log.splice(0), ['app:ev2']);
 });
+
+test('Flow and Tandem open the signed-in company chat and retry failed verification in that company', async () => {
+  const company = 'hub_' + 'a'.repeat(32);
+  for (const tandem of [false, true]) {
+    const requests = [];
+    let status = 403;
+    const start = new Function('team', 'window', 'call', 'useTandem', `
+      let conv='',opening,seq,seqKnown,sock,open=false;
+      const chat=(id,path)=>id+path, listen=()=>null, restore=()=>{}, crewRestore=()=>{}, onEvent=()=>{}, onActivity=()=>{};
+      let tandem=false,tandemSince,tandemLine,earNote,tandemTalk,talkOn=false,master=null,openingRequest;
+      const root={},host={classList:{add(){}}}, sitePlace=()=>{}, earParts=()=>null, watchStart=()=>{}, tandemTell=()=>{};
+      function enter(){openingRequest=openChat();}
+      ${part('function openChat(fresh)', 'function restore(events)')}
+      ${part('function tandemStart(){', '// Back to the stage')}
+      return ()=>{if(useTandem && !tandem)tandemStart();else enter();return openingRequest;};`)(() => company, { MiaHubChat: { sessionToken: async () => 'test-session' } },
+      async (path, body, token) => {
+        if (!body) return { status: 200, data: { events: [] } };
+        requests.push({ path, body, token });
+        return { status, data: status === 201 ? { conversation: { id: 'flow-chat' } } : {} };
+      }, tandem);
+    await assert.rejects(start(), /company/);
+    status = 201;
+    assert.equal(await start(), 'flow-chat');
+    assert.deepEqual(requests, Array(2).fill({ path: '/api/conversations/ai-mode', body: { teamWorkspace: company }, token: 'test-session' }));
+  }
+});
+
+test('regular company Mia chat binds the signed-in company before opening the room', async () => {
+  const company = 'hub_' + 'b'.repeat(32);
+  let request, room;
+  const start = app.indexOf('  function openTeamMiaChat()');
+  const fn = app.slice(start, app.indexOf('  function teamMiaRow()', start));
+  const open = new Function('activeWorkspaceKey', 'window', 'api', 'loadChatRoom', `
+    const teamMiaChat=()=>null, chatWs={nativeConversations:[]}, applyNativeConversationList=()=>{};
+    ${fn}
+    return openTeamMiaChat;`)(company, { MiaHubChat: { sessionToken: async () => 'test-session' } },
+    async (path, options) => { request = { path, options }; return { status: 201, data: { conversation: { id: 'regular-chat' } } }; },
+    id => { room = id; });
+  await open();
+  assert.equal(room, 'regular-chat');
+  assert.equal(request.path, '/api/conversations?workspace=solo');
+  assert.equal(request.options.headers['x-hub-token'], 'test-session');
+  assert.equal(request.options.body.metadata.teamWorkspace, company);
+});

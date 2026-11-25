@@ -2693,7 +2693,14 @@ html:has([data-mia-pip]),html:has([data-mia-pip]) body{overflow:hidden!important
     if (!session) throw protocolError("FORBIDDEN_FOR_ACTOR", "mia-app only runs inside a Mia chat turn.");
     if (tool === "browser_work_start") return protocolWorkCommand("work_start", args, session);
     const reading = recentPageRead(session) ? { url: miaPageRead.url, title: miaPageRead.title } : null;
-    const { result } = await appRequest("/api/mia-app/call", { method: "POST", timeoutMs: 170000, body: { tool, arguments: args, turn: session, ...(reading ? { reading } : {}) } });
+    const chatRead = tool === "chat_threads" || tool === "chat_read";
+    const workspace = workspaceKey;
+    const { result } = await appRequest("/api/mia-app/call", {
+      method: "POST", timeoutMs: 170000,
+      ...(chatRead && /^hub_[a-f0-9]{32}$/.test(workspace) ? { teamWorkspace: workspace } : {}),
+      body: { tool, arguments: args, turn: session, ...(reading ? { reading } : {}) },
+    });
+    if (chatRead && workspace !== workspaceKey) throw protocolError("BROWSER_OTHER_WORKSPACE", "The workspace changed during this read.");
     return result;
   }
   async function protocolCommand(method, params = {}) {

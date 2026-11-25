@@ -2409,11 +2409,22 @@ async function loadMiaOS() {
 // from one session, so a short cache keeps each call off the backend.
 // A call Mia's own Ghost session asked for, sent as the signed-in person. Only
 // the host decides which paths those are; nothing here takes a path from Mia.
-async function desktopAppRequest(window, pathname, { method = "GET", body, timeoutMs = 15000 } = {}) {
+async function desktopAppRequest(window, pathname, { method = "GET", body, timeoutMs = 15000, teamWorkspace } = {}) {
   if (!backendUrl || !window || window.isDestroyed()) throw Object.assign(new Error("The Mia app connection is unavailable."), { code: "APP_UNAVAILABLE" });
-  const response = await window.webContents.session.fetch(new URL(pathname, backendUrl).href, {
+  const endpoint = new URL(pathname, backendUrl);
+  const headers = { Origin: endpoint.origin, ...(body ? { "Content-Type": "application/json" } : {}) };
+  if (teamWorkspace) {
+    if (pathname !== "/api/mia-app/call" || !["chat_threads", "chat_read"].includes(body?.tool)) {
+      throw new Error("Company sign-in is only available for chat reads.");
+    }
+    const token = await desktopAuth.getSessionToken().catch(() => null);
+    if (!token) throw new Error("Sign in to Mia to read company channels.");
+    headers["x-hub-token"] = token;
+    headers["x-mia-team-workspace"] = teamWorkspace;
+  }
+  const response = await window.webContents.session.fetch(endpoint.href, {
     method, credentials: "include", redirect: "error",
-    headers: { Origin: new URL(backendUrl).origin, ...(body ? { "Content-Type": "application/json" } : {}) },
+    headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(timeoutMs),
   });

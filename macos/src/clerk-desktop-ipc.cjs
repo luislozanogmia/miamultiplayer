@@ -62,6 +62,11 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
     if (!tokenRead) tokenRead = Promise.resolve().then(() => client.getSessionToken()).finally(() => { tokenRead = null; });
     return tokenRead;
   }
+  async function getSessionToken() {
+    while (busy) await settled;
+    init();
+    return sharedToken();
+  }
   function errorResult(action, error) {
     // Exception messages and provider bodies can contain credentials. Never
     // pass those across IPC or put them in logs. Only the fixed error code,
@@ -102,8 +107,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
       while (busy) await settled;
       if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
       try {
-        init();
-        const result = await sharedToken();
+        const result = await getSessionToken();
         if (!isAuthSender(event, getWindow(), getBackendUrl())) return { ok: false, error: "Not authorized." };
         return { ok: true, result };
       } catch (error) {
@@ -160,6 +164,7 @@ function createDesktopAuth({ ipcMain, getWindow, getBackendUrl, getClient, openE
     } finally { busy = false; releaseOperation(); }
   });
   return {
+    getSessionToken,
     async acceptCallback(url) { return flow ? flow.acceptCallback(url) : false; },
     async clear() { init(); await flow.cancel(); await client.signOut(); },
   };
