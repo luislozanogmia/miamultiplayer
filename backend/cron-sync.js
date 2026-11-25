@@ -1283,21 +1283,7 @@ function validateBotArtifacts(bot, artifacts) {
   return [...found.values()];
 }
 
-function cronFailureMessage(bot, error, automation) {
-  const detail = String(error || '');
-  const providerMatch = detail.match(/provider\s+['"]([^'"]+)['"]/i);
-  let provider = providerMatch && providerMatch[1]
-    ? providerMatch[1].replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
-    : 'AI model';
-  if (provider === 'Deepseek') provider = 'DeepSeek';
-  if (provider === 'Openai') provider = 'OpenAI';
-  const name = String(automation && automation.name || bot && bot.name || 'This automation').trim() || 'This automation';
-  if (/credentials?|api[_ ]?key|unauthorized|authentication/i.test(detail)) {
-    return `${name} could not run because its ${provider} connection is not configured or was rejected. `
-      + 'Check the model connection in Mia. If your organization manages this connection, contact your administrator.';
-  }
-  return `${name} could not complete this run. Please try again; if it continues, contact your administrator.`;
-}
+const { cronFailureMessage, failureMatchesTranscript } = require('./cron-failure-message');
 
 function hasSqliteTable(database, table) {
   return Boolean(database && database.prepare(
@@ -1368,8 +1354,10 @@ function listUndeliveredBotCronResults(conn) {
         // A success outranks any failure that began before it ended: a failed
         // claim taken while a successful run was still executing must not
         // mask that run's deliverable.
-        if (failed && (!row || hermesTimestampMs(failed.startedAt) > hermesTimestampMs(row.endedAt))) {
-          const sessionId = `cron-failure-${failed.executionId}`;
+        if (failed && (!row || hermesTimestampMs(failed.startedAt) > hermesTimestampMs(row.endedAt)
+            || failureMatchesTranscript(row, failed, hermesTimestampMs))) {
+          const sessionId = failureMatchesTranscript(row, failed, hermesTimestampMs)
+            ? row.sessionId : `cron-failure-${failed.executionId}`;
           if (sessionId !== delivery.sessionId) {
             results.push({
               bot,
@@ -1378,7 +1366,9 @@ function listUndeliveredBotCronResults(conn) {
               jobId,
               sessionId,
               startedAt: failed.startedAt,
-              content: cronFailureMessage(bot, failed.error, automation),
+              content: cronFailureMessage(bot, failed.error, automation, registry.byId.get(jobId))
+                + (row?.content?.trim().startsWith('This turn did not complete.')
+                  ? ' Some actions may already have run; verify their effects before retrying.' : ''),
               artifacts: [],
             });
           }
