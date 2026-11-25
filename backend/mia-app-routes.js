@@ -92,6 +92,26 @@ function lastRunsByBot(checklists) {
   return runs;
 }
 
+async function readHubMessages(call, team, channel, limit) {
+  const base = `/api/hub/v1/teams/${team}/channels/${channel}/messages/before/`;
+  const rows = [];
+  let cursor = 0;
+  for (;;) {
+    const page = await call('GET', base + cursor);
+    // The Hub uses the message stream for shared-browser control packets too.
+    rows.push(...page.messages.filter(row => !row.deleted && !/^(?:\u2063)?mia-space\/1 \{/.test(row.body)));
+    if (!page.hasMore || rows.length >= limit) break;
+    if (!Number.isSafeInteger(page.before) || page.before <= 0 || (cursor && page.before >= cursor)) {
+      throw fail(502, 'Invalid company message cursor.');
+    }
+    cursor = page.before;
+  }
+  return { messages: rows.sort((a, b) => a.sequence - b.sequence).slice(-limit).map(row => ({
+    id: row.id, type: 'message', senderId: row.author_id, senderType: row.author_type,
+    text: row.body || '', at: new Date(row.created_at * 1000).toISOString(),
+  })) };
+}
+
 // Every tool Mia can reach through `mia-app`. A route that is not listed here
 // cannot be called, whatever Mia asks for. A runs at once, B runs and is logged,
 // C becomes a card unless the person switched its trust category on. A C tool
@@ -161,13 +181,30 @@ function createMiaAppTools({ browserWork, botRuns, botAutomationActions, automat
         running: active.runs, checklists: active.checklists,
       };
     } },
-    chat_threads: { group: 'A', description: 'The chats and channels the person can see.', args: {}, async run({ call }) {
+    chat_threads: { group: 'A', description: 'The chats and channels the person can see.', args: {}, async run({ call, teamWorkspace }) {
       const { conversations } = await call('GET', '/api/conversations');
-      return { threads: conversations.map(item => ({ id: item.id, type: item.type, title: item.title || item.name || '', updatedAt: item.updatedAt, botArchived: item.metadata?.botArchived === true })) };
+      const threads = conversations.filter(item => item.metadata?.teamWorkspace === teamWorkspace).map(item => ({ id: item.id, type: item.type, title: item.title || item.name || '', updatedAt: item.updatedAt, botArchived: item.metadata?.botArchived === true }));
+      if (teamWorkspace) {
+        const team = teamWorkspace.slice(4);
+        const { channels } = await call('GET', '/api/hub/v1/teams/' + team + '/channels');
+        for (const channel of channels) {
+          if (channel.joined === false || channel.archived_at) continue;
+          threads.push({ id: 'hub:' + team + ':' + channel.id, type: channel.kind || 'channel', title: channel.name || '' });
+        }
+      }
+      return { threads };
     } },
-    chat_read: { group: 'A', description: "A chat's recent messages.", args: { conversation_id: 'string', limit: 'number, optional' }, async run({ call, args }) {
-      const limit = Math.min(Number(args.limit) || 30, 100);
-      const { events } = await call('GET', `/api/conversations/${seg(text(args.conversation_id, 'conversation_id', 200))}/events?latest=true&limit=${limit}`);
+    chat_read: { group: 'A', description: "A chat's recent messages.", args: { conversation_id: 'string', limit: 'number, optional' }, async run({ call, args, teamWorkspace }) {
+      const limit = Math.max(1, Math.min(Math.trunc(Number(args.limit)) || 30, 100));
+      const id = text(args.conversation_id, 'conversation_id', 200);
+      if (id.startsWith('hub:')) {
+        const match = /^hub:([a-f0-9]{32}):([a-f0-9]{32})$/.exec(id);
+        if (!match || teamWorkspace !== 'hub_' + match[1]) throw fail(403, 'Channel is outside this workspace.');
+        return readHubMessages(call, match[1], match[2], limit);
+      }
+      const { conversation } = await call('GET', `/api/conversations/${seg(id)}`);
+      if (conversation.metadata?.teamWorkspace !== teamWorkspace) throw fail(403, 'Chat is outside this workspace.');
+      const { events } = await call('GET', `/api/conversations/${seg(id)}/events?latest=true&limit=${limit}`);
       return { messages: events.map(item => ({ id: item.id, type: item.type, senderId: item.senderId, senderType: item.senderType, text: item.content?.text || '', at: item.createdAt })) };
     } },
     artifacts_list: { group: 'A', description: 'Saved files and apps shown in Artifacts.', args: {}, run: ({ call }) => call('GET', '/api/artifacts') },
@@ -438,7 +475,11 @@ function createActivityLog(dataDir) {
 function routeCaller(req, workspace) {
   return async (method, pathname, body, { raw = false } = {}) => {
     const headers = { 'x-miaos-workspace': workspace };
-    for (const name of ['cookie', 'authorization']) if (req.headers[name]) headers[name] = req.headers[name];
+    if (pathname.startsWith('/api/hub/')) {
+      headers.authorization = 'Bearer ' + req.headers['x-hub-token'];
+    } else {
+      for (const name of ['cookie', 'authorization']) if (req.headers[name]) headers[name] = req.headers[name];
+    }
     // This call reaches the server over loopback, so its Origin has to name
     // loopback too. The person's own request already passed the Origin check.
     const local = `http://127.0.0.1:${req.socket.localPort}`;
@@ -457,7 +498,7 @@ function routeCaller(req, workspace) {
 }
 const publicEntry = ({ undo, ...entry }) => ({ ...entry, canUndo: !!undo && !entry.undoneAt });
 
-function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, postCard, findCard, updateCard, listCards = () => [], postNote = null }) {
+function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSettings, saveSettings, tools, activity, resolveTurn, authorizeTeamWorkspace, postCard, findCard, updateCard, listCards = () => [], postNote = null }) {
   const ownerOf = req => String(req.userEmail).toLowerCase();
   app.get('/api/mia-app/trust', requireAuth, (req, res) => res.json({ trust: trustFor(loadSettings(), ownerOf(req)) }));
   app.post('/api/mia-app/trust', requireInteractiveAuth, (req, res) => {
@@ -510,6 +551,20 @@ function registerMiaAppRoutes(app, { requireAuth, requireInteractiveAuth, loadSe
     };
     const ctx = { owner, args, turn, call, log, propose };
     try {
+      if (name === 'chat_threads' || name === 'chat_read') {
+        const team = target?.teamWorkspace;
+        if (team || req.headers['x-mia-team-workspace']) {
+          if (!team || !req.session || !target.miaUserTurn || team !== req.headers['x-mia-team-workspace']
+              || !authorizeTeamWorkspace || !(await authorizeTeamWorkspace(req, team))) {
+            throw fail(403, 'Mia could not verify access to this company.');
+          }
+          const result = await tool.run({ ...ctx, teamWorkspace: team });
+          const current = resolveTurn(session, owner);
+          if (!current || current.botId || !current.miaUserTurn || current.conversationId !== target.conversationId
+              || current.teamWorkspace !== team) throw fail(403, 'This company turn has ended.');
+          return res.json({ result });
+        }
+      }
       if (tool.group !== 'C') return res.json({ result: await tool.run(ctx) });
       const plan = await tool.prepare(ctx);
       if (tool.trust && trustFor(loadSettings(), owner)[tool.trust] && !reading) {

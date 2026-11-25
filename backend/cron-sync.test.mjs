@@ -774,10 +774,37 @@ test('a failed scheduled run produces one safe user-facing model connection erro
   const scan = cronSync.listUndeliveredBotCronResults(appDb);
   assert.equal(scan.length, 1);
   assert.equal(scan[0].sessionId, 'cron-failure-execution-failed');
-  assert.match(scan[0].content, /^Daily Research could not run because its DeepSeek connection/);
+  assert.match(scan[0].content, /^Daily Research could not complete because its DeepSeek model connection/);
   assert.doesNotMatch(scan[0].content, /DEEPSEEK_API_KEY|RuntimeError/);
 
   bot.hermesCronLastDeliveredSessionId = scan[0].sessionId;
+  require('./db').saveOne(appDb, 'bots', bot.id, bot);
+  assert.deepEqual(cronSync.listUndeliveredBotCronResults(appDb), []);
+  appDb.close();
+});
+
+test('generic failed-turn transcript surfaces its same-run billing error once', () => {
+  const Database = require('better-sqlite3');
+  const state = new Database(stateDbFile);
+  state.exec('DELETE FROM messages; DELETE FROM sessions;');
+  const sessionId = 'cron_job-billing_failed';
+  state.prepare('INSERT INTO sessions (id, source, started_at, ended_at, end_reason) VALUES (?, ?, ?, ?, ?)')
+    .run(sessionId, 'cron', '2026-09-20T15:00:01-06:00', '2026-09-20T15:00:05-06:00', 'cron_complete');
+  state.prepare('INSERT INTO messages (session_id, role, content, active) VALUES (?, ?, ?, 1)')
+    .run(sessionId, 'assistant', 'Your request was not processed. Send it again if you still want me to carry it out.');
+  state.close();
+  setExecutions([{ id: 'billing-execution', job_id: 'job-billing', status: 'failed',
+    claimed_at: '2026-09-20T15:00:00-06:00', started_at: '2026-09-20T15:00:00-06:00',
+    finished_at: '2026-09-20T15:00:04-06:00', error: 'HTTP 400 native error billing_error PRIVATE_DETAIL' }]);
+  const appDb = require('./db').openDb(':memory:');
+  const bot = { id: 'bot-billing', name: 'Monitor', kind: 'bot', hermesCronJobId: 'job-billing', automation: { prompt: 'Check status.' } };
+  require('./db').saveOne(appDb, 'bots', bot.id, bot);
+  const scan = cronSync.listUndeliveredBotCronResults(appDb);
+  assert.equal(scan.length, 1);
+  assert.equal(scan[0].sessionId, sessionId);
+  assert.match(scan[0].content, /provider rejected the model request for a billing or account-access reason/);
+  assert.doesNotMatch(scan[0].content, /PRIVATE_DETAIL|Send it again/);
+  bot.hermesCronLastDeliveredSessionId = sessionId;
   require('./db').saveOne(appDb, 'bots', bot.id, bot);
   assert.deepEqual(cronSync.listUndeliveredBotCronResults(appDb), []);
   appDb.close();

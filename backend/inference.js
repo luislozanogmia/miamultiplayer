@@ -923,7 +923,8 @@ function buildScheduledBotPrompt(bot, automation, options = {}) {
     // The user watches a live checklist built from these reports.
     steps.length && automationId ? [
       'Progress reports:',
-      'Use the report_step tool (step number, state, one-line note) as you go: state "working" when you start a step, "done", "failed" or "skipped" when you finish it.',
+      'Report every step with the report_step tool (step number, state, one-line note). This is required: the user watches a checklist built only from these reports and sees nothing else while you work.',
+      'Before you begin a step, call report_step with that step number and state "working". As soon as that step ends, call report_step with "done", "failed" or "skipped". Do this for each step, in order, before you start the next one. Never leave a step unreported or save the reports for the end.',
       'If an action is blocked and the BLOCKED message gives a request_id, ask with request_approval: the user sees it in this bot\'s chat, and a yes lets you run that exact call once. If the user says no or does not answer, the message gives no request_id, or you need the user to decide, sign in or provide something: do not try another way. Call report_step with state "needs_you" and exactly what you wanted to do (for example, which files you would delete and how much space that frees), then carry on with the steps that do not depend on it.',
       'End with the full report, including everything waiting for the user.',
     ].join('\n') : '',

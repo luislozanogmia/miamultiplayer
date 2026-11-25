@@ -4059,3 +4059,48 @@ test("an app tab comes back after a restart, and one whose app is gone shows why
   assert.match(after.tabs[0].error, /No app named "sales-dashboard" is on this computer/);
   gone.window.emit("closed");
 });
+
+test("company chat tools carry the host workspace and fresh native credential only after Mia actor verification", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mia-company-read-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const workspace = "hub_" + "c".repeat(32);
+  let actor = { kind: "mia", workspace }, tokenReads = 0;
+  const requests = [];
+  let onFetch;
+  const main = fs.readFileSync(path.join(__dirname, "main.cjs"), "utf8");
+  const request = vm.runInNewContext(main.slice(main.indexOf("async function desktopAppRequest("),
+    main.indexOf("// Asks the backend which bot")) + "\ndesktopAppRequest", {
+    URL, AbortSignal, backendUrl: "http://localhost:1234", desktopAuth: { getSessionToken: async () => "fixture-" + ++tokenReads },
+  });
+  const window = { isDestroyed: () => false, webContents: { session: { fetch: async (url, options) => {
+    requests.push({ url, ...options });
+    onFetch?.();
+    return Response.json({ result: {} });
+  } } } };
+  const h = harness({ statePath: path.join(directory, "browser.json"), resolveActor: async () => actor,
+    appRequest: (path, options) => request(window, path, options) });
+  t.after(() => h.window.emit("closed"));
+  h.command("workspace", { key: workspace });
+  const call = tool => h.controller.protocol("app_call", { actor_session: "live", tool, teamWorkspace: "untrusted" });
+  for (const tool of ["chat_threads", "chat_read"]) {
+    await call(tool);
+    const sent = requests.at(-1);
+    assert.equal(sent.url, "http://localhost:1234/api/mia-app/call");
+    assert.equal(sent.headers["x-mia-team-workspace"], workspace);
+    assert.equal(sent.headers["x-hub-token"], "fixture-" + requests.length);
+    assert.equal(JSON.parse(sent.body).turn, "live");
+    assert.equal(sent.credentials, "include");
+  }
+  actor = { kind: "bot", botId: "shared", workspace };
+  await assert.rejects(call("chat_read"), { code: "FORBIDDEN_FOR_ACTOR" });
+  actor = { kind: "mia", workspace: "solo" };
+  await assert.rejects(call("chat_threads"), { code: "BROWSER_OTHER_WORKSPACE" });
+  h.command("workspace", { key: "solo" });
+  await call("chat_threads");
+  assert.equal(requests.at(-1).headers["x-hub-token"], undefined);
+  assert.equal(tokenReads, 2);
+  actor = { kind: "mia", workspace };
+  h.command("workspace", { key: workspace });
+  onFetch = () => h.command("workspace", { key: "solo" });
+  await assert.rejects(call("chat_read"), { code: "BROWSER_OTHER_WORKSPACE" });
+});

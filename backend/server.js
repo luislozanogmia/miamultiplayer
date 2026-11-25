@@ -1783,18 +1783,22 @@ function requireAuthForApiPrefix(prefix) {
   };
 }
 
-app.use('/api', requireAuthForApiPrefix('/conversations'), createConversationRouter({
-  service: nativeConversationService,
-  attachmentStore: nativeConversationAttachmentStore,
-  resolvePrincipal: (req) => nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req)),
-  authorizeTeamWorkspace: (req, workspace) => require('./team-workspace-membership').verifyTeamWorkspaceMembership({
+function authorizeTeamWorkspace(req, workspace) {
+  return require('./team-workspace-membership').verifyTeamWorkspaceMembership({
     workspace,
     token: req.get('x-hub-token'),
     owner: String(req.userEmail || '').trim().toLowerCase(),
     dataDirectory: path.dirname(path.resolve(DB_PATH)),
     getIdentity: (owner) => owner === LOCAL_PROFILE_PRINCIPAL ? clerkAccountProfile() : null,
     isOwnerActive: isActiveWorkspaceUser,
-  }),
+  });
+}
+
+app.use('/api', requireAuthForApiPrefix('/conversations'), createConversationRouter({
+  service: nativeConversationService,
+  attachmentStore: nativeConversationAttachmentStore,
+  resolvePrincipal: (req) => nativeConversationPrincipal(req.userEmail, workspaceIdFromRequest(req)),
+  authorizeTeamWorkspace,
 }));
 
 // Backend-first multiplayer slice. The existing workspace switcher is not an
@@ -9797,6 +9801,7 @@ async function runNativeConversationAgentReply(dispatch, signal, budgetTracker, 
           const browserTarget = {
             companyId: conversation.companyId,
             conversationId: conversation.id,
+            miaUserTurnOwner: !privateAgent && trigger.senderType === 'user' ? senderLabel : null,
           };
           activateBrowserRun(browserTarget, 'dispatch');
           nativeGatewaySessionConversations.set(String(session.sessionId), browserTarget);
@@ -11195,13 +11200,17 @@ const miaAppAnswers = miaAppRoutes.registerMiaAppRoutes(miaAppRouter, {
     botModel: async owner => ((await botModelSelectionForUser(owner, null)) || {}).model,
   }),
   activity: miaAppRoutes.createActivityLog(ARTIFACTS_DATA_DIR),
+  authorizeTeamWorkspace,
   resolveTurn(session, owner) {
     const target = session.length <= 200 ? nativeGatewaySessionConversations.get(session) : null;
     if (!target || !target.browserActiveUntil || target.browserActiveUntil <= Date.now()) return null;
     try {
-      nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
+      const conversation = nativeConversationService.getConversation({ companyId: target.companyId, conversationId: target.conversationId, principal: { principalId: owner, principalType: 'user' } });
+      if (target.botId || conversation.type !== 'agent' || String(conversation.createdBy).toLowerCase() !== owner) return null;
+      return { ...target, workspace: target.companyId === nativeCompanyId('solo', owner) ? 'solo' : DEFAULT_WORKSPACE_ID,
+        teamWorkspace: conversation.metadata?.teamWorkspace,
+        miaUserTurn: target.browserDispatchActive === true && target.miaUserTurnOwner === owner };
     } catch (_) { return null; }
-    return { ...target, workspace: String(target.companyId).includes(':solo:') ? 'solo' : 'multiplayer_test' };
   },
   postCard(target, proposal) {
     const created = nativeConversationService.createEvent({
